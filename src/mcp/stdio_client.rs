@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,8 +8,9 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
+use tracing::{debug, instrument};
 
 use crate::config::McpServerConfig;
 use crate::logging::JsonlLogger;
@@ -48,6 +48,8 @@ pub enum McpError {
         path: String,
         error: String,
     },
+    #[error("MCP server `{server}` actor channel closed")]
+    ActorClosed { server: String },
 }
 
 pub struct McpRegistry {
@@ -57,10 +59,21 @@ pub struct McpRegistry {
 
 struct ServerHandle {
     tools: HashSet<String>,
-    client: Arc<Mutex<McpStdioClient>>,
+    client: McpClientHandle,
 }
 
-pub struct McpStdioClient {
+struct McpClientHandle {
+    server_name: String,
+    tx: mpsc::Sender<ActorRequest>,
+}
+
+struct ActorRequest {
+    method: String,
+    params: Value,
+    reply: oneshot::Sender<Result<Value, McpError>>,
+}
+
+struct McpStdioClient {
     server_name: String,
     timeout: Duration,
     #[allow(dead_code)]
@@ -80,7 +93,7 @@ impl McpRegistry {
         configs: &[McpServerConfig],
         logger: Option<JsonlLogger>,
     ) -> Result<Self, McpError> {
-        let mut servers = HashMap::new();
+        let mut servers = HashMap::with_capacity(configs.len());
 
         for cfg in configs {
             let mut client = McpStdioClient::connect(cfg)?;
@@ -103,11 +116,13 @@ impl McpRegistry {
                 })?;
             }
 
+            let handle = spawn_actor(cfg.name.clone(), client);
+
             servers.insert(
                 cfg.name.clone(),
                 ServerHandle {
                     tools: tool_set,
-                    client: Arc::new(Mutex::new(client)),
+                    client: handle,
                 },
             );
         }
@@ -116,14 +131,57 @@ impl McpRegistry {
     }
 }
 
+fn spawn_actor(server_name: String, client: McpStdioClient) -> McpClientHandle {
+    let (tx, mut rx) = mpsc::channel::<ActorRequest>(32);
+    let actor_name = server_name.clone();
+    tokio::spawn(async move {
+        let mut client = client;
+        while let Some(req) = rx.recv().await {
+            let ActorRequest {
+                method,
+                params,
+                reply,
+            } = req;
+            let result = client.request(&method, params).await;
+            if reply.send(result).is_err() {
+                debug!(server = %actor_name, "MCP actor caller dropped before reply");
+            }
+        }
+    });
+    McpClientHandle { server_name, tx }
+}
+
+impl McpClientHandle {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(ActorRequest {
+                method: method.to_string(),
+                params,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| McpError::ActorClosed {
+                server: self.server_name.clone(),
+            })?;
+        reply_rx.await.map_err(|_| McpError::ActorClosed {
+            server: self.server_name.clone(),
+        })?
+    }
+}
+
 #[async_trait]
 impl ToolExecutor for McpRegistry {
+    #[instrument(skip(self, arguments), fields(server, tool))]
     async fn call_tool(
         &self,
         server: &str,
         tool: &str,
         arguments: Value,
     ) -> Result<Value, McpError> {
+        tracing::Span::current().record("server", server);
+        tracing::Span::current().record("tool", tool);
+
         let handle = self
             .servers
             .get(server)
@@ -135,8 +193,16 @@ impl ToolExecutor for McpRegistry {
             });
         }
 
-        let mut guard = handle.client.lock().await;
-        let result = guard.call_tool(tool, arguments.clone()).await?;
+        let result = handle
+            .client
+            .request(
+                "tools/call",
+                json!({
+                    "name": tool,
+                    "arguments": arguments.clone(),
+                }),
+            )
+            .await?;
 
         if let Some(log) = &self.logger {
             log.write_event(
@@ -176,7 +242,7 @@ impl McpStdioClient {
         cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::null());
+        cmd.stderr(Stdio::piped());
         for (k, v) in &cfg.env {
             cmd.env(k, v);
         }
@@ -225,24 +291,13 @@ impl McpStdioClient {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(list.len());
         for entry in list {
             if let Some(name) = entry.get("name").and_then(Value::as_str) {
                 out.push(name.to_string());
             }
         }
         Ok(out)
-    }
-
-    async fn call_tool(&mut self, tool: &str, arguments: Value) -> Result<Value, McpError> {
-        self.request(
-            "tools/call",
-            json!({
-                "name": tool,
-                "arguments": arguments,
-            }),
-        )
-        .await
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), McpError> {
@@ -255,7 +310,7 @@ impl McpStdioClient {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let payload = json!({
             "jsonrpc": "2.0",
             "id": id,

@@ -1,3 +1,21 @@
+# Rust coding guidelines
+
+When generating or refactoring Rust code under `out/`, follow idiomatic Rust
+practices from the bundled [rust-skills](https://github.com/leonardomso/rust-skills)
+knowledge base at `.cursor/skills/rust-skills/`.
+
+Apply these priorities without loading every rule into context:
+
+- Prefer borrowing (`&T`, `&str`) over cloning; accept `&[T]` and `&str`, not `&Vec<T>` / `&String`.
+- Use `Result` and `?` for fallible code; avoid `.unwrap()` / `.expect()` in library paths.
+- Use `thiserror` for library errors and `anyhow` for application boundaries when appropriate.
+- Keep `unsafe` minimal, documented with `// SAFETY:`, and justified.
+- Match project lint policy: `clippy::all` + `clippy::pedantic` with `-D warnings`.
+
+For detailed guidance, use the index in `.cursor/skills/rust-skills/SKILL.md` and read
+only the relevant files from `.cursor/skills/rust-skills/rules/` (prefixes: `own-`,
+`err-`, `mem-`, `async-`, `anti-`, `perf-`, `test-`, `lint-`).
+
 # Workspace and artifact rules
 
 - Never attempt to modify attached input files or any path outside home.

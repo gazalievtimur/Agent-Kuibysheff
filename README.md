@@ -69,8 +69,33 @@ cargo run -- <required arguments> `
 ```
 
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config,
-[`settings/`](settings/) for the settings layout, and
+[`settings/`](settings/) for the settings layout,
+[`test-agents/`](test-agents/) for specialized test agent profiles, and
 [`prompt-examples.md`](prompt-examples.md) for ready-to-use `--prompt` templates.
+
+## Rust skills
+
+The project bundles [rust-skills](https://github.com/leonardomso/rust-skills) as a
+git submodule at [`.cursor/skills/rust-skills/`](.cursor/skills/rust-skills/). It
+provides 265 focused Rust rules for AI-assisted coding and review.
+
+After cloning the repository, initialize the submodule:
+
+```powershell
+git submodule update --init --recursive
+```
+
+In Cursor, the skill is available automatically. For Rust files, the rule in
+[`.cursor/rules/rust-skills.mdc`](.cursor/rules/rust-skills.mdc) points the agent
+to the skill index. Invoke it explicitly:
+
+```text
+/rust-skills review this function
+```
+
+The agent worker also references these guidelines in
+[`settings/rules.md`](settings/rules.md) when generating Rust deliverables under
+`out/`.
 
 ## Development
 
@@ -144,3 +169,7 @@ names are recommended; bare tool names remain supported.
 - Provider retries on transport errors and `429/5xx`.
 - Agent exits deterministically on limits and emits `limit_reached`.
 - AI and MCP logs are JSONL for auditing.
+
+## Development
+
+- Further improvement roadmap: [docs/FURTHER_FIXES.md](docs/FURTHER_FIXES.md)
