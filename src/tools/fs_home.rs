@@ -14,16 +14,21 @@ pub struct HomeFs {
 }
 
 impl HomeFs {
+    /// Creates a sandboxed filesystem rooted at `root`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError`] if the directory cannot be created or is not a directory.
     pub async fn new(root: &Path) -> Result<Self, McpError> {
         fs::create_dir_all(root)
             .await
-            .map_err(|error| home_io("create_dir_all", root, error))?;
+            .map_err(|error| home_io("create_dir_all", root, &error))?;
         let root = fs::canonicalize(root)
             .await
-            .map_err(|error| home_io("canonicalize", root, error))?;
+            .map_err(|error| home_io("canonicalize", root, &error))?;
         if !fs::metadata(&root)
             .await
-            .map_err(|error| home_io("metadata", &root, error))?
+            .map_err(|error| home_io("metadata", &root, &error))?
             .is_dir()
         {
             return Err(McpError::HomePath {
@@ -34,6 +39,11 @@ impl HomeFs {
         Ok(Self { root })
     }
 
+    /// Dispatches a home filesystem tool call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError`] for invalid arguments, paths, or I/O failures.
     pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, McpError> {
         match tool {
             "list" => {
@@ -59,7 +69,7 @@ impl HomeFs {
         let path = self.resolve_existing(relative).await?;
         let metadata = fs::metadata(&path)
             .await
-            .map_err(|error| home_io("metadata", &path, error))?;
+            .map_err(|error| home_io("metadata", &path, &error))?;
         if !metadata.is_dir() {
             return Err(McpError::HomePath {
                 path: relative.display().to_string(),
@@ -69,17 +79,17 @@ impl HomeFs {
 
         let mut reader = fs::read_dir(&path)
             .await
-            .map_err(|error| home_io("read_dir", &path, error))?;
+            .map_err(|error| home_io("read_dir", &path, &error))?;
         let mut entries = Vec::new();
         while let Some(entry) = reader
             .next_entry()
             .await
-            .map_err(|error| home_io("read_dir", &path, error))?
+            .map_err(|error| home_io("read_dir", &path, &error))?
         {
             let file_type = entry
                 .file_type()
                 .await
-                .map_err(|error| home_io("file_type", &entry.path(), error))?;
+                .map_err(|error| home_io("file_type", &entry.path(), &error))?;
             entries.push(json!({
                 "name": entry.file_name().to_string_lossy(),
                 "kind": if file_type.is_dir() {
@@ -110,7 +120,7 @@ impl HomeFs {
         let path = self.resolve_existing(relative).await?;
         let content = fs::read_to_string(&path)
             .await
-            .map_err(|error| home_io("read_to_string", &path, error))?;
+            .map_err(|error| home_io("read_to_string", &path, &error))?;
         let max_chars = max_chars
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1, MAX_READ_CHARS);
@@ -141,11 +151,11 @@ impl HomeFs {
         if fs::symlink_metadata(&destination).await.is_ok() {
             let canonical = fs::canonicalize(&destination)
                 .await
-                .map_err(|error| home_io("canonicalize", &destination, error))?;
+                .map_err(|error| home_io("canonicalize", &destination, &error))?;
             self.ensure_within_home(&canonical, relative)?;
             if fs::metadata(&canonical)
                 .await
-                .map_err(|error| home_io("metadata", &canonical, error))?
+                .map_err(|error| home_io("metadata", &canonical, &error))?
                 .is_dir()
             {
                 return Err(invalid_path(relative, "path is a directory"));
@@ -154,7 +164,7 @@ impl HomeFs {
 
         fs::write(&destination, content)
             .await
-            .map_err(|error| home_io("write", &destination, error))?;
+            .map_err(|error| home_io("write", &destination, &error))?;
         Ok(json!({
             "path": display_relative(relative),
             "bytes_written": content.len()
@@ -166,7 +176,7 @@ impl HomeFs {
         let candidate = self.root.join(relative);
         let canonical = fs::canonicalize(&candidate)
             .await
-            .map_err(|error| home_io("canonicalize", &candidate, error))?;
+            .map_err(|error| home_io("canonicalize", &candidate, &error))?;
         self.ensure_within_home(&canonical, relative)?;
         Ok(canonical)
     }
@@ -183,11 +193,11 @@ impl HomeFs {
                 Ok(_) => {
                     let canonical = fs::canonicalize(&next)
                         .await
-                        .map_err(|error| home_io("canonicalize", &next, error))?;
+                        .map_err(|error| home_io("canonicalize", &next, &error))?;
                     self.ensure_within_home(&canonical, relative)?;
                     if !fs::metadata(&canonical)
                         .await
-                        .map_err(|error| home_io("metadata", &canonical, error))?
+                        .map_err(|error| home_io("metadata", &canonical, &error))?
                         .is_dir()
                     {
                         return Err(invalid_path(
@@ -200,13 +210,13 @@ impl HomeFs {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     fs::create_dir(&next)
                         .await
-                        .map_err(|error| home_io("create_dir", &next, error))?;
+                        .map_err(|error| home_io("create_dir", &next, &error))?;
                     current = fs::canonicalize(&next)
                         .await
-                        .map_err(|error| home_io("canonicalize", &next, error))?;
+                        .map_err(|error| home_io("canonicalize", &next, &error))?;
                     self.ensure_within_home(&current, relative)?;
                 }
-                Err(error) => return Err(home_io("symlink_metadata", &next, error)),
+                Err(error) => return Err(home_io("symlink_metadata", &next, &error)),
             }
         }
         Ok(current)
@@ -275,7 +285,7 @@ fn invalid_path(path: &Path, error: impl Into<String>) -> McpError {
     }
 }
 
-fn home_io(operation: &str, path: &Path, error: std::io::Error) -> McpError {
+fn home_io(operation: &str, path: &Path, error: &std::io::Error) -> McpError {
     McpError::HomeIo {
         operation: operation.to_string(),
         path: path.display().to_string(),

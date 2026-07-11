@@ -30,7 +30,14 @@ pub enum LimitExceeded {
     Duration,
 }
 
+impl Default for RunMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RunMetrics {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
@@ -39,6 +46,11 @@ impl RunMetrics {
         }
     }
 
+    /// Checks iteration, token, and duration limits before the next agent step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LimitExceeded`] when any configured limit is already reached.
     pub fn pre_step_check(&self, limits: &LimitsConfig) -> Result<(), LimitExceeded> {
         if self.iterations >= limits.max_iterations {
             return Err(LimitExceeded::Iterations);
@@ -71,22 +83,27 @@ impl RunMetrics {
             .saturating_add(usage.total_tokens);
     }
 
+    #[must_use]
     pub fn iterations(&self) -> u32 {
         self.iterations
     }
 
+    #[must_use]
     pub fn tokens(&self) -> TokenUsage {
         self.token_usage
     }
 
+    #[must_use]
     pub fn elapsed_ms(&self) -> u128 {
         self.started_at.elapsed().as_millis()
     }
 
+    #[must_use]
     pub fn tokens_limit_hit(&self, limits: &LimitsConfig) -> bool {
         self.token_usage.total_tokens >= limits.max_tokens
     }
 
+    #[must_use]
     pub fn duration_limit_hit(&self, limits: &LimitsConfig) -> bool {
         self.started_at.elapsed() >= Duration::from_secs(limits.max_duration_sec)
     }

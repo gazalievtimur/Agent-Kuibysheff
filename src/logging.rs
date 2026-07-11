@@ -41,6 +41,11 @@ pub struct JsonlLogger {
 }
 
 impl JsonlLogger {
+    /// Opens or creates a JSONL log file for append-only writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoggingError`] if the directory or file cannot be created or opened.
     pub async fn new(path: PathBuf) -> Result<Self, LoggingError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -65,6 +70,11 @@ impl JsonlLogger {
         })
     }
 
+    /// Appends one JSONL event record to the log file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoggingError`] if serialization or file I/O fails.
     pub async fn write_event<T: Serialize>(
         &self,
         event_type: &str,
@@ -91,6 +101,7 @@ impl JsonlLogger {
             })
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -103,6 +114,11 @@ pub struct Loggers {
 }
 
 impl Loggers {
+    /// Creates optional AI and MCP loggers based on runtime flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoggingError`] if a requested log file cannot be opened.
     pub async fn from_flags(
         output_dir: Option<&PathBuf>,
         enable_ai_log: bool,
@@ -120,6 +136,7 @@ impl Loggers {
         Ok(loggers)
     }
 
+    #[must_use]
     pub fn report(&self) -> LogReport {
         LogReport {
             ai_log: self.ai.as_ref().map(|x| x.path().display().to_string()),

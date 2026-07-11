@@ -71,6 +71,11 @@ pub struct McpStdioClient {
 }
 
 impl McpRegistry {
+    /// Connects to all configured MCP servers and discovers their tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError`] if a server fails to start, initialize, or list tools.
     pub async fn connect_all(
         configs: &[McpServerConfig],
         logger: Option<JsonlLogger>,
@@ -78,7 +83,7 @@ impl McpRegistry {
         let mut servers = HashMap::new();
 
         for cfg in configs {
-            let mut client = McpStdioClient::connect(cfg).await?;
+            let mut client = McpStdioClient::connect(cfg)?;
             client.initialize().await?;
             let tools = client.list_tools().await?;
             let tool_set: HashSet<_> = tools.into_iter().collect();
@@ -166,7 +171,7 @@ impl ToolExecutor for McpRegistry {
 }
 
 impl McpStdioClient {
-    async fn connect(cfg: &McpServerConfig) -> Result<Self, McpError> {
+    fn connect(cfg: &McpServerConfig) -> Result<Self, McpError> {
         let mut cmd = Command::new(&cfg.command);
         cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped());

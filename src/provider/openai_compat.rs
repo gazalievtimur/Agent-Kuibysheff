@@ -34,6 +34,11 @@ pub struct OpenAiCompatClient {
 }
 
 impl OpenAiCompatClient {
+    /// Builds a provider client from config and the API key environment variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] if the API key is missing or the HTTP client cannot be built.
     pub fn new(cfg: ProviderConfig) -> Result<Self, ProviderError> {
         let api_key = env::var(&cfg.api_key_env)
             .map_err(|_| ProviderError::MissingApiKey(cfg.api_key_env.clone()))?;
@@ -181,6 +186,7 @@ struct ContentPart {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(clippy::struct_field_names)]
 struct ChatUsage {
     prompt_tokens: u64,
     completion_tokens: u64,

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use clap::Parser;
 use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::cli::CliArgs;
 use agent_Kuibyshev::config::{apply_cli_overrides, load_config, validate};
@@ -13,6 +12,7 @@ use agent_Kuibyshev::settings::load_settings;
 use agent_Kuibyshev::skills::dsl::SkillsCatalog;
 use agent_Kuibyshev::tools::fs_home::HomeFs;
 use agent_Kuibyshev::tools::CompositeToolExecutor;
+use clap::Parser;
 
 #[tokio::main]
 async fn main() {

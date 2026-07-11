@@ -26,6 +26,11 @@ pub enum SettingsError {
     EmptyFile(String),
 }
 
+/// Loads required and optional agent settings from a directory.
+///
+/// # Errors
+///
+/// Returns [`SettingsError`] if required files are missing, unreadable, or empty.
 pub fn load_settings(settings_dir: &Path) -> Result<AgentSettings, SettingsError> {
     let master_path = settings_dir.join(MASTER_PROMPT_FILE);
     let skills_path = settings_dir.join(SKILLS_FILE);

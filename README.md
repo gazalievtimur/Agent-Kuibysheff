@@ -72,6 +72,35 @@ See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config,
 [`settings/`](settings/) for the settings layout, and
 [`prompt-examples.md`](prompt-examples.md) for ready-to-use `--prompt` templates.
 
+## Development
+
+The project pins a stable Rust toolchain with `rustfmt` and `clippy` via
+[`rust-toolchain.toml`](rust-toolchain.toml). Lint rules live in
+[`Cargo.toml`](Cargo.toml) (`clippy::all` + `clippy::pedantic`).
+
+Verify the toolchain is active:
+
+```powershell
+rustup show
+```
+
+Run all checks before committing:
+
+```powershell
+.\scripts\check.ps1
+```
+
+Individual commands:
+
+```powershell
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Cursor/VS Code picks up [`.vscode/settings.json`](.vscode/settings.json) for
+format-on-save and clippy diagnostics via rust-analyzer.
+
 ## Output format
 
 The CLI prints exactly one JSON document to stdout:
