@@ -19,6 +19,7 @@ Each tool call must use this shape:
 Execution rules:
 - Attached files and files under `in/` are read-only source material.
 - Write deliverables only through `home.write` into paths under `out/`.
+- Run commands with `home.run` when the task requires executing code under home.
 - Do not set `done=true` until required files were written successfully.
 - If a task needs multiple files, write them across one or more iterations using
   `tool_calls`; wait for tool results before finishing.

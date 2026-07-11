@@ -61,16 +61,16 @@ async fn run() -> Result<RunOutput> {
         .context("loading settings task")?
         .with_context(|| format!("loading settings from `{}`", cli.settings_dir.display()))?;
 
-    let catalog =
-        SkillsCatalog::parse(&settings.skills_source).context("parsing skills DSL")?;
+    let catalog = SkillsCatalog::parse(&settings.skills_source).context("parsing skills DSL")?;
     let allowed_tools = Some(catalog.allowed_tool_set());
     let skill_prompt = catalog.build_prompt_fragment();
 
     let input_files = cli.files.clone();
-    let input_files_context = tokio::task::spawn_blocking(move || build_input_files_context(&input_files))
-        .await
-        .context("building input file context task")?
-        .context("building input file context")?;
+    let input_files_context =
+        tokio::task::spawn_blocking(move || build_input_files_context(&input_files))
+            .await
+            .context("building input file context task")?
+            .context("building input file context")?;
 
     let home = HomeFs::new(&cli.home)
         .await
@@ -87,11 +87,12 @@ async fn run() -> Result<RunOutput> {
     let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone())
         .await
         .context("connecting MCP servers")?;
-    let provider = OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
+    let provider =
+        OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
     let tools = CompositeToolExecutor::new(home, Arc::new(mcp));
 
     let system_prompt = format!(
-        "{master}\n\n{rules_section}{skills}\n\nRuntime rules:\n- Stay within configured limits.\n- The home directory is `{home}`. All file writes must use home.write and paths relative to this directory.\n- Input files are read-only context and are not copied into home automatically.\n- Builtin tools: home.list {{\"path\":\".\"}}, home.read {{\"path\":\"relative/path\",\"max_chars\":50000}}, home.write {{\"path\":\"relative/path\",\"content\":\"...\"}}.\n- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.\n- Use MCP tools when needed and allowed.\n- When the goal is achieved, return done=true and fill `result`.\n- Return strict JSON and never use markdown.",
+        "{master}\n\n{rules_section}{skills}\n\nRuntime rules:\n- Stay within configured limits.\n- The home directory is `{home}`. All file writes must use home.write and paths relative to this directory.\n- Input files are read-only context and are not copied into home automatically.\n- Builtin tools: home.list {{\"path\":\".\"}}, home.read {{\"path\":\"relative/path\",\"max_chars\":50000}}, home.write {{\"path\":\"relative/path\",\"content\":\"...\"}}, home.run {{\"program\":\"python\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}}.\n- home.run executes argv (no shell) with cwd set to home; capture stdout/stderr/exit_code. Assume the process runs in an isolated container.\n- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.\n- Use MCP tools when needed and allowed.\n- When the goal is achieved, return done=true and fill `result`.\n- Return strict JSON and never use markdown.",
         master = settings.master_prompt.trim(),
         rules_section = if settings.rules.trim().is_empty() {
             String::new()

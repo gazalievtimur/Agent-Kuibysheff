@@ -9,7 +9,7 @@ Minimal and reliable CLI agent worker in Rust.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` when the model requests tools.
 - Enforces hard stop limits: iterations, tokens, and max duration.
-- Provides sandboxed `home.list`, `home.read`, and `home.write` tools.
+- Provides sandboxed `home.list`, `home.read`, `home.write`, and `home.run` tools.
 - Produces a final JSON result with usage stats and optional AI/MCP logs.
 
 The CLI is a worker, not an orchestrator. It never applies generated files to a
@@ -155,7 +155,7 @@ Current DSL form:
 ```text
 skill "name" {
   policy: "string_policy"
-  allowed_tools: ["home.read", "home.write", "server.tool"]
+  allowed_tools: ["home.read", "home.write", "home.run", "server.tool"]
 }
 ```
 

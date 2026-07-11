@@ -81,13 +81,19 @@ Tool calls use `server: "home"`:
 {"server":"home","tool":"list","arguments":{"path":"."}}
 {"server":"home","tool":"read","arguments":{"path":"in/src/foo.rs","max_chars":50000}}
 {"server":"home","tool":"write","arguments":{"path":"out/src/foo.rs","content":"..."}}
+{"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"],"timeout_ms":30000}}
 ```
 
-Paths must be relative, cannot contain `..`, and are checked after filesystem
-canonicalization. Symlinks that resolve outside home are rejected.
+Paths for `list` / `read` / `write` must be relative, cannot contain `..`, and
+are checked after filesystem canonicalization. Symlinks that resolve outside
+home are rejected.
+
+`home.run` executes `program` with `args` as argv (no shell). The working
+directory is the home root. Default timeout is 30 seconds; the maximum is 120
+seconds. The tool returns `stdout`, `stderr`, `exit_code`, and `timed_out`.
 
 Tool access is also restricted by `skills.dsl`. Qualified names such as
-`home.read` and `home.write` are recommended.
+`home.read`, `home.write`, and `home.run` are recommended.
 
 ## Security boundary
 
@@ -96,6 +102,9 @@ Tool access is also restricted by `skills.dsl`. Qualified names such as
   tools.
 - The CLI never runs `git apply`, copies output to a repository, creates a
   commit, or opens a pull request.
+- `home.run` is a first-class capability. Execution is assumed to run inside an
+  isolated container provided by the orchestrator; the CLI does not add further
+  OS-level sandboxing beyond cwd=`--home`.
 - MCP servers are explicitly configured capabilities. Their permissions are
   outside the home filesystem sandbox and must be reviewed by the
   orchestrator/operator.

@@ -1,6 +1,6 @@
 skill "workspace" {
-  policy: "Read inputs and write deliverables only through the sandboxed home tools."
-  allowed_tools: ["home.list", "home.read", "home.write"]
+  policy: "Read inputs, write deliverables, and run commands only through the sandboxed home tools."
+  allowed_tools: ["home.list", "home.read", "home.write", "home.run"]
 }
 
 skill "research" {

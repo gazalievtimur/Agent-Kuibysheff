@@ -211,9 +211,9 @@ impl AgentEngine {
             }
 
             if directive.done {
-                final_result = directive.result.unwrap_or(
-                    "Agent marked done without explicit result".to_string(),
-                );
+                final_result = directive
+                    .result
+                    .unwrap_or("Agent marked done without explicit result".to_string());
                 stop_reason = StopReason::GoalReached;
                 info!(iterations = metrics.iterations(), "agent goal reached");
                 break;
@@ -332,10 +332,9 @@ mod tests {
 
     #[test]
     fn parse_directive_accepts_plain_json() {
-        let directive = parse_directive(
-            r#"{"done":true,"thought":"ok","tool_calls":[],"result":"finished"}"#,
-        )
-        .expect("plain json should parse");
+        let directive =
+            parse_directive(r#"{"done":true,"thought":"ok","tool_calls":[],"result":"finished"}"#)
+                .expect("plain json should parse");
 
         assert!(directive.done);
         assert_eq!(directive.result.as_deref(), Some("finished"));

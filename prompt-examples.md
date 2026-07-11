@@ -7,7 +7,8 @@ Every example assumes:
 - `--settings-dir ./settings`
 - `--home <sandbox>`
 - JSON-only replies from the model
-- file writes through `home.write` with `server: "home"`
+- file writes through `home.write` and command execution through `home.run`
+  with `server: "home"`
 
 ## General template
 

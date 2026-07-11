@@ -1,0 +1,8 @@
+{
+  "id": "2024-01-1",
+  "url": "https://adventofcode.com/2024/day/1",
+  "title": "Day 1: Historian Hysteria (part 1)",
+  "text": "Sample Advent of Code style task.\n\nGiven two lists of numbers, pair the smallest remaining number from each list and sum the absolute differences.\n\nExample:\n3   4\n4   3\n2   5\n1   3\n3   9\n3   3\n\nThe answer for the example is 11.\n\nYour puzzle input is available via aoc_get_input. Print only the numeric answer on stdout.",
+  "input": "3   4\n4   3\n2   5\n1   3\n3   9\n3   3\n",
+  "expected": "11"
+}

@@ -1,13 +1,20 @@
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::mcp::stdio_client::McpError;
 
 const DEFAULT_MAX_CHARS: usize = 50_000;
 const MAX_READ_CHARS: usize = 200_000;
+const DEFAULT_RUN_TIMEOUT_MS: u64 = 30_000;
+const MAX_RUN_TIMEOUT_MS: u64 = 120_000;
+const MAX_RUN_OUTPUT_CHARS: usize = 200_000;
 
 pub struct HomeFs {
     root: PathBuf,
@@ -57,6 +64,10 @@ impl HomeFs {
             "write" => {
                 let args: WriteArgs = decode_args(tool, arguments)?;
                 self.write(Path::new(&args.path), &args.content).await
+            }
+            "run" => {
+                let args: RunArgs = decode_args(tool, arguments)?;
+                self.run(&args.program, &args.args, args.timeout_ms).await
             }
             _ => Err(McpError::UnknownTool {
                 server: "home".to_string(),
@@ -171,6 +182,67 @@ impl HomeFs {
         }))
     }
 
+    async fn run(
+        &self,
+        program: &str,
+        args: &[String],
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, McpError> {
+        if program.trim().is_empty() {
+            return Err(McpError::InvalidToolArguments {
+                tool: "home.run".to_string(),
+                error: "`program` must not be empty".to_string(),
+            });
+        }
+
+        let timeout_ms = timeout_ms
+            .unwrap_or(DEFAULT_RUN_TIMEOUT_MS)
+            .clamp(1, MAX_RUN_TIMEOUT_MS);
+
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .current_dir(&self.root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        let child = command.spawn().map_err(|error| McpError::HomeIo {
+            operation: "spawn".to_string(),
+            path: self.root.display().to_string(),
+            error: format!("failed to start `{program}`: {error}"),
+        })?;
+
+        match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+            Ok(Ok(output)) => {
+                let (stdout, stdout_truncated) = truncate_output(&output.stdout);
+                let (stderr, stderr_truncated) = truncate_output(&output.stderr);
+                Ok(json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "stdout_truncated": stdout_truncated,
+                    "stderr_truncated": stderr_truncated,
+                    "exit_code": output.status.code(),
+                    "timed_out": false
+                }))
+            }
+            Ok(Err(error)) => Err(McpError::HomeIo {
+                operation: "wait".to_string(),
+                path: self.root.display().to_string(),
+                error: error.to_string(),
+            }),
+            Err(_) => Ok(json!({
+                "stdout": "",
+                "stderr": format!("process timed out after {timeout_ms}ms"),
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "exit_code": Value::Null,
+                "timed_out": true
+            })),
+        }
+    }
+
     async fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, McpError> {
         validate_relative(relative)?;
         let candidate = self.root.join(relative);
@@ -249,8 +321,26 @@ struct WriteArgs {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct RunArgs {
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+    timeout_ms: Option<u64>,
+}
+
 fn default_list_path() -> String {
     ".".to_string()
+}
+
+fn truncate_output(bytes: &[u8]) -> (String, bool) {
+    let text = String::from_utf8_lossy(bytes);
+    let total_chars = text.chars().count();
+    if total_chars > MAX_RUN_OUTPUT_CHARS {
+        (text.chars().take(MAX_RUN_OUTPUT_CHARS).collect(), true)
+    } else {
+        (text.into_owned(), false)
+    }
 }
 
 fn decode_args<T: for<'de> Deserialize<'de>>(tool: &str, value: Value) -> Result<T, McpError> {
@@ -339,5 +429,51 @@ mod tests {
             .await
             .expect_err("must reject traversal");
         assert!(matches!(error, McpError::HomePath { .. }));
+    }
+
+    #[tokio::test]
+    async fn runs_command_in_home() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(dir.path()).await.expect("home");
+
+        #[cfg(windows)]
+        let (program, args) = ("cmd", json!(["/c", "echo", "hello-run"]));
+        #[cfg(not(windows))]
+        let (program, args) = ("echo", json!(["hello-run"]));
+
+        let result = home
+            .call(
+                "run",
+                json!({
+                    "program": program,
+                    "args": args,
+                    "timeout_ms": 10_000
+                }),
+            )
+            .await
+            .expect("run");
+
+        assert_eq!(result["timed_out"], false);
+        assert_eq!(result["exit_code"], 0);
+        assert!(
+            result["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hello-run"),
+            "stdout was: {}",
+            result["stdout"]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_program() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(dir.path()).await.expect("home");
+
+        let error = home
+            .call("run", json!({"program": "  ", "args": []}))
+            .await
+            .expect_err("must reject empty program");
+        assert!(matches!(error, McpError::InvalidToolArguments { .. }));
     }
 }
