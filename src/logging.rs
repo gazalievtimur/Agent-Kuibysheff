@@ -1,0 +1,129 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+use thiserror::Error;
+use tokio::fs::{self, OpenOptions};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+
+use crate::output::LogReport;
+
+#[derive(Debug, Error)]
+pub enum LoggingError {
+    #[error("failed to create log directory `{path}`: {source}")]
+    CreateDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to open log file `{path}`: {source}")]
+    OpenFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to write log file `{path}`: {source}")]
+    WriteFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to encode log record: {0}")]
+    Encode(#[from] serde_json::Error),
+}
+
+#[derive(Clone)]
+pub struct JsonlLogger {
+    path: PathBuf,
+    file: Arc<Mutex<tokio::fs::File>>,
+}
+
+impl JsonlLogger {
+    pub async fn new(path: PathBuf) -> Result<Self, LoggingError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|source| LoggingError::CreateDir {
+                    path: parent.display().to_string(),
+                    source,
+                })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .map_err(|source| LoggingError::OpenFile {
+                path: path.display().to_string(),
+                source,
+            })?;
+        Ok(Self {
+            path,
+            file: Arc::new(Mutex::new(file)),
+        })
+    }
+
+    pub async fn write_event<T: Serialize>(
+        &self,
+        event_type: &str,
+        payload: &T,
+    ) -> Result<(), LoggingError> {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let record = serde_json::json!({
+            "ts_ms": ts,
+            "event": event_type,
+            "payload": payload,
+        });
+        let mut row = serde_json::to_vec(&record)?;
+        row.push(b'\n');
+        let mut guard = self.file.lock().await;
+        guard
+            .write_all(&row)
+            .await
+            .map_err(|source| LoggingError::WriteFile {
+                path: self.path.display().to_string(),
+                source,
+            })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Loggers {
+    pub ai: Option<JsonlLogger>,
+    pub mcp: Option<JsonlLogger>,
+}
+
+impl Loggers {
+    pub async fn from_flags(
+        output_dir: Option<&PathBuf>,
+        enable_ai_log: bool,
+        enable_mcp_log: bool,
+    ) -> Result<Self, LoggingError> {
+        let fallback_dir = PathBuf::from("logs");
+        let base_dir = output_dir.unwrap_or(&fallback_dir);
+        let mut loggers = Self::default();
+        if enable_ai_log {
+            loggers.ai = Some(JsonlLogger::new(base_dir.join("ai_usage.jsonl")).await?);
+        }
+        if enable_mcp_log {
+            loggers.mcp = Some(JsonlLogger::new(base_dir.join("mcp_usage.jsonl")).await?);
+        }
+        Ok(loggers)
+    }
+
+    pub fn report(&self) -> LogReport {
+        LogReport {
+            ai_log: self.ai.as_ref().map(|x| x.path().display().to_string()),
+            mcp_log: self.mcp.as_ref().map(|x| x.path().display().to_string()),
+        }
+    }
+}

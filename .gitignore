@@ -1,0 +1,18 @@
+# Rust
+/target/
+
+# Runtime logs and demo output
+/logs/
+/demo-home/out/
+
+# Local secrets and overrides
+.env
+.env.*
+agent-config.local.yaml
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
