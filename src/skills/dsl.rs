@@ -23,12 +23,17 @@ pub struct SkillsCatalog {
 }
 
 impl SkillsCatalog {
+    /// Parses the skills DSL into a catalog of skill definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillsError`] if the DSL syntax is invalid.
     pub fn parse(source: &str) -> Result<Self, SkillsError> {
         let block_re = Regex::new(r#"(?s)skill\s+"([^"]+)"\s*\{(.*?)\}"#)
             .map_err(|err| SkillsError::Parse(err.to_string()))?;
         let policy_re = Regex::new(r#"policy\s*:\s*"([^"]+)""#)
             .map_err(|err| SkillsError::Parse(err.to_string()))?;
-        let tools_re = Regex::new(r#"allowed_tools\s*:\s*\[([^\]]*)\]"#)
+        let tools_re = Regex::new(r"allowed_tools\s*:\s*\[([^\]]*)\]")
             .map_err(|err| SkillsError::Parse(err.to_string()))?;
         let quoted_re =
             Regex::new(r#""([^"]+)""#).map_err(|err| SkillsError::Parse(err.to_string()))?;
@@ -82,6 +87,7 @@ impl SkillsCatalog {
         Ok(Self { skills })
     }
 
+    #[must_use]
     pub fn build_prompt_fragment(&self) -> String {
         let mut lines = vec![
             "Skills available to the agent:".to_string(),
@@ -99,6 +105,7 @@ impl SkillsCatalog {
         lines.join("\n")
     }
 
+    #[must_use]
     pub fn allowed_tool_set(&self) -> HashSet<String> {
         self.skills
             .iter()

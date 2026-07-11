@@ -85,6 +85,11 @@ pub struct LoggingConfig {
     pub output_dir: Option<PathBuf>,
 }
 
+/// Loads and validates runtime configuration from a YAML or JSON file.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] if the file cannot be read, parsed, or fails validation.
 pub fn load_config(path: &Path) -> Result<AppConfig, ConfigError> {
     let raw = fs::read_to_string(path).map_err(|source| ConfigError::ReadFile {
         path: path.display().to_string(),
@@ -127,6 +132,11 @@ pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &CliArgs) {
     }
 }
 
+/// Validates required fields and MCP server configuration.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Validation`] when a required field is missing or invalid.
 pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
     if cfg.provider.base_url.trim().is_empty() {
         return Err(ConfigError::Validation(
@@ -236,7 +246,7 @@ mod tests {
 
     #[test]
     fn config_rejects_legacy_agent_fields() {
-        let yaml = r#"
+        let yaml = r"
 goal: legacy
 provider:
   base_url: https://example.com/v1
@@ -246,7 +256,7 @@ limits:
   max_iterations: 1
   max_tokens: 1
   max_duration_sec: 1
-"#;
+";
 
         assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
     }

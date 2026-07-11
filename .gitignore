@@ -12,7 +12,6 @@ agent-config.local.yaml
 
 # IDE / OS
 .idea/
-.vscode/
 *.swp
 Thumbs.db
 Desktop.ini

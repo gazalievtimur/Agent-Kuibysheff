@@ -63,6 +63,7 @@ impl AgentEngine {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_inner(&self, request: AgentRunRequest) -> Result<RunOutput, AgentError> {
         let available_tools = self.tools.available_tools();
         let user_message = build_user_message(
@@ -218,10 +219,7 @@ fn build_user_message(
     let attached_files = if input_files_context.is_empty() {
         "Attached input files: none".to_string()
     } else {
-        format!(
-            "Attached input files (read-only context):\n{}",
-            input_files_context
-        )
+        format!("Attached input files (read-only context):\n{input_files_context}")
     };
     format!(
         "Goal: {prompt}\n\n{attached_files}\n\nAvailable tools: {tools}\n\nRespond with JSON only. No markdown fences. No text outside JSON.\n\nRequired response shape:\n{{\"done\": bool, \"thought\": string, \"tool_calls\": [{{\"server\":\"home\", \"tool\":\"write\", \"arguments\": {{\"path\":\"out/file.md\", \"content\":\"...\"}}}}], \"result\": string|null}}\n\nRules:\n- Use done=false and tool_calls while files still need to be written.\n- Use server=\"home\" for filesystem tools.\n- Set done=true only after required files were written.\n- Never describe tool calls in plain text.",

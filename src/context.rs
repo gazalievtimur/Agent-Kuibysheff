@@ -15,6 +15,11 @@ pub enum InputContextError {
     },
 }
 
+/// Builds a single context string from UTF-8 input files.
+///
+/// # Errors
+///
+/// Returns [`InputContextError`] if any input file cannot be read.
 pub fn build_input_files_context(paths: &[PathBuf]) -> Result<String, InputContextError> {
     let mut sections = Vec::with_capacity(paths.len());
     for path in paths {
@@ -62,7 +67,7 @@ mod tests {
         let path = dir.path().join("input.md");
         fs::write(&path, "hello").expect("write input");
 
-        let context = build_input_files_context(&[path.clone()]).expect("context");
+        let context = build_input_files_context(std::slice::from_ref(&path)).expect("context");
         assert!(context.contains(&path.display().to_string()));
         assert!(context.contains("hello"));
     }
