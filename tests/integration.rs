@@ -69,7 +69,7 @@ async fn run_finishes_when_model_marks_done() {
                 max_tokens: 100,
                 max_duration_sec: 60,
             },
-            allowed_tools: HashSet::new(),
+            allowed_tools: None,
         })
         .await;
 
@@ -115,7 +115,7 @@ async fn run_stops_on_iteration_limit() {
                 max_tokens: 100,
                 max_duration_sec: 60,
             },
-            allowed_tools: HashSet::new(),
+            allowed_tools: None,
         })
         .await;
 
@@ -155,7 +155,7 @@ async fn model_can_write_an_artifact_inside_home() {
                 max_tokens: 100,
                 max_duration_sec: 60,
             },
-            allowed_tools: HashSet::from(["home.write".to_string()]),
+            allowed_tools: Some(HashSet::from(["home.write".to_string()])),
         })
         .await;
 
@@ -164,4 +164,40 @@ async fn model_can_write_an_artifact_inside_home() {
         std::fs::read_to_string(dir.path().join("out/result.txt")).expect("read artifact"),
         "ready"
     );
+}
+
+#[tokio::test]
+async fn run_retries_after_invalid_model_json() {
+    let model = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![
+            ModelResponse {
+                content: "Here is my answer in prose, not JSON.".to_string(),
+                usage: TokenUsage::default(),
+            },
+            ModelResponse {
+                content: r#"{"done":true,"thought":"fixed","tool_calls":[],"result":"recovered"}"#
+                    .to_string(),
+                usage: TokenUsage::default(),
+            },
+        ])),
+    };
+
+    let engine = AgentEngine::new(Arc::new(model), Arc::new(FakeTools), Loggers::default());
+    let output = engine
+        .run(AgentRunRequest {
+            prompt: "finish".to_string(),
+            system_prompt: "system".to_string(),
+            input_files_context: String::new(),
+            limits: LimitsConfig {
+                max_iterations: 3,
+                max_tokens: 100,
+                max_duration_sec: 60,
+            },
+            allowed_tools: None,
+        })
+        .await;
+
+    assert_eq!(output.stop_reason, StopReason::GoalReached);
+    assert_eq!(output.result, "recovered");
+    assert_eq!(output.usage.iterations, 2);
 }

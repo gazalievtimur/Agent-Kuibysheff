@@ -1,0 +1,37 @@
+# Example runtime config for Referent test agent.
+# Copy to agent-config.local.yaml (gitignored) and fill env vars before running.
+#
+# Requires: uv/uvx in PATH (https://docs.astral.sh/uv/)
+# Docs: https://mcp-atlassian.soomiles.com/docs/configuration
+
+provider:
+  base_url: "https://api.openai.com/v1"
+  # Use a vision-capable model when task briefs include screenshots or diagrams.
+  model: "gpt-4o"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 120000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp:
+  - name: "atlassian"
+    command: "uvx"
+    args:
+      - "mcp-atlassian"
+      - "--toolsets"
+      - "default,jira_attachments,confluence_attachments"
+    # JIRA_* and CONFLUENCE_* auth vars are read from the process environment
+    # (set them in the shell before `cargo run`; the MCP subprocess inherits them).
+    env:
+      READ_ONLY_MODE: "true"
+    timeout_ms: 60000
+
+limits:
+  max_iterations: 20
+  max_tokens: 50000
+  max_duration_sec: 600
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  output_dir: "./logs"

@@ -1,0 +1,18 @@
+---
+description: Apply idiomatic Rust guidelines from the bundled rust-skills knowledge base when writing or reviewing Rust code.
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Rust Skills
+
+This project bundles [rust-skills](https://github.com/leonardomso/rust-skills) at `.cursor/skills/rust-skills/`.
+
+When working with Rust files:
+
+1. Read `.cursor/skills/rust-skills/SKILL.md` first — it indexes 265 rules across 26 categories.
+2. Open only the rule files relevant to the current task from `.cursor/skills/rust-skills/rules/`.
+3. Prefer progressive disclosure: load `own-`, `err-`, and `mem-` rules for most changes; add `async-`, `unsafe-`, or `anti-` rules when the code touches those areas.
+4. Apply the bad/good examples from matched rules before proposing changes.
+
+Invoke explicitly with `/rust-skills` for reviews, e.g. `/rust-skills review this function`.

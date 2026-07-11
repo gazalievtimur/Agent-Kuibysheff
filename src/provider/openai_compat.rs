@@ -7,6 +7,7 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::sleep;
+use tracing::{debug, instrument, warn};
 
 use crate::config::ProviderConfig;
 use crate::limits::TokenUsage;
@@ -72,6 +73,7 @@ impl OpenAiCompatClient {
 
 #[async_trait]
 impl ModelClient for OpenAiCompatClient {
+    #[instrument(skip(self, messages), fields(model = %self.cfg.model, message_count = messages.len()))]
     async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, ProviderError> {
         let body = ChatCompletionRequest {
             model: self.cfg.model.clone(),
@@ -106,6 +108,11 @@ impl ModelClient for OpenAiCompatClient {
                 let is_retryable =
                     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
                 if is_retryable && attempt < self.cfg.max_retries {
+                    warn!(
+                        status = %status,
+                        attempt,
+                        "retrying provider request"
+                    );
                     sleep(self.backoff_with_jitter(attempt)).await;
                     continue;
                 }
@@ -131,6 +138,7 @@ impl ModelClient for OpenAiCompatClient {
             return Ok(ModelResponse { content, usage });
         }
 
+        debug!("provider retry loop exhausted");
         unreachable!("retry loop always returns")
     }
 }

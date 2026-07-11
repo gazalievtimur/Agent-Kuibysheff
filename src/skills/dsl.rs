@@ -1,8 +1,20 @@
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::Serialize;
 use thiserror::Error;
+
+static BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)skill\s+"([^"]+)"\s*\{(.*?)\}"#).expect("valid block regex")
+});
+static POLICY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"policy\s*:\s*"([^"]+)""#).expect("valid policy regex"));
+static TOOLS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"allowed_tools\s*:\s*\[([^\]]*)\]").expect("valid tools regex")
+});
+static QUOTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""([^"]+)""#).expect("valid quoted regex"));
 
 #[derive(Debug, Error)]
 pub enum SkillsError {
@@ -29,17 +41,8 @@ impl SkillsCatalog {
     ///
     /// Returns [`SkillsError`] if the DSL syntax is invalid.
     pub fn parse(source: &str) -> Result<Self, SkillsError> {
-        let block_re = Regex::new(r#"(?s)skill\s+"([^"]+)"\s*\{(.*?)\}"#)
-            .map_err(|err| SkillsError::Parse(err.to_string()))?;
-        let policy_re = Regex::new(r#"policy\s*:\s*"([^"]+)""#)
-            .map_err(|err| SkillsError::Parse(err.to_string()))?;
-        let tools_re = Regex::new(r"allowed_tools\s*:\s*\[([^\]]*)\]")
-            .map_err(|err| SkillsError::Parse(err.to_string()))?;
-        let quoted_re =
-            Regex::new(r#""([^"]+)""#).map_err(|err| SkillsError::Parse(err.to_string()))?;
-
         let mut skills = Vec::new();
-        for captures in block_re.captures_iter(source) {
+        for captures in BLOCK_RE.captures_iter(source) {
             let name = captures
                 .get(1)
                 .map(|m| m.as_str().trim().to_string())
@@ -49,13 +52,13 @@ impl SkillsCatalog {
                 .map(|m| m.as_str())
                 .ok_or_else(|| SkillsError::Parse("missing skill body".to_string()))?;
 
-            let policy = policy_re
+            let policy = POLICY_RE
                 .captures(body)
                 .and_then(|x| x.get(1))
                 .map(|m| m.as_str().trim().to_string())
                 .ok_or_else(|| SkillsError::Parse(format!("skill `{name}` missing policy")))?;
 
-            let tools_block = tools_re
+            let tools_block = TOOLS_RE
                 .captures(body)
                 .and_then(|x| x.get(1))
                 .map(|m| m.as_str())
@@ -63,7 +66,7 @@ impl SkillsCatalog {
                     SkillsError::Parse(format!("skill `{name}` missing allowed_tools"))
                 })?;
 
-            let allowed_tools = quoted_re
+            let allowed_tools = QUOTED_RE
                 .captures_iter(tools_block)
                 .filter_map(|m| m.get(1).map(|inner| inner.as_str().to_string()))
                 .collect::<Vec<_>>();

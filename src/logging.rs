@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::output::LogReport;
 
@@ -32,12 +32,14 @@ pub enum LoggingError {
     },
     #[error("failed to encode log record: {0}")]
     Encode(#[from] serde_json::Error),
+    #[error("log writer channel closed")]
+    ChannelClosed,
 }
 
 #[derive(Clone)]
 pub struct JsonlLogger {
     path: PathBuf,
-    file: Arc<Mutex<tokio::fs::File>>,
+    tx: mpsc::Sender<Vec<u8>>,
 }
 
 impl JsonlLogger {
@@ -64,17 +66,30 @@ impl JsonlLogger {
                 path: path.display().to_string(),
                 source,
             })?;
-        Ok(Self {
-            path,
-            file: Arc::new(Mutex::new(file)),
-        })
+
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+        let log_path = path.clone();
+        tokio::spawn(async move {
+            let mut file = file;
+            while let Some(row) = rx.recv().await {
+                if let Err(err) = file.write_all(&row).await {
+                    warn!(
+                        path = %log_path.display(),
+                        error = %err,
+                        "failed to write log record"
+                    );
+                }
+            }
+        });
+
+        Ok(Self { path, tx })
     }
 
     /// Appends one JSONL event record to the log file.
     ///
     /// # Errors
     ///
-    /// Returns [`LoggingError`] if serialization or file I/O fails.
+    /// Returns [`LoggingError`] if serialization or enqueueing fails.
     pub async fn write_event<T: Serialize>(
         &self,
         event_type: &str,
@@ -91,14 +106,10 @@ impl JsonlLogger {
         });
         let mut row = serde_json::to_vec(&record)?;
         row.push(b'\n');
-        let mut guard = self.file.lock().await;
-        guard
-            .write_all(&row)
+        self.tx
+            .send(row)
             .await
-            .map_err(|source| LoggingError::WriteFile {
-                path: self.path.display().to_string(),
-                source,
-            })
+            .map_err(|_| LoggingError::ChannelClosed)
     }
 
     #[must_use]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
+use tracing::{info, instrument, warn};
 
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::Loggers;
@@ -23,13 +24,17 @@ pub enum AgentError {
     Logging(String),
 }
 
+/// Maximum non-system messages retained after pruning (system + initial user are always kept).
+const MAX_TAIL_MESSAGES: usize = 30;
+
 #[derive(Clone)]
 pub struct AgentRunRequest {
     pub prompt: String,
     pub system_prompt: String,
     pub input_files_context: String,
     pub limits: LimitsConfig,
-    pub allowed_tools: HashSet<String>,
+    /// `None` allows all tools; `Some(set)` enforces the skills policy.
+    pub allowed_tools: Option<HashSet<String>>,
 }
 
 pub struct AgentEngine {
@@ -63,18 +68,23 @@ impl AgentEngine {
         }
     }
 
+    #[instrument(skip(self, request), fields(prompt_len = request.prompt.len()))]
     #[allow(clippy::too_many_lines)]
     async fn run_inner(&self, request: AgentRunRequest) -> Result<RunOutput, AgentError> {
+        let AgentRunRequest {
+            prompt,
+            system_prompt,
+            input_files_context,
+            limits,
+            allowed_tools,
+        } = request;
+
         let available_tools = self.tools.available_tools();
-        let user_message = build_user_message(
-            &request.prompt,
-            &request.input_files_context,
-            &available_tools,
-        );
+        let user_message = build_user_message(&prompt, &input_files_context, &available_tools);
         let mut messages = vec![
             ChatMessage {
                 role: ChatRole::System,
-                content: request.system_prompt.clone(),
+                content: system_prompt,
             },
             ChatMessage {
                 role: ChatRole::User,
@@ -86,7 +96,7 @@ impl AgentEngine {
         let mut stop_reason = StopReason::LimitReached;
 
         loop {
-            match metrics.pre_step_check(&request.limits) {
+            match metrics.pre_step_check(&limits) {
                 Ok(()) => {}
                 Err(limit) => {
                     final_result = format!("Execution stopped due to limit: {}", limit_name(limit));
@@ -98,12 +108,12 @@ impl AgentEngine {
 
             let completion = self.model.complete(&messages).await?;
             metrics.add_tokens(completion.usage);
-            if metrics.tokens_limit_hit(&request.limits) {
+            if metrics.tokens_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_tokens".to_string();
                 stop_reason = StopReason::LimitReached;
                 break;
             }
-            if metrics.duration_limit_hit(&request.limits) {
+            if metrics.duration_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                 stop_reason = StopReason::LimitReached;
                 break;
@@ -123,15 +133,24 @@ impl AgentEngine {
                     .map_err(|err| AgentError::Logging(err.to_string()))?;
             }
 
-            let directive = parse_directive(&completion.content);
-            let directive = match directive {
+            let directive = match parse_directive(&completion.content) {
                 Ok(v) => v,
-                Err(_) => ModelDirective {
-                    done: true,
-                    thought: Some("fallback raw output".to_string()),
-                    tool_calls: Vec::new(),
-                    result: Some(completion.content.clone()),
-                },
+                Err(err) => {
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: completion.content,
+                    });
+                    messages.push(ChatMessage {
+                        role: ChatRole::User,
+                        content: json!({
+                            "parse_error": err.to_string(),
+                            "hint": "Respond with strict JSON only. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
+                        })
+                        .to_string(),
+                    });
+                    prune_message_history(&mut messages);
+                    continue;
+                }
             };
 
             messages.push(ChatMessage {
@@ -141,19 +160,23 @@ impl AgentEngine {
 
             for tool_call in directive.tool_calls {
                 let qualified_tool = format!("{}.{}", tool_call.server, tool_call.tool);
-                if !request.allowed_tools.is_empty()
-                    && !request.allowed_tools.contains(&tool_call.tool)
-                    && !request.allowed_tools.contains(&qualified_tool)
-                {
-                    let warning = json!({
-                        "tool_call": tool_call,
-                        "error": "tool is not allowed by skills policy"
-                    });
-                    messages.push(ChatMessage {
-                        role: ChatRole::User,
-                        content: warning.to_string(),
-                    });
-                    continue;
+                if let Some(allowed) = &allowed_tools {
+                    if !allowed.contains(&tool_call.tool) && !allowed.contains(&qualified_tool) {
+                        warn!(
+                            tool = %qualified_tool,
+                            "tool call rejected by skills policy"
+                        );
+                        let warning = json!({
+                            "tool_call": tool_call,
+                            "error": "tool is not allowed by skills policy"
+                        });
+                        messages.push(ChatMessage {
+                            role: ChatRole::User,
+                            content: warning.to_string(),
+                        });
+                        prune_message_history(&mut messages);
+                        continue;
+                    }
                 }
 
                 let tool_response = self
@@ -164,7 +187,7 @@ impl AgentEngine {
                         tool_call.arguments.clone(),
                     )
                     .await?;
-                if metrics.duration_limit_hit(&request.limits) {
+                if metrics.duration_limit_hit(&limits) {
                     final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                     stop_reason = StopReason::LimitReached;
                     break;
@@ -180,6 +203,7 @@ impl AgentEngine {
                     })
                     .to_string(),
                 });
+                prune_message_history(&mut messages);
             }
 
             if stop_reason == StopReason::LimitReached && !final_result.is_empty() {
@@ -187,12 +211,15 @@ impl AgentEngine {
             }
 
             if directive.done {
-                final_result = directive
-                    .result
-                    .unwrap_or_else(|| "Agent marked done without explicit result".to_string());
+                final_result = directive.result.unwrap_or(
+                    "Agent marked done without explicit result".to_string(),
+                );
                 stop_reason = StopReason::GoalReached;
+                info!(iterations = metrics.iterations(), "agent goal reached");
                 break;
             }
+
+            prune_message_history(&mut messages);
         }
 
         let tokens = metrics.tokens();
@@ -233,6 +260,22 @@ fn limit_name(limit: LimitExceeded) -> &'static str {
         LimitExceeded::Tokens => "max_tokens",
         LimitExceeded::Duration => "max_duration_sec",
     }
+}
+
+/// Keeps the system prompt and initial user message, dropping the oldest middle turns.
+fn prune_message_history(messages: &mut Vec<ChatMessage>) {
+    const PREFIX: usize = 2;
+    let max_total = PREFIX.saturating_add(MAX_TAIL_MESSAGES);
+    if messages.len() <= max_total {
+        return;
+    }
+    let tail_start = messages.len() - MAX_TAIL_MESSAGES;
+    if tail_start <= PREFIX {
+        return;
+    }
+    let tail: Vec<ChatMessage> = messages.drain(tail_start..).collect();
+    messages.truncate(PREFIX);
+    messages.extend(tail);
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -285,5 +328,65 @@ mod tests {
         assert!(message.contains("read-only context"));
         assert!(message.contains("input.rs"));
         assert!(message.contains("home.read"));
+    }
+
+    #[test]
+    fn parse_directive_accepts_plain_json() {
+        let directive = parse_directive(
+            r#"{"done":true,"thought":"ok","tool_calls":[],"result":"finished"}"#,
+        )
+        .expect("plain json should parse");
+
+        assert!(directive.done);
+        assert_eq!(directive.result.as_deref(), Some("finished"));
+        assert!(directive.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn parse_directive_strips_markdown_fences() {
+        let directive = parse_directive(
+            "```json\n{\"done\":false,\"thought\":\"step\",\"tool_calls\":[],\"result\":null}\n```",
+        )
+        .expect("fenced json should parse");
+
+        assert!(!directive.done);
+        assert_eq!(directive.thought.as_deref(), Some("step"));
+    }
+
+    #[test]
+    fn parse_directive_rejects_invalid_json() {
+        assert!(parse_directive("not json at all").is_err());
+        assert!(parse_directive("```json\n{broken\n```").is_err());
+    }
+
+    #[test]
+    fn prune_message_history_keeps_prefix_and_tail() {
+        let mut messages = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: "system".to_string(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "goal".to_string(),
+            },
+        ];
+        for i in 0..40 {
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: format!("assistant-{i}"),
+            });
+            messages.push(ChatMessage {
+                role: ChatRole::User,
+                content: format!("user-{i}"),
+            });
+        }
+
+        prune_message_history(&mut messages);
+
+        assert_eq!(messages[0].content, "system");
+        assert_eq!(messages[1].content, "goal");
+        assert!(messages.len() <= 2 + MAX_TAIL_MESSAGES);
+        assert_eq!(messages.last().unwrap().content, "user-39");
     }
 }
