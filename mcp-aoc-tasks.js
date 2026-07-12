@@ -4,9 +4,27 @@
 const fs = require("fs");
 const path = require("path");
 
+function readArg(name) {
+  const prefix = `--${name}=`;
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith(prefix)) {
+      return arg.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
 const BANK_DIR = path.resolve(
-  process.env.AOC_BANK_DIR || path.join(process.cwd(), "local", "aoc-bank")
+  readArg("bank-dir") ||
+    process.env.AOC_BANK_DIR ||
+    path.join(process.cwd(), "local", "aoc-bank")
 );
+
+function homeDir() {
+  const fromArg = readArg("home-dir");
+  const raw = fromArg || process.env.AOC_HOME_DIR || null;
+  return raw ? path.resolve(raw) : null;
+}
 
 const TOOLS = [
   {
@@ -23,7 +41,8 @@ const TOOLS = [
   },
   {
     name: "aoc_get_input",
-    description: "Load puzzle input for a task by task_id.",
+    description:
+      "Load puzzle input for a task by task_id. When AOC_HOME_DIR is set, writes input.txt into that home directory and returns path metadata instead of the full payload (keeps model context small).",
     inputSchema: {
       type: "object",
       properties: {
@@ -168,9 +187,33 @@ async function callTool(name, args) {
     if (!task) {
       return errorToolResult(`task not found: ${taskId}`);
     }
+    const input = String(task.input ?? "");
+    const home = homeDir();
+    if (home) {
+      try {
+        fs.mkdirSync(home, { recursive: true });
+        const dest = path.join(home, "input.txt");
+        const resolved = path.resolve(dest);
+        if (resolved !== dest || !resolved.startsWith(home)) {
+          return errorToolResult("refusing to write input outside AOC_HOME_DIR");
+        }
+        fs.writeFileSync(dest, input.endsWith("\n") ? input : `${input}\n`, "utf8");
+        return successToolResult({
+          id: task.id,
+          path: "input.txt",
+          bytes: Buffer.byteLength(input, "utf8"),
+          lines: input.split(/\r?\n/).filter((line) => line.length > 0).length,
+          note: "Puzzle input written to home/input.txt. Read it from disk in your solution; full input is not inlined here.",
+        });
+      } catch (err) {
+        return errorToolResult(
+          `failed to write input.txt: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
     return successToolResult({
       id: task.id,
-      input: String(task.input ?? ""),
+      input,
     });
   }
 

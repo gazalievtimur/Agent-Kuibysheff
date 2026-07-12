@@ -1,4 +1,3 @@
-use std::env;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -35,13 +34,15 @@ pub struct OpenAiCompatClient {
 }
 
 impl OpenAiCompatClient {
-    /// Builds a provider client from config and the API key environment variable.
+    /// Builds a provider client from config and resolves the API key from
+    /// `provider.api_key`, a `.env` file, or `provider.api_key_env`.
     ///
     /// # Errors
     ///
     /// Returns [`ProviderError`] if the API key is missing or the HTTP client cannot be built.
     pub fn new(cfg: ProviderConfig) -> Result<Self, ProviderError> {
-        let api_key = env::var(&cfg.api_key_env)
+        let api_key = cfg
+            .resolve_api_key()
             .map_err(|_| ProviderError::MissingApiKey(cfg.api_key_env.clone()))?;
 
         let client = Client::builder()

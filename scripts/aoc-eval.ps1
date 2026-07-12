@@ -45,6 +45,9 @@ if (-not $RepoRoot) {
     $RepoRoot = Resolve-Path $RepoRoot
 }
 
+. (Join-Path $PSScriptRoot "import-dotenv.ps1")
+Import-DotEnv (Join-Path $RepoRoot ".env")
+
 if (-not $BankDir) {
     $BankDir = Resolve-RepoPath $RepoRoot "local/aoc-bank"
 } else {
@@ -75,7 +78,32 @@ if (-not (Test-Path -LiteralPath $SettingsDir -PathType Container)) {
     throw "Settings dir not found: $SettingsDir"
 }
 
-$taskFiles = Get-ChildItem -LiteralPath $BankDir -Filter "*.json" | Sort-Object Name
+function Get-YamlScalar {
+    param([string]$Text, [string]$Key, [string]$Default = "")
+    $match = [regex]::Match($Text, "(?m)^\s*$([regex]::Escape($Key)):\s*`"([^`"]*)`"")
+    if (-not $match.Success) {
+        $match = [regex]::Match($Text, "(?m)^\s*$([regex]::Escape($Key)):\s*'([^']*)'")
+    }
+    if (-not $match.Success) {
+        $match = [regex]::Match($Text, "(?m)^\s*$([regex]::Escape($Key)):\s*([^#\r\n]+)")
+    }
+    if ($match.Success) {
+        return $match.Groups[1].Value.Trim()
+    }
+    return $Default
+}
+
+$baseConfigText = Get-Content -LiteralPath $Config -Raw -Encoding UTF8
+$providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://polza.ai/api/v1"
+$providerModel = Get-YamlScalar $baseConfigText "model" "openai/gpt-5.6-luna-pro"
+$providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "POLZA_API_KEY"
+$providerApiKey = Get-YamlProviderApiKey $baseConfigText
+$providerTimeoutMs = Get-YamlScalar $baseConfigText "timeout_ms" "180000"
+$maxIterations = Get-YamlScalar $baseConfigText "max_iterations" "40"
+$maxTokens = Get-YamlScalar $baseConfigText "max_tokens" "500000"
+$maxDurationSec = Get-YamlScalar $baseConfigText "max_duration_sec" "900"
+
+$taskFiles = @(Get-ChildItem -LiteralPath $BankDir -Filter "*.json" | Sort-Object Name)
 if ($taskFiles.Count -eq 0) {
     throw "No JSON tasks in $BankDir"
 }
@@ -115,25 +143,78 @@ $passed = 0
 $failed = 0
 
 Write-Host "AoC eval run=$runId bank=$BankDir tasks=$($tasks.Count)"
-Write-Host "config=$Config settings=$SettingsDir"
+Write-Host "config=$Config settings=$SettingsDir model=$providerModel"
 
 Push-Location $RepoRoot
 try {
     foreach ($task in $tasks) {
         $homeDir = Join-Path $runsRoot $task.Id
         New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $homeDir "in") | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $homeDir "out") | Out-Null
+        $logDir = Join-Path $homeDir "logs"
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-        $prompt = @"
-Solve AoC task $($task.Id).
+        # Point AoC MCP at this run home so aoc_get_input materializes input.txt
+        # instead of inlining the full puzzle payload into the model context.
+        $env:AOC_HOME_DIR = $homeDir
+        $env:AOC_BANK_DIR = $BankDir
 
-Required steps:
-1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.
-2. Write a Python solution under home with home.write.
-3. Run it with home.run (program=python). Debug using stdout/stderr until correct.
-4. Final response: done=true with result equal to only the final answer string.
+        # Explicit env in a per-run config (MCP subprocess may not see parent env
+        # reliably across shells); paths use forward slashes for YAML safety.
+        $bankPosix = ($BankDir -replace '\\', '/')
+        $homePosix = ($homeDir -replace '\\', '/')
+        $logDirPosix = ($logDir -replace '\\', '/')
+        $runConfigPath = Join-Path $homeDir "agent-config.yaml"
+        $providerApiKeyLine = ""
+        if (-not [string]::IsNullOrWhiteSpace($providerApiKey)) {
+            $escapedApiKey = $providerApiKey.Replace('"', '\"')
+            $providerApiKeyLine = "  api_key: `"$escapedApiKey`"`n"
+        }
+        $runConfigBody = @"
+provider:
+  base_url: "$providerBaseUrl"
+  model: "$providerModel"
+$providerApiKeyLine  api_key_env: "$providerApiKeyEnv"
+  timeout_ms: $providerTimeoutMs
+  max_retries: 3
+  retry_base_delay_ms: 500
 
-Return JSON only on every turn.
+mcp:
+  - name: "aoc"
+    command: "node"
+    args:
+      - "./mcp-aoc-tasks.js"
+      - "--bank-dir=$bankPosix"
+      - "--home-dir=$homePosix"
+    env:
+      AOC_BANK_DIR: "$bankPosix"
+      AOC_HOME_DIR: "$homePosix"
+    timeout_ms: 30000
+
+limits:
+  max_iterations: $maxIterations
+  max_tokens: $maxTokens
+  max_duration_sec: $maxDurationSec
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: true
+  output_dir: "$logDirPosix"
 "@
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($runConfigPath, $runConfigBody, $utf8NoBom)
+
+        # Also seed input.txt from the bank so the solver can run even if the
+        # model skips aoc_get_input.
+        $taskObj = (Get-Content -LiteralPath $task.Path -Raw -Encoding UTF8) | ConvertFrom-Json
+        $seedInput = [string]$taskObj.input
+        if (-not $seedInput.EndsWith("`n")) { $seedInput += "`n" }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText((Join-Path $homeDir "input.txt"), $seedInput, $utf8NoBom)
+
+        $prompt = "Solve AoC task $($task.Id). Required steps: 1) Fetch statement with aoc_get_task. 2) Call aoc_get_input (writes/confirm home/input.txt; do not paste the full input into thoughts). input.txt is already present under home. 3) Write solution.py that reads input.txt, then home.run with program=python. Debug until stdout shows the correct total distance. 4) Final response: done=true with result equal to only the final answer string. Do not guess. Return JSON only on every turn."
 
         Write-Host ""
         Write-Host "=== $($task.Id) ==="
@@ -141,13 +222,8 @@ Return JSON only on every turn.
         $stdoutPath = Join-Path $homeDir "agent.stdout.json"
         $stderrPath = Join-Path $homeDir "agent.stderr.txt"
 
-        $cargoArgs = @(
-            "run", "--release", "--",
-            "--config", $Config,
-            "--settings-dir", $SettingsDir,
-            "--prompt", $prompt,
-            "--home", $homeDir
-        )
+        $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibyshev.exe"
+        $effectiveConfig = $runConfigPath
 
         $entry = [ordered]@{
             id           = $task.Id
@@ -158,38 +234,88 @@ Return JSON only on every turn.
             usage        = $null
             error        = $null
             home         = $homeDir
+            log_dir      = $logDir
+            logs         = $null
             elapsed_ms   = $null
         }
 
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            $p = Start-Process -FilePath "cargo" `
-                -ArgumentList $cargoArgs `
-                -WorkingDirectory $RepoRoot `
-                -NoNewWindow `
-                -Wait `
-                -PassThru `
-                -RedirectStandardOutput $stdoutPath `
-                -RedirectStandardError $stderrPath
+            # Native stderr (tracing) must not become terminating errors under
+            # $ErrorActionPreference=Stop.
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                if (Test-Path -LiteralPath $agentExe -PathType Leaf) {
+                    $allOutput = & $agentExe `
+                        --config $effectiveConfig `
+                        --settings-dir $SettingsDir `
+                        --prompt $prompt `
+                        --home $homeDir `
+                        --save-chat-history `
+                        2>&1
+                    $exitCode = $LASTEXITCODE
+                } else {
+                    $allOutput = & cargo run --release -- `
+                        --config $effectiveConfig `
+                        --settings-dir $SettingsDir `
+                        --prompt $prompt `
+                        --home $homeDir `
+                        --save-chat-history `
+                        2>&1
+                    $exitCode = $LASTEXITCODE
+                }
+            } finally {
+                $ErrorActionPreference = $prevEap
+            }
 
             $sw.Stop()
             $entry.elapsed_ms = $sw.ElapsedMilliseconds
 
-            if ($p.ExitCode -ne 0) {
-                $errText = ""
-                if (Test-Path -LiteralPath $stderrPath) {
-                    $errText = (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
+            $stdoutParts = @()
+            $stderrParts = @()
+            foreach ($item in @($allOutput)) {
+                if ($item -is [System.Management.Automation.ErrorRecord]) {
+                    $stderrParts += $item.ToString()
+                } else {
+                    $stdoutParts += [string]$item
                 }
-                $entry.error = "cargo exited with code $($p.ExitCode): $errText"
+            }
+
+            $stdoutText = ($stdoutParts -join "`n")
+            $stderrText = ($stderrParts -join "`n")
+            Set-Content -LiteralPath $stdoutPath -Value $stdoutText -Encoding UTF8
+            Set-Content -LiteralPath $stderrPath -Value $stderrText -Encoding UTF8
+
+            if ($exitCode -ne 0) {
+                $entry.error = "agent exited with code ${exitCode}: $stderrText"
                 $failed += 1
                 Write-Host "FAIL $($task.Id): $($entry.error)"
                 $results += [pscustomobject]$entry
                 continue
             }
 
-            $stdout = Get-Content -LiteralPath $stdoutPath -Raw -Encoding UTF8
-            # Agent prints a single JSON document; tolerate leading/trailing whitespace.
-            $jsonText = $stdout.Trim()
+            $jsonText = $stdoutText.Trim()
+            # Extract the first top-level JSON object (RunOutput), ignoring any noise.
+            $start = $jsonText.IndexOf("{")
+            if ($start -ge 0) {
+                $depth = 0
+                $end = -1
+                for ($i = $start; $i -lt $jsonText.Length; $i++) {
+                    $ch = $jsonText[$i]
+                    if ($ch -eq "{") { $depth++ }
+                    elseif ($ch -eq "}") {
+                        $depth--
+                        if ($depth -eq 0) {
+                            $end = $i
+                            break
+                        }
+                    }
+                }
+                if ($end -ge $start) {
+                    $jsonText = $jsonText.Substring($start, $end - $start + 1)
+                }
+            }
             $output = $jsonText | ConvertFrom-Json
 
             $actual = if ($null -eq $output.result) { "" } else { ([string]$output.result).Trim() }
@@ -197,11 +323,21 @@ Return JSON only on every turn.
             $entry.result = $actual
             $entry.stop_reason = $stopReason
             $entry.usage = $output.usage
+            if ($null -ne $output.logs) {
+                $entry.logs = $output.logs
+            }
 
             if ($stopReason -eq "goal_reached" -and $actual -eq $task.Expected) {
                 $entry.pass = $true
                 $passed += 1
                 Write-Host "PASS $($task.Id) result=$actual"
+                Write-Host "Logs dir: $logDir"
+                if ($null -ne $output.logs) {
+                    if ($output.logs.system_log) { Write-Host "  system: $($output.logs.system_log)" }
+                    if ($output.logs.ai_log) { Write-Host "  ai:     $($output.logs.ai_log)" }
+                    if ($output.logs.mcp_log) { Write-Host "  mcp:    $($output.logs.mcp_log)" }
+                    if ($output.logs.chat_log) { Write-Host "  chat:   $($output.logs.chat_log)" }
+                }
             } else {
                 $failed += 1
                 Write-Host "FAIL $($task.Id) stop=$stopReason result='$actual' expected='$($task.Expected)'"

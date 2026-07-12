@@ -32,6 +32,10 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub max_duration_sec: Option<u64>,
+
+    /// Persist the full unpruned chat transcript for this run.
+    #[arg(long)]
+    pub save_chat_history: bool,
 }
 
 #[cfg(test)]
@@ -61,5 +65,24 @@ mod tests {
             args.files,
             vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]
         );
+    }
+
+    #[test]
+    fn save_chat_history_flag_is_available() {
+        let args = CliArgs::try_parse_from([
+            "agent",
+            "--config",
+            "config.yaml",
+            "--settings-dir",
+            "settings",
+            "--prompt",
+            "do work",
+            "--home",
+            "home",
+            "--save-chat-history",
+        ])
+        .expect("parse args");
+
+        assert!(args.save_chat_history);
     }
 }

@@ -109,4 +109,9 @@ Tool access is also restricted by `skills.dsl`. Qualified names such as
   outside the home filesystem sandbox and must be reviewed by the
   orchestrator/operator.
 - Configured logging paths are an explicit exception to the home-only side
-  effect rule.
+  effect rule. By default they live under `~/.agent-kuibyshev/logs` on the host
+  running the agent, not inside `--home`.
+- `RunOutput.logs.system_log` points to the append-only tracing file when
+  logging is initialized.
+- `RunOutput.logs.chat_log` points to the saved transcript when chat history
+  logging is enabled via config or `--save-chat-history`.

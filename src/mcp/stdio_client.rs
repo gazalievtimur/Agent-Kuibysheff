@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use tracing::{debug, instrument};
 
 use crate::config::McpServerConfig;
-use crate::logging::JsonlLogger;
+use crate::logging::SharedEventSink;
 use crate::mcp::ToolExecutor;
 
 #[derive(Debug, Error)]
@@ -54,7 +54,7 @@ pub enum McpError {
 
 pub struct McpRegistry {
     servers: HashMap<String, ServerHandle>,
-    logger: Option<JsonlLogger>,
+    logger: Option<SharedEventSink>,
 }
 
 struct ServerHandle {
@@ -91,7 +91,7 @@ impl McpRegistry {
     /// Returns [`McpError`] if a server fails to start, initialize, or list tools.
     pub async fn connect_all(
         configs: &[McpServerConfig],
-        logger: Option<JsonlLogger>,
+        logger: Option<SharedEventSink>,
     ) -> Result<Self, McpError> {
         let mut servers = HashMap::with_capacity(configs.len());
 
@@ -104,7 +104,7 @@ impl McpRegistry {
             if let Some(log) = &logger {
                 log.write_event(
                     "mcp_server_initialized",
-                    &json!({
+                    json!({
                         "server": cfg.name,
                         "tools": tool_set.iter().cloned().collect::<Vec<_>>(),
                     }),
@@ -207,7 +207,7 @@ impl ToolExecutor for McpRegistry {
         if let Some(log) = &self.logger {
             log.write_event(
                 "mcp_tool_call",
-                &json!({
+                json!({
                     "server": server,
                     "tool": tool,
                     "arguments": arguments,
