@@ -49,7 +49,34 @@ Required steps:
 Return JSON only on every turn.
 ```
 
+## Advent of Code task id
+
+```text
+Solve AoC task 2024-01-1.
+
+Required steps:
+1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.
+2. Write a Python solution under home with home.write.
+3. Run it with home.run (program=python). Debug using stdout/stderr until correct.
+4. Final response: done=true with result equal to only the final answer string.
+
+Return JSON only on every turn.
+```
+
+PowerShell (or use `scripts/aoc-eval.ps1`):
+
+```powershell
+$env:AOC_BANK_DIR = (Resolve-Path .\local\aoc-bank).Path
+cargo run --release -- `
+  --config .\test-agents\referent\agent-config.aoc.example.yaml `
+  --settings-dir .\test-agents\referent `
+  --prompt "Solve AoC task 2024-01-1.`n`nRequired steps:`n1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.`n2. Write a Python solution under home with home.write.`n3. Run it with home.run (program=python). Debug using stdout/stderr until correct.`n4. Final response: done=true with result equal to only the final answer string.`n`nReturn JSON only on every turn." `
+  --home .\local\aoc-runs\manual\2024-01-1
+```
+
 ## Expected artifacts
+
+### Research
 
 ```text
 out/
@@ -57,4 +84,12 @@ out/
   sources.json        optional structured source list
   images/             optional per-image descriptions
   manifest.json       required completion marker
+```
+
+### AoC solve
+
+```text
+solution.py           working solver (typical)
+input.txt             optional persisted puzzle input
+# Evaluation uses RunOutput.result only (not out/ files)
 ```

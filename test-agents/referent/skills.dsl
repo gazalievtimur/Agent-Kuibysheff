@@ -1,6 +1,6 @@
 skill "workspace" {
-  policy: "Read inputs and write research deliverables only through the sandboxed home tools."
-  allowed_tools: ["home.list", "home.read", "home.write"]
+  policy: "Read inputs, write deliverables, and run commands only through the sandboxed home tools."
+  allowed_tools: ["home.list", "home.read", "home.write", "home.run"]
 }
 
 skill "jira_read" {
@@ -29,5 +29,15 @@ skill "confluence_read" {
     "atlassian.confluence_download_attachment",
     "atlassian.confluence_download_content_attachments",
     "atlassian.confluence_get_comments"
+  ]
+}
+
+skill "aoc_read" {
+  policy: "Fetch Advent of Code task statements and puzzle inputs. Read-only. Do not invent puzzle data. Never claim access to expected answers."
+  allowed_tools: [
+    "aoc.aoc_get_task",
+    "aoc.aoc_get_input",
+    "aoc.aoc_list_tasks",
+    "aoc.aoc_search_tasks"
   ]
 }

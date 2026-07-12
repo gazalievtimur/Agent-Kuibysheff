@@ -10,9 +10,8 @@ static BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static POLICY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"policy\s*:\s*"([^"]+)""#).expect("valid policy regex"));
-static TOOLS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"allowed_tools\s*:\s*\[([^\]]*)\]").expect("valid tools regex")
-});
+static TOOLS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"allowed_tools\s*:\s*\[([^\]]*)\]").expect("valid tools regex"));
 static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""([^"]+)""#).expect("valid quoted regex"));
 

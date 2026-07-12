@@ -18,7 +18,7 @@ test-agents/<agent-id>/
   prompt.example.md         шаблон --prompt для тестов
 ```
 
-## Запуск
+## Запуск (Jira / Confluence research)
 
 ```powershell
 $env:JIRA_URL = "https://your-company.atlassian.net"
@@ -38,8 +38,23 @@ cargo run -- `
 Для работы с изображениями используйте vision-модель в `provider.model`
 (например, `gpt-4o`, `gpt-4.1`, `claude-sonnet-4` и аналоги с поддержкой изображений).
 
+## Advent of Code eval (Referent)
+
+Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-aoc-tasks.js`) выдаёт
+условие и input, код пишется через `home.write`, запускается через `home.run`,
+ответ сравнивается по полю `RunOutput.result`.
+
+База заданий и прогоны **не в git** — см. [local/README.md](../local/README.md).
+
+```powershell
+Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
+.\scripts\aoc-eval.ps1 -TaskId 2024-01-1
+```
+
+Конфиг: [`referent/agent-config.aoc.example.yaml`](./referent/agent-config.aoc.example.yaml).
+
 ## Агенты
 
 | ID | Назначение |
 | --- | --- |
-| [referent](./referent/) | Сбор первичной информации по задаче из Jira и Confluence через MCP `mcp-atlassian` |
+| [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |

@@ -10,6 +10,10 @@
 .env.*
 agent-config.local.yaml
 
+# AoC eval data and run artifacts (not committed)
+/local/aoc-bank/
+/local/aoc-runs/
+
 # IDE / OS
 .idea/
 *.swp

@@ -2,13 +2,18 @@
 
 - Never modify attached input files or any path outside home.
 - Use `in/` only when the orchestrator prepared extra context (for example, a cached export).
+- Built-in tools: `home.list`, `home.read`, `home.write`, `home.run`.
+- `home.run` executes argv with cwd = home (no shell). Prefer `python` for AoC solutions.
+
+# Research deliverables (Jira / Confluence)
+
 - Main deliverable: `out/task_brief.md`.
 - Optional supporting files:
   - `out/images/<slug>.md` — one file per described image when vision is available.
   - `out/sources.json` — machine-readable list of fetched Jira/Confluence sources.
 - Before completing, write `out/manifest.json` with `schema_version`, `summary`,
   `files_written`, `patches`, and `apply_mode`.
-- Use `apply_mode: "none"` — Referent produces research artifacts, not code changes.
+- Use `apply_mode: "none"` — research artifacts are not code changes.
 - Never claim that Jira or Confluence were modified unless a write MCP tool was explicitly
   called and the tool result confirms success.
 
@@ -55,6 +60,19 @@ Discover tools with the runtime tool list. Typical read sequence:
 
 When search is needed, keep result sets small (for example, `limit: 10`).
 
+# MCP usage (aoc / Advent of Code)
+
+Typical solve sequence:
+
+1. `aoc_get_task` — load statement (`text`) by `task_id` or `url`.
+2. `aoc_get_input` — load puzzle input.
+3. `home.write` — save `solution.py` and optionally `input.txt`.
+4. `home.run` — `{"program":"python","args":["solution.py"]}`.
+5. Iterate on code using stdout/stderr until the answer is correct.
+6. Final `result` must be only the answer string (trimmed), matching AoC output style.
+
+The AoC MCP never exposes expected answers. Do not invent puzzle statements or inputs.
+
 # Vision-capable models
 
 When the provider model supports image understanding:
@@ -71,5 +89,5 @@ When vision is not available:
 # Response protocol
 
 - Output JSON only.
-- Use `done=false` while files still need to be written.
+- Use `done=false` while work is still in progress.
 - One main file per `home.write` call when possible.

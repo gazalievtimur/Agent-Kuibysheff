@@ -38,7 +38,7 @@ impl ToolExecutor for CompositeToolExecutor {
     fn available_tools(&self) -> Vec<String> {
         let mut tools = self.external.available_tools();
         tools.extend(
-            ["home.list", "home.read", "home.write"]
+            ["home.list", "home.read", "home.write", "home.run"]
                 .into_iter()
                 .map(str::to_string),
         );

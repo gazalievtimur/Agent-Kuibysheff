@@ -1,0 +1,29 @@
+# Runtime config for Referent Advent of Code solve runs.
+# Requires: Node.js for mcp-aoc-tasks.js; Python on PATH for home.run solutions.
+#
+# Set AOC_BANK_DIR to the local task bank (default: ./local/aoc-bank).
+
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 120000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp:
+  - name: "aoc"
+    command: "node"
+    args:
+      - "./mcp-aoc-tasks.js"
+    timeout_ms: 30000
+
+limits:
+  max_iterations: 40
+  max_tokens: 80000
+  max_duration_sec: 900
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  output_dir: "./logs"

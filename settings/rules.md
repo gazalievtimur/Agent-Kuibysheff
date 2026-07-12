@@ -20,6 +20,7 @@ only the relevant files from `.cursor/skills/rust-skills/rules/` (prefixes: `own
 
 - Never attempt to modify attached input files or any path outside home.
 - Use `in/` as orchestrator-provided source material.
+- Use `home.run` to execute programs under home when the task requires running code.
 - For a coding task, write complete replacement files under `out/` using paths
   relative to the target repository.
 - Put unified diffs under `patches/` only when patch output is requested.
