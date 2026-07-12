@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
+use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibyshev::logging::Loggers;
 use agent_Kuibyshev::mcp::{stdio_client::McpError, ToolExecutor};
 use agent_Kuibyshev::output::StopReason;
@@ -200,4 +201,51 @@ async fn run_retries_after_invalid_model_json() {
     assert_eq!(output.stop_reason, StopReason::GoalReached);
     assert_eq!(output.result, "recovered");
     assert_eq!(output.usage.iterations, 2);
+}
+
+#[tokio::test]
+async fn run_saves_full_chat_history_when_enabled() {
+    let model = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![ModelResponse {
+            content: r#"{"done":true,"thought":"done","tool_calls":[],"result":"saved"}"#
+                .to_string(),
+            usage: TokenUsage {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+                total_tokens: 3,
+            },
+        }])),
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let loggers = Loggers::from_config(&LoggingConfig {
+        enable_ai_log: false,
+        enable_mcp_log: false,
+        enable_chat_history: true,
+        output_dir: Some(dir.path().to_path_buf()),
+        sink: LogSinkConfig::default(),
+    })
+    .await
+    .expect("loggers");
+
+    let engine = AgentEngine::new(Arc::new(model), Arc::new(FakeTools), loggers);
+    let output = engine
+        .run(AgentRunRequest {
+            prompt: "save chat".to_string(),
+            system_prompt: "system".to_string(),
+            input_files_context: String::new(),
+            limits: LimitsConfig {
+                max_iterations: 3,
+                max_tokens: 100,
+                max_duration_sec: 60,
+            },
+            allowed_tools: None,
+        })
+        .await;
+
+    let chat_log = output.logs.chat_log.expect("chat log path");
+    let contents = std::fs::read_to_string(chat_log).expect("chat history file");
+    assert!(contents.contains("\"role\": \"system\""));
+    assert!(contents.contains("\"role\": \"assistant\""));
+    assert!(contents.contains("saved"));
 }

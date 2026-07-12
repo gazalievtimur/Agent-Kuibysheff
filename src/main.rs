@@ -4,7 +4,7 @@ use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::cli::CliArgs;
 use agent_Kuibyshev::config::{apply_cli_overrides, load_config, validate};
 use agent_Kuibyshev::context::build_input_files_context;
-use agent_Kuibyshev::logging::Loggers;
+use agent_Kuibyshev::logging::{init_tracing, resolve_base_dir, Loggers};
 use agent_Kuibyshev::mcp::stdio_client::McpRegistry;
 use agent_Kuibyshev::output::RunOutput;
 use agent_Kuibyshev::provider::openai_compat::OpenAiCompatClient;
@@ -18,7 +18,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    agent_Kuibyshev::config::load_dotenv();
 
     let output = match run().await {
         Ok(out) => out,
@@ -28,16 +28,9 @@ async fn main() {
     match serde_json::to_string_pretty(&output) {
         Ok(payload) => println!("{payload}"),
         Err(_) => println!(
-            "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null}}}}"
+            "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
         ),
     }
-}
-
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
 async fn run() -> Result<RunOutput> {
@@ -54,6 +47,13 @@ async fn run() -> Result<RunOutput> {
     if cli.prompt.trim().is_empty() {
         bail!("`--prompt` must not be empty");
     }
+
+    let log_dir = resolve_base_dir(&cfg.logging).context("resolving log directory")?;
+    init_tracing(&log_dir).context("initializing tracing")?;
+
+    let loggers = Loggers::from_config(&cfg.logging)
+        .await
+        .context("initializing loggers")?;
 
     let settings_dir = cli.settings_dir.clone();
     let settings = tokio::task::spawn_blocking(move || load_settings(&settings_dir))
@@ -75,14 +75,6 @@ async fn run() -> Result<RunOutput> {
     let home = HomeFs::new(&cli.home)
         .await
         .with_context(|| format!("initializing home workspace `{}`", cli.home.display()))?;
-
-    let loggers = Loggers::from_flags(
-        cfg.logging.output_dir.as_ref(),
-        cfg.logging.enable_ai_log,
-        cfg.logging.enable_mcp_log,
-    )
-    .await
-    .context("initializing loggers")?;
 
     let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone())
         .await

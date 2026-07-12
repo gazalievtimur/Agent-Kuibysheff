@@ -58,3 +58,6 @@ Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
 | ID | Назначение |
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
+
+AoC solve regression is part of `scripts/check.ps1` via `scripts/aoc-regression.ps1`
+(see [local/README.md](../local/README.md)).

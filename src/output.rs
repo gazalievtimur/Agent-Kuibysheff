@@ -21,6 +21,8 @@ pub struct UsageReport {
 pub struct LogReport {
     pub ai_log: Option<String>,
     pub mcp_log: Option<String>,
+    pub system_log: Option<String>,
+    pub chat_log: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -91,6 +91,7 @@ impl AgentEngine {
                 content: user_message,
             },
         ];
+        let mut full_history = messages.clone();
         let mut metrics = RunMetrics::new();
         let mut final_result = String::new();
         let mut stop_reason = StopReason::LimitReached;
@@ -106,7 +107,13 @@ impl AgentEngine {
             }
             metrics.begin_iteration();
 
-            let completion = self.model.complete(&messages).await?;
+            let completion = match self.model.complete(&messages).await {
+                Ok(completion) => completion,
+                Err(err) => {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err(err.into());
+                }
+            };
             metrics.add_tokens(completion.usage);
             if metrics.tokens_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_tokens".to_string();
@@ -120,43 +127,58 @@ impl AgentEngine {
             }
 
             if let Some(ai_log) = &self.loggers.ai {
-                ai_log
+                if let Err(err) = ai_log
                     .write_event(
                         "ai_completion",
-                        &json!({
+                        json!({
                             "iteration": metrics.iterations(),
                             "content": completion.content,
                             "usage": completion.usage,
                         }),
                     )
                     .await
-                    .map_err(|err| AgentError::Logging(err.to_string()))?;
+                {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err(AgentError::Logging(err.to_string()));
+                }
             }
 
             let directive = match parse_directive(&completion.content) {
                 Ok(v) => v,
                 Err(err) => {
-                    messages.push(ChatMessage {
-                        role: ChatRole::Assistant,
-                        content: completion.content,
-                    });
-                    messages.push(ChatMessage {
-                        role: ChatRole::User,
-                        content: json!({
-                            "parse_error": err.to_string(),
-                            "hint": "Respond with strict JSON only. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
-                        })
-                        .to_string(),
-                    });
+                    push_message(
+                        &mut messages,
+                        &mut full_history,
+                        ChatMessage {
+                            role: ChatRole::Assistant,
+                            content: completion.content,
+                        },
+                    );
+                    push_message(
+                        &mut messages,
+                        &mut full_history,
+                        ChatMessage {
+                            role: ChatRole::User,
+                            content: json!({
+                                "parse_error": err.to_string(),
+                                "hint": "Respond with strict JSON only. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
+                            })
+                            .to_string(),
+                        },
+                    );
                     prune_message_history(&mut messages);
                     continue;
                 }
             };
 
-            messages.push(ChatMessage {
-                role: ChatRole::Assistant,
-                content: completion.content,
-            });
+            push_message(
+                &mut messages,
+                &mut full_history,
+                ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: completion.content,
+                },
+            );
 
             for tool_call in directive.tool_calls {
                 let qualified_tool = format!("{}.{}", tool_call.server, tool_call.tool);
@@ -170,39 +192,74 @@ impl AgentEngine {
                             "tool_call": tool_call,
                             "error": "tool is not allowed by skills policy"
                         });
-                        messages.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: warning.to_string(),
-                        });
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage {
+                                role: ChatRole::User,
+                                content: warning.to_string(),
+                            },
+                        );
                         prune_message_history(&mut messages);
                         continue;
                     }
                 }
 
-                let tool_response = self
+                let tool_response = match self
                     .tools
                     .call_tool(
                         &tool_call.server,
                         &tool_call.tool,
                         tool_call.arguments.clone(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!(
+                            tool = %qualified_tool,
+                            error = %err,
+                            "tool call failed; returning error to the model"
+                        );
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage {
+                                role: ChatRole::User,
+                                content: json!({
+                                    "tool_result": {
+                                        "server": tool_call.server,
+                                        "tool": tool_call.tool,
+                                        "error": err.to_string()
+                                    }
+                                })
+                                .to_string(),
+                            },
+                        );
+                        prune_message_history(&mut messages);
+                        continue;
+                    }
+                };
                 if metrics.duration_limit_hit(&limits) {
                     final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                     stop_reason = StopReason::LimitReached;
                     break;
                 }
-                messages.push(ChatMessage {
-                    role: ChatRole::User,
-                    content: json!({
-                        "tool_result": {
-                            "server": tool_call.server,
-                            "tool": tool_call.tool,
-                            "result": tool_response
-                        }
-                    })
-                    .to_string(),
-                });
+                push_message(
+                    &mut messages,
+                    &mut full_history,
+                    ChatMessage {
+                        role: ChatRole::User,
+                        content: json!({
+                            "tool_result": {
+                                "server": tool_call.server,
+                                "tool": tool_call.tool,
+                                "result": tool_response
+                            }
+                        })
+                        .to_string(),
+                    },
+                );
                 prune_message_history(&mut messages);
             }
 
@@ -223,7 +280,7 @@ impl AgentEngine {
         }
 
         let tokens = metrics.tokens();
-        Ok(RunOutput {
+        let output = RunOutput {
             result: final_result,
             usage: UsageReport {
                 iterations: metrics.iterations(),
@@ -234,8 +291,21 @@ impl AgentEngine {
             },
             stop_reason,
             logs: self.loggers.report(),
-        })
+        };
+        self.loggers
+            .persist_chat_history(&full_history, Some(&output))
+            .await;
+        Ok(output)
     }
+}
+
+fn push_message(
+    messages: &mut Vec<ChatMessage>,
+    full_history: &mut Vec<ChatMessage>,
+    message: ChatMessage,
+) {
+    full_history.push(message.clone());
+    messages.push(message);
 }
 
 fn build_user_message(
@@ -356,6 +426,44 @@ mod tests {
     fn parse_directive_rejects_invalid_json() {
         assert!(parse_directive("not json at all").is_err());
         assert!(parse_directive("```json\n{broken\n```").is_err());
+    }
+
+    #[test]
+    fn push_message_keeps_full_history_when_messages_are_pruned() {
+        let mut messages = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: "system".to_string(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "goal".to_string(),
+            },
+        ];
+        let mut full_history = messages.clone();
+
+        for i in 0..40 {
+            push_message(
+                &mut messages,
+                &mut full_history,
+                ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: format!("assistant-{i}"),
+                },
+            );
+            push_message(
+                &mut messages,
+                &mut full_history,
+                ChatMessage {
+                    role: ChatRole::User,
+                    content: format!("user-{i}"),
+                },
+            );
+            prune_message_history(&mut messages);
+        }
+
+        assert!(full_history.len() > messages.len());
+        assert_eq!(full_history.last().unwrap().content, "user-39");
     }
 
     #[test]

@@ -34,6 +34,25 @@ Requirements:
 .\scripts\aoc-eval.ps1 -TaskId 2024-01-1
 ```
 
+### Regression gate
+
+AoC eval is part of the normal local quality gate and runs on every
+`scripts/check.ps1` invocation (unless `-SkipAoc`):
+
+```powershell
+$env:POLZA_API_KEY = "..."   # or set provider.api_key / .env
+.\scripts\check.ps1
+.\scripts\aoc-regression.ps1              # AoC-only
+.\scripts\check.ps1 -SkipAoc              # fmt/clippy/cargo test only
+```
+
+Requirements for the gate:
+
+- `local/aoc-bank/` with at least one task JSON
+- `agent-config.local.yaml` (preferred) or `test-agents/referent/agent-config.aoc.example.yaml`
+- API key env var from that config
+- Node.js + Python on `PATH`
+
 The harness:
 
 1. Loads tasks from `local/aoc-bank`
@@ -41,4 +60,15 @@ The harness:
 3. Compares `RunOutput.result` to `expected`
 4. Writes `local/aoc-runs/<run-id>/report.json`
 
-MCP `aoc` never returns `expected` — only the harness reads that field from disk.
+Each AoC task run writes agent logs under:
+
+```text
+local/aoc-runs/<run-id>/<task-id>/logs/
+  agent.trace.log
+  ai_usage.jsonl
+  mcp_usage.jsonl
+  chat_history.json
+```
+
+Paths are also returned in `RunOutput.logs` inside `agent.stdout.json` and in
+`report.json` per task.

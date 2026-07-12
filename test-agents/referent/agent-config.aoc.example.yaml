@@ -20,7 +20,7 @@ mcp:
 
 limits:
   max_iterations: 40
-  max_tokens: 80000
+  max_tokens: 500000
   max_duration_sec: 900
 
 logging:

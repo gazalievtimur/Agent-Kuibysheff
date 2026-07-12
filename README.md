@@ -37,7 +37,16 @@ Prerequisites:
 PowerShell commands:
 
 ```powershell
-$env:OPENAI_API_KEY = "your_api_key"
+# Option A: .env file in repo root (loaded automatically)
+Copy-Item .env.example .env
+# edit .env and set POLZA_API_KEY=...
+
+# Option B: inline key in gitignored agent-config.local.yaml
+# provider:
+#   api_key: "your_key"
+
+# Option C: explicit environment variable
+$env:POLZA_API_KEY = "your_api_key"
 cargo run -- `
   --config ./agent-config.local-demo.yaml `
   --settings-dir ./settings `
@@ -59,7 +68,7 @@ This run uses:
 - Local MCP tools from `mcp-server.js` (`search_docs`, `read_file`)
 - Built-in filesystem tools restricted to `./demo-home`
 - Agent behavior from the `./settings` directory
-- JSONL logs in `./logs`
+- JSONL event logs and tracing output in `~/.agent-kuibyshev/logs` by default
 
 Runtime limit overrides remain available:
 
@@ -109,10 +118,13 @@ Verify the toolchain is active:
 rustup show
 ```
 
-Run all checks before committing:
+Run all checks before committing (fmt, clippy, cargo test, and AoC agent
+regression against `local/aoc-bank`):
 
 ```powershell
+$env:POLZA_API_KEY = "..."   # only if not using provider.api_key or .env
 .\scripts\check.ps1
+.\scripts\check.ps1 -SkipAoc  # skip live agent eval when needed
 ```
 
 Individual commands:
@@ -121,6 +133,7 @@ Individual commands:
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test
+.\scripts\aoc-regression.ps1
 ```
 
 Cursor/VS Code picks up [`.vscode/settings.json`](.vscode/settings.json) for
@@ -142,10 +155,51 @@ The CLI prints exactly one JSON document to stdout:
   },
   "stop_reason": "goal_reached",
   "logs": {
-    "ai_log": "logs/ai_usage.jsonl",
-    "mcp_log": "logs/mcp_usage.jsonl"
+    "ai_log": "~/.agent-kuibyshev/logs/ai_usage.jsonl",
+    "mcp_log": "~/.agent-kuibyshev/logs/mcp_usage.jsonl",
+    "system_log": "~/.agent-kuibyshev/logs/agent.trace.log",
+    "chat_log": null
   }
 }
+```
+
+## Logging
+
+By default the agent writes detailed logs under `~/.agent-kuibyshev/logs`:
+
+| File | Content |
+|------|---------|
+| `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
+| `ai_usage.jsonl` | Structured AI completion events (when `enable_ai_log: true`) |
+| `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
+| `chat_history.json` | Full unpruned chat transcript (when `enable_chat_history: true` or `--save-chat-history`) |
+
+Override the base directory with any of:
+
+- `AGENT_LOG_DIR` environment variable
+- legacy `logging.output_dir` in config
+- `logging.sink.path` for file sinks
+
+Future sinks (for example database-backed storage) are configured via
+`logging.sink.type`. The current release ships the `file` sink; `db` is reserved
+for a later implementation.
+
+Enable full chat history from the CLI:
+
+```powershell
+cargo run -- ... --save-chat-history
+```
+
+Example:
+
+```yaml
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: false
+  sink:
+    type: file
+    # path: "./custom-logs"   # optional; defaults to ~/.agent-kuibyshev/logs
 ```
 
 ## Skills DSL
