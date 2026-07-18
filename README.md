@@ -28,11 +28,8 @@ external orchestrator must implement.
 
 ## Quick start
 
-Repository includes a local MCP stdio server: `mcp-server.js`.
-
 Prerequisites:
 - Rust toolchain (`cargo`)
-- Node.js in PATH (`node --version`)
 
 PowerShell commands:
 
@@ -65,7 +62,7 @@ $env:OPENAI_API_KEY = "your_api_key"
 
 This run uses:
 - OpenAI-compatible provider from config
-- Local MCP tools from `mcp-server.js` (`search_docs`, `read_file`)
+- Built-in repository research tools (`local_tools.search_docs`, `local_tools.read_file`)
 - Built-in filesystem tools restricted to `./demo-home`
 - Agent behavior from the `./settings` directory
 - JSONL event logs and tracing output in `~/.agent-kuibyshev/logs` by default

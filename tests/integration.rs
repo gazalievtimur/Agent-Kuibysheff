@@ -13,6 +13,7 @@ use agent_Kuibyshev::output::StopReason;
 use agent_Kuibyshev::provider::openai_compat::ProviderError;
 use agent_Kuibyshev::provider::{ChatMessage, ModelClient, ModelResponse};
 use agent_Kuibyshev::tools::fs_home::HomeFs;
+use agent_Kuibyshev::tools::local_tools::LocalTools;
 use agent_Kuibyshev::tools::CompositeToolExecutor;
 
 struct FakeModel {
@@ -143,7 +144,8 @@ async fn model_can_write_an_artifact_inside_home() {
     };
     let dir = tempfile::tempdir().expect("temp dir");
     let home = HomeFs::new(dir.path()).await.expect("home");
-    let tools = CompositeToolExecutor::new(home, Arc::new(FakeTools));
+    let local_tools = LocalTools::new(dir.path()).await.expect("local tools");
+    let tools = CompositeToolExecutor::new(home, local_tools, Arc::new(FakeTools));
     let engine = AgentEngine::new(Arc::new(model), Arc::new(tools), Loggers::default());
 
     let output = engine
