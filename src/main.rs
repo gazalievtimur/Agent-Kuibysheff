@@ -11,6 +11,7 @@ use agent_Kuibyshev::provider::openai_compat::OpenAiCompatClient;
 use agent_Kuibyshev::settings::load_settings;
 use agent_Kuibyshev::skills::dsl::SkillsCatalog;
 use agent_Kuibyshev::tools::fs_home::HomeFs;
+use agent_Kuibyshev::tools::local_tools::LocalTools;
 use agent_Kuibyshev::tools::CompositeToolExecutor;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -76,15 +77,25 @@ async fn run() -> Result<RunOutput> {
         .await
         .with_context(|| format!("initializing home workspace `{}`", cli.home.display()))?;
 
+    let workspace_root = std::env::current_dir().context("resolving current working directory")?;
+    let local_tools = LocalTools::new(&workspace_root)
+        .await
+        .with_context(|| {
+            format!(
+                "initializing local tools workspace `{}`",
+                workspace_root.display()
+            )
+        })?;
+
     let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone())
         .await
         .context("connecting MCP servers")?;
     let provider =
         OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
-    let tools = CompositeToolExecutor::new(home, Arc::new(mcp));
+    let tools = CompositeToolExecutor::new(home, local_tools, Arc::new(mcp));
 
     let system_prompt = format!(
-        "{master}\n\n{rules_section}{skills}\n\nRuntime rules:\n- Stay within configured limits.\n- The home directory is `{home}`. All file writes must use home.write and paths relative to this directory.\n- Input files are read-only context and are not copied into home automatically.\n- Builtin tools: home.list {{\"path\":\".\"}}, home.read {{\"path\":\"relative/path\",\"max_chars\":50000}}, home.write {{\"path\":\"relative/path\",\"content\":\"...\"}}, home.run {{\"program\":\"python\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}}.\n- home.run executes argv (no shell) with cwd set to home; capture stdout/stderr/exit_code. Assume the process runs in an isolated container.\n- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.\n- Use MCP tools when needed and allowed.\n- When the goal is achieved, return done=true and fill `result`.\n- Return strict JSON and never use markdown.",
+        "{master}\n\n{rules_section}{skills}\n\nRuntime rules:\n- Stay within configured limits.\n- The home directory is `{home}`. All file writes must use home.write and paths relative to this directory.\n- Input files are read-only context and are not copied into home automatically.\n- Builtin tools: home.list {{\"path\":\".\"}}, home.read {{\"path\":\"relative/path\",\"max_chars\":50000}}, home.write {{\"path\":\"relative/path\",\"content\":\"...\"}}, home.run {{\"program\":\"python\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}}.\n- home.run executes argv (no shell) with cwd set to home; capture stdout/stderr/exit_code. Assume the process runs in an isolated container.\n- Repository research tools: local_tools.search_docs {{\"query\":\"phrase\",\"max_results\":8}}, local_tools.read_file {{\"path\":\"relative/path\",\"max_chars\":6000}}. These read from the current working directory (`{workspace}`), not from home.\n- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.\n- Use MCP tools when needed and allowed.\n- When the goal is achieved, return done=true and fill `result`.\n- Return strict JSON and never use markdown.",
         master = settings.master_prompt.trim(),
         rules_section = if settings.rules.trim().is_empty() {
             String::new()
@@ -92,7 +103,8 @@ async fn run() -> Result<RunOutput> {
             format!("Rules:\n{}\n\n", settings.rules.trim())
         },
         skills = skill_prompt,
-        home = cli.home.display()
+        home = cli.home.display(),
+        workspace = workspace_root.display()
     );
 
     info!(

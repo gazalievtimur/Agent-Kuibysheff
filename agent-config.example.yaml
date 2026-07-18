@@ -7,12 +7,7 @@ provider:
   max_retries: 3
   retry_base_delay_ms: 500
 
-mcp:
-  - name: "local_tools"
-    command: "node"
-    args: ["./mcp-server.js"]
-    env: {}
-    timeout_ms: 20000
+mcp: []
 
 limits:
   max_iterations: 10

@@ -24,7 +24,6 @@ function Assert-Command([string]$Name) {
 }
 
 try {
-    Assert-Command "node"
     Assert-Command "cargo"
 
     if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
