@@ -8,7 +8,7 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::mcp::stdio_client::McpError;
+use crate::mcp::Error;
 
 const DEFAULT_MAX_CHARS: usize = 50_000;
 const MAX_READ_CHARS: usize = 200_000;
@@ -25,8 +25,8 @@ impl HomeFs {
     ///
     /// # Errors
     ///
-    /// Returns [`McpError`] if the directory cannot be created or is not a directory.
-    pub async fn new(root: &Path) -> Result<Self, McpError> {
+    /// Returns [`crate::mcp::Error`] if the directory cannot be created or is not a directory.
+    pub async fn new(root: &Path) -> Result<Self, Error> {
         fs::create_dir_all(root)
             .await
             .map_err(|error| home_io("create_dir_all", root, &error))?;
@@ -38,7 +38,7 @@ impl HomeFs {
             .map_err(|error| home_io("metadata", &root, &error))?
             .is_dir()
         {
-            return Err(McpError::HomePath {
+            return Err(Error::HomePath {
                 path: root.display().to_string(),
                 error: "home is not a directory".to_string(),
             });
@@ -50,8 +50,8 @@ impl HomeFs {
     ///
     /// # Errors
     ///
-    /// Returns [`McpError`] for invalid arguments, paths, or I/O failures.
-    pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, McpError> {
+    /// Returns [`crate::mcp::Error`] for invalid arguments, paths, or I/O failures.
+    pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, Error> {
         match tool {
             "list" => {
                 let args: ListArgs = decode_args(tool, arguments)?;
@@ -69,20 +69,20 @@ impl HomeFs {
                 let args: RunArgs = decode_args(tool, arguments)?;
                 self.run(&args.program, &args.args, args.timeout_ms).await
             }
-            _ => Err(McpError::UnknownTool {
+            _ => Err(Error::UnknownTool {
                 server: "home".to_string(),
                 tool: tool.to_string(),
             }),
         }
     }
 
-    async fn list(&self, relative: &Path) -> Result<Value, McpError> {
+    async fn list(&self, relative: &Path) -> Result<Value, Error> {
         let path = self.resolve_existing(relative).await?;
         let metadata = fs::metadata(&path)
             .await
             .map_err(|error| home_io("metadata", &path, &error))?;
         if !metadata.is_dir() {
-            return Err(McpError::HomePath {
+            return Err(Error::HomePath {
                 path: relative.display().to_string(),
                 error: "path is not a directory".to_string(),
             });
@@ -127,7 +127,7 @@ impl HomeFs {
         }))
     }
 
-    async fn read(&self, relative: &Path, max_chars: Option<usize>) -> Result<Value, McpError> {
+    async fn read(&self, relative: &Path, max_chars: Option<usize>) -> Result<Value, Error> {
         let path = self.resolve_existing(relative).await?;
         let content = fs::read_to_string(&path)
             .await
@@ -150,7 +150,7 @@ impl HomeFs {
         }))
     }
 
-    async fn write(&self, relative: &Path, content: &str) -> Result<Value, McpError> {
+    async fn write(&self, relative: &Path, content: &str) -> Result<Value, Error> {
         validate_relative(relative)?;
         let file_name = relative
             .file_name()
@@ -187,9 +187,9 @@ impl HomeFs {
         program: &str,
         args: &[String],
         timeout_ms: Option<u64>,
-    ) -> Result<Value, McpError> {
+    ) -> Result<Value, Error> {
         if program.trim().is_empty() {
-            return Err(McpError::InvalidToolArguments {
+            return Err(Error::InvalidToolArguments {
                 tool: "home.run".to_string(),
                 error: "`program` must not be empty".to_string(),
             });
@@ -208,7 +208,7 @@ impl HomeFs {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let child = command.spawn().map_err(|error| McpError::HomeIo {
+        let child = command.spawn().map_err(|error| Error::HomeIo {
             operation: "spawn".to_string(),
             path: self.root.display().to_string(),
             error: format!("failed to start `{program}`: {error}"),
@@ -227,7 +227,7 @@ impl HomeFs {
                     "timed_out": false
                 }))
             }
-            Ok(Err(error)) => Err(McpError::HomeIo {
+            Ok(Err(error)) => Err(Error::HomeIo {
                 operation: "wait".to_string(),
                 path: self.root.display().to_string(),
                 error: error.to_string(),
@@ -243,7 +243,7 @@ impl HomeFs {
         }
     }
 
-    async fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, McpError> {
+    async fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, Error> {
         validate_relative(relative)?;
         let candidate = self.root.join(relative);
         let canonical = fs::canonicalize(&candidate)
@@ -253,7 +253,7 @@ impl HomeFs {
         Ok(canonical)
     }
 
-    async fn ensure_directories(&self, relative: &Path) -> Result<PathBuf, McpError> {
+    async fn ensure_directories(&self, relative: &Path) -> Result<PathBuf, Error> {
         validate_relative(relative)?;
         let mut current = self.root.clone();
         for component in relative.components() {
@@ -294,7 +294,7 @@ impl HomeFs {
         Ok(current)
     }
 
-    fn ensure_within_home(&self, canonical: &Path, requested: &Path) -> Result<(), McpError> {
+    fn ensure_within_home(&self, canonical: &Path, requested: &Path) -> Result<(), Error> {
         if canonical.starts_with(&self.root) {
             Ok(())
         } else {
@@ -343,14 +343,14 @@ fn truncate_output(bytes: &[u8]) -> (String, bool) {
     }
 }
 
-fn decode_args<T: for<'de> Deserialize<'de>>(tool: &str, value: Value) -> Result<T, McpError> {
-    serde_json::from_value(value).map_err(|error| McpError::InvalidToolArguments {
+fn decode_args<T: for<'de> Deserialize<'de>>(tool: &str, value: Value) -> Result<T, Error> {
+    serde_json::from_value(value).map_err(|error| Error::InvalidToolArguments {
         tool: format!("home.{tool}"),
         error: error.to_string(),
     })
 }
 
-fn validate_relative(path: &Path) -> Result<(), McpError> {
+fn validate_relative(path: &Path) -> Result<(), Error> {
     if path.as_os_str().is_empty() {
         return Ok(());
     }
@@ -368,15 +368,15 @@ fn validate_relative(path: &Path) -> Result<(), McpError> {
     Ok(())
 }
 
-fn invalid_path(path: &Path, error: impl Into<String>) -> McpError {
-    McpError::HomePath {
+fn invalid_path(path: &Path, error: impl Into<String>) -> Error {
+    Error::HomePath {
         path: path.display().to_string(),
         error: error.into(),
     }
 }
 
-fn home_io(operation: &str, path: &Path, error: &std::io::Error) -> McpError {
-    McpError::HomeIo {
+fn home_io(operation: &str, path: &Path, error: &std::io::Error) -> Error {
+    Error::HomeIo {
         operation: operation.to_string(),
         path: path.display().to_string(),
         error: error.to_string(),
@@ -428,7 +428,7 @@ mod tests {
             .call("write", json!({"path": "../outside.txt", "content": "no"}))
             .await
             .expect_err("must reject traversal");
-        assert!(matches!(error, McpError::HomePath { .. }));
+        assert!(matches!(error, Error::HomePath { .. }));
     }
 
     #[tokio::test]
@@ -474,6 +474,6 @@ mod tests {
             .call("run", json!({"program": "  ", "args": []}))
             .await
             .expect_err("must reject empty program");
-        assert!(matches!(error, McpError::InvalidToolArguments { .. }));
+        assert!(matches!(error, Error::InvalidToolArguments { .. }));
     }
 }

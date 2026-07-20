@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
@@ -14,43 +13,7 @@ use tracing::{debug, instrument};
 
 use crate::config::McpServerConfig;
 use crate::logging::SharedEventSink;
-use crate::mcp::ToolExecutor;
-
-#[derive(Debug, Error)]
-pub enum McpError {
-    #[error("failed to spawn MCP server `{server}`: {source}")]
-    Spawn {
-        server: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("MCP server `{server}` missing stdio pipe: {pipe}")]
-    MissingPipe { server: String, pipe: String },
-    #[error("MCP protocol IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("MCP payload encode/decode failed: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("MCP call timed out on server `{server}` for method `{method}`")]
-    Timeout { server: String, method: String },
-    #[error("MCP server `{server}` returned protocol error: {error}")]
-    Protocol { server: String, error: String },
-    #[error("unknown MCP server `{0}`")]
-    UnknownServer(String),
-    #[error("tool `{tool}` is not exposed by server `{server}`")]
-    UnknownTool { server: String, tool: String },
-    #[error("invalid arguments for tool `{tool}`: {error}")]
-    InvalidToolArguments { tool: String, error: String },
-    #[error("home path `{path}` is not allowed: {error}")]
-    HomePath { path: String, error: String },
-    #[error("home filesystem operation `{operation}` failed for `{path}`: {error}")]
-    HomeIo {
-        operation: String,
-        path: String,
-        error: String,
-    },
-    #[error("MCP server `{server}` actor channel closed")]
-    ActorClosed { server: String },
-}
+use crate::mcp::{Error, ToolExecutor};
 
 pub struct McpRegistry {
     servers: HashMap<String, ServerHandle>,
@@ -70,7 +33,7 @@ struct McpClientHandle {
 struct ActorRequest {
     method: String,
     params: Value,
-    reply: oneshot::Sender<Result<Value, McpError>>,
+    reply: oneshot::Sender<Result<Value, Error>>,
 }
 
 struct McpStdioClient {
@@ -88,11 +51,11 @@ impl McpRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`McpError`] if a server fails to start, initialize, or list tools.
+    /// Returns [`crate::mcp::Error`] if a server fails to start, initialize, or list tools.
     pub async fn connect_all(
         configs: &[McpServerConfig],
         logger: Option<SharedEventSink>,
-    ) -> Result<Self, McpError> {
+    ) -> Result<Self, Error> {
         let mut servers = HashMap::with_capacity(configs.len());
 
         for cfg in configs {
@@ -110,7 +73,7 @@ impl McpRegistry {
                     }),
                 )
                 .await
-                .map_err(|err| McpError::Protocol {
+                .map_err(|err| Error::Protocol {
                     server: cfg.name.clone(),
                     error: err.to_string(),
                 })?;
@@ -152,7 +115,7 @@ fn spawn_actor(server_name: String, client: McpStdioClient) -> McpClientHandle {
 }
 
 impl McpClientHandle {
-    async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(ActorRequest {
@@ -161,10 +124,10 @@ impl McpClientHandle {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| McpError::ActorClosed {
+            .map_err(|_| Error::ActorClosed {
                 server: self.server_name.clone(),
             })?;
-        reply_rx.await.map_err(|_| McpError::ActorClosed {
+        reply_rx.await.map_err(|_| Error::ActorClosed {
             server: self.server_name.clone(),
         })?
     }
@@ -178,28 +141,29 @@ impl ToolExecutor for McpRegistry {
         server: &str,
         tool: &str,
         arguments: Value,
-    ) -> Result<Value, McpError> {
+    ) -> Result<Value, Error> {
         tracing::Span::current().record("server", server);
         tracing::Span::current().record("tool", tool);
 
         let handle = self
             .servers
             .get(server)
-            .ok_or_else(|| McpError::UnknownServer(server.to_string()))?;
+            .ok_or_else(|| Error::UnknownServer(server.to_string()))?;
         if !handle.tools.contains(tool) {
-            return Err(McpError::UnknownTool {
+            return Err(Error::UnknownTool {
                 server: server.to_string(),
                 tool: tool.to_string(),
             });
         }
 
+        let arguments_for_log = self.logger.as_ref().map(|_| arguments.clone());
         let result = handle
             .client
             .request(
                 "tools/call",
                 json!({
                     "name": tool,
-                    "arguments": arguments.clone(),
+                    "arguments": arguments,
                 }),
             )
             .await?;
@@ -210,12 +174,12 @@ impl ToolExecutor for McpRegistry {
                 json!({
                     "server": server,
                     "tool": tool,
-                    "arguments": arguments,
+                    "arguments": arguments_for_log,
                     "result": result,
                 }),
             )
             .await
-            .map_err(|err| McpError::Protocol {
+            .map_err(|err| Error::Protocol {
                 server: server.to_string(),
                 error: err.to_string(),
             })?;
@@ -237,7 +201,7 @@ impl ToolExecutor for McpRegistry {
 }
 
 impl McpStdioClient {
-    fn connect(cfg: &McpServerConfig) -> Result<Self, McpError> {
+    fn connect(cfg: &McpServerConfig) -> Result<Self, Error> {
         let mut cmd = Command::new(&cfg.command);
         cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped());
@@ -247,15 +211,15 @@ impl McpStdioClient {
             cmd.env(k, v);
         }
 
-        let mut child = cmd.spawn().map_err(|source| McpError::Spawn {
+        let mut child = cmd.spawn().map_err(|source| Error::Spawn {
             server: cfg.name.clone(),
             source,
         })?;
-        let stdin = child.stdin.take().ok_or_else(|| McpError::MissingPipe {
+        let stdin = child.stdin.take().ok_or_else(|| Error::MissingPipe {
             server: cfg.name.clone(),
             pipe: "stdin".to_string(),
         })?;
-        let stdout = child.stdout.take().ok_or_else(|| McpError::MissingPipe {
+        let stdout = child.stdout.take().ok_or_else(|| Error::MissingPipe {
             server: cfg.name.clone(),
             pipe: "stdout".to_string(),
         })?;
@@ -270,7 +234,7 @@ impl McpStdioClient {
         })
     }
 
-    async fn initialize(&mut self) -> Result<(), McpError> {
+    async fn initialize(&mut self) -> Result<(), Error> {
         let params = json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {},
@@ -284,7 +248,7 @@ impl McpStdioClient {
         Ok(())
     }
 
-    async fn list_tools(&mut self) -> Result<Vec<String>, McpError> {
+    async fn list_tools(&mut self) -> Result<Vec<String>, Error> {
         let response = self.request("tools/list", json!({})).await?;
         let list = response
             .get("tools")
@@ -300,7 +264,7 @@ impl McpStdioClient {
         Ok(out)
     }
 
-    async fn notify(&mut self, method: &str, params: Value) -> Result<(), McpError> {
+    async fn notify(&mut self, method: &str, params: Value) -> Result<(), Error> {
         let payload = json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -309,7 +273,7 @@ impl McpStdioClient {
         self.write_frame(&payload).await
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, Error> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let payload = json!({
             "jsonrpc": "2.0",
@@ -325,13 +289,13 @@ impl McpStdioClient {
         let fut = self.wait_for_response(id);
         timeout(timeout_duration, fut)
             .await
-            .map_err(|_| McpError::Timeout {
+            .map_err(|_| Error::Timeout {
                 server,
                 method: method_name,
             })?
     }
 
-    async fn wait_for_response(&mut self, target_id: u64) -> Result<Value, McpError> {
+    async fn wait_for_response(&mut self, target_id: u64) -> Result<Value, Error> {
         loop {
             let message = self.read_frame().await?;
             let Some(id_value) = message.get("id") else {
@@ -342,7 +306,7 @@ impl McpStdioClient {
             }
 
             if let Some(err) = message.get("error") {
-                return Err(McpError::Protocol {
+                return Err(Error::Protocol {
                     server: self.server_name.clone(),
                     error: err.to_string(),
                 });
@@ -352,7 +316,7 @@ impl McpStdioClient {
         }
     }
 
-    async fn write_frame(&mut self, payload: &Value) -> Result<(), McpError> {
+    async fn write_frame(&mut self, payload: &Value) -> Result<(), Error> {
         let body = serde_json::to_vec(payload)?;
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
         self.stdin.write_all(header.as_bytes()).await?;
@@ -361,13 +325,13 @@ impl McpStdioClient {
         Ok(())
     }
 
-    async fn read_frame(&mut self) -> Result<Value, McpError> {
+    async fn read_frame(&mut self) -> Result<Value, Error> {
         let mut content_length = None::<usize>;
         loop {
             let mut line = String::new();
             let bytes = self.stdout.read_line(&mut line).await?;
             if bytes == 0 {
-                return Err(McpError::Protocol {
+                return Err(Error::Protocol {
                     server: self.server_name.clone(),
                     error: "unexpected EOF from MCP server".to_string(),
                 });
@@ -380,14 +344,14 @@ impl McpStdioClient {
                 let parsed = rest
                     .trim()
                     .parse::<usize>()
-                    .map_err(|err| McpError::Protocol {
+                    .map_err(|err| Error::Protocol {
                         server: self.server_name.clone(),
                         error: format!("invalid content-length header: {err}"),
                     })?;
                 content_length = Some(parsed);
             }
         }
-        let size = content_length.ok_or_else(|| McpError::Protocol {
+        let size = content_length.ok_or_else(|| Error::Protocol {
             server: self.server_name.clone(),
             error: "missing content-length header".to_string(),
         })?;

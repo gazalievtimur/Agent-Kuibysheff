@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::mcp::{stdio_client::McpError, ToolExecutor};
+use crate::mcp::{Error, ToolExecutor};
 
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
@@ -34,7 +34,7 @@ impl ToolExecutor for CompositeToolExecutor {
         server: &str,
         tool: &str,
         arguments: Value,
-    ) -> Result<Value, McpError> {
+    ) -> Result<Value, Error> {
         match server {
             "home" => self.home.call(tool, arguments).await,
             "local_tools" => self.local_tools.call(tool, arguments).await,

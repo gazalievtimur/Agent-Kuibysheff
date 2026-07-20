@@ -76,14 +76,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("chat_history.json");
         let record = ChatHistoryRecord::new(vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "system".to_string(),
-            },
-            ChatMessage {
-                role: ChatRole::User,
-                content: "hello".to_string(),
-            },
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "hello"),
         ]);
 
         write_chat_history(&path, &record)

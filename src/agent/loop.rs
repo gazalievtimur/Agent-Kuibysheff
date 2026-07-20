@@ -7,25 +7,30 @@ use thiserror::Error;
 use tracing::{info, instrument, warn};
 
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
-use crate::logging::Loggers;
-use crate::mcp::{stdio_client::McpError, ToolExecutor};
+use crate::logging::{LoggingError, Loggers};
+use crate::mcp::ToolExecutor;
 use crate::output::{RunOutput, StopReason, UsageReport};
-use crate::provider::{openai_compat::ProviderError, ChatMessage, ChatRole, ModelClient};
+use crate::provider::{ChatMessage, ChatRole, ModelClient};
 
 #[derive(Debug, Error)]
 pub enum AgentError {
     #[error("provider failure: {0}")]
-    Provider(#[from] ProviderError),
+    Provider(#[from] crate::provider::Error),
     #[error("tool failure: {0}")]
-    Mcp(#[from] McpError),
+    Tool(#[from] crate::mcp::Error),
     #[error("failed to decode model directive: {0}")]
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
-    Logging(String),
+    Logging(#[from] LoggingError),
 }
 
-/// Maximum non-system messages retained after pruning (system + initial user are always kept).
+/// Maximum non-prefix messages retained after count-based pruning
+/// (system + initial user are always kept).
 const MAX_TAIL_MESSAGES: usize = 30;
+/// Maximum total UTF-8 char budget for the working message window.
+const MAX_HISTORY_CHARS: usize = 200_000;
+/// Prefix length: system prompt + initial user goal.
+const HISTORY_PREFIX_LEN: usize = 2;
 
 #[derive(Clone)]
 pub struct AgentRunRequest {
@@ -82,14 +87,8 @@ impl AgentEngine {
         let available_tools = self.tools.available_tools();
         let user_message = build_user_message(&prompt, &input_files_context, &available_tools);
         let mut messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: system_prompt,
-            },
-            ChatMessage {
-                role: ChatRole::User,
-                content: user_message,
-            },
+            ChatMessage::new(ChatRole::System, system_prompt),
+            ChatMessage::new(ChatRole::User, user_message),
         ];
         let mut full_history = messages.clone();
         let mut metrics = RunMetrics::new();
@@ -139,7 +138,7 @@ impl AgentEngine {
                     .await
                 {
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err(AgentError::Logging(err.to_string()));
+                    return Err(err.into());
                 }
             }
 
@@ -149,22 +148,19 @@ impl AgentEngine {
                     push_message(
                         &mut messages,
                         &mut full_history,
-                        ChatMessage {
-                            role: ChatRole::Assistant,
-                            content: completion.content,
-                        },
+                        ChatMessage::new(ChatRole::Assistant, completion.content),
                     );
                     push_message(
                         &mut messages,
                         &mut full_history,
-                        ChatMessage {
-                            role: ChatRole::User,
-                            content: json!({
+                        ChatMessage::new(
+                            ChatRole::User,
+                            json!({
                                 "parse_error": err.to_string(),
                                 "hint": "Respond with strict JSON only. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
                             })
                             .to_string(),
-                        },
+                        ),
                     );
                     prune_message_history(&mut messages);
                     continue;
@@ -174,10 +170,7 @@ impl AgentEngine {
             push_message(
                 &mut messages,
                 &mut full_history,
-                ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: completion.content,
-                },
+                ChatMessage::new(ChatRole::Assistant, completion.content),
             );
 
             for tool_call in directive.tool_calls {
@@ -195,10 +188,7 @@ impl AgentEngine {
                         push_message(
                             &mut messages,
                             &mut full_history,
-                            ChatMessage {
-                                role: ChatRole::User,
-                                content: warning.to_string(),
-                            },
+                            ChatMessage::new(ChatRole::User, warning.to_string()),
                         );
                         prune_message_history(&mut messages);
                         continue;
@@ -207,11 +197,7 @@ impl AgentEngine {
 
                 let tool_response = match self
                     .tools
-                    .call_tool(
-                        &tool_call.server,
-                        &tool_call.tool,
-                        tool_call.arguments.clone(),
-                    )
+                    .call_tool(&tool_call.server, &tool_call.tool, tool_call.arguments)
                     .await
                 {
                     Ok(value) => value,
@@ -224,9 +210,9 @@ impl AgentEngine {
                         push_message(
                             &mut messages,
                             &mut full_history,
-                            ChatMessage {
-                                role: ChatRole::User,
-                                content: json!({
+                            ChatMessage::new(
+                                ChatRole::User,
+                                json!({
                                     "tool_result": {
                                         "server": tool_call.server,
                                         "tool": tool_call.tool,
@@ -234,7 +220,7 @@ impl AgentEngine {
                                     }
                                 })
                                 .to_string(),
-                            },
+                            ),
                         );
                         prune_message_history(&mut messages);
                         continue;
@@ -248,9 +234,9 @@ impl AgentEngine {
                 push_message(
                     &mut messages,
                     &mut full_history,
-                    ChatMessage {
-                        role: ChatRole::User,
-                        content: json!({
+                    ChatMessage::new(
+                        ChatRole::User,
+                        json!({
                             "tool_result": {
                                 "server": tool_call.server,
                                 "tool": tool_call.tool,
@@ -258,7 +244,7 @@ impl AgentEngine {
                             }
                         })
                         .to_string(),
-                    },
+                    ),
                 );
                 prune_message_history(&mut messages);
             }
@@ -332,20 +318,39 @@ fn limit_name(limit: LimitExceeded) -> &'static str {
     }
 }
 
-/// Keeps the system prompt and initial user message, dropping the oldest middle turns.
+/// Keeps the system prompt and initial user message, dropping oldest middle turns
+/// by message count and by total character budget.
 fn prune_message_history(messages: &mut Vec<ChatMessage>) {
-    const PREFIX: usize = 2;
-    let max_total = PREFIX.saturating_add(MAX_TAIL_MESSAGES);
+    prune_by_message_count(messages);
+    prune_by_char_budget(messages);
+}
+
+fn prune_by_message_count(messages: &mut Vec<ChatMessage>) {
+    let max_total = HISTORY_PREFIX_LEN.saturating_add(MAX_TAIL_MESSAGES);
     if messages.len() <= max_total {
         return;
     }
     let tail_start = messages.len() - MAX_TAIL_MESSAGES;
-    if tail_start <= PREFIX {
+    if tail_start <= HISTORY_PREFIX_LEN {
         return;
     }
     let tail: Vec<ChatMessage> = messages.drain(tail_start..).collect();
-    messages.truncate(PREFIX);
+    messages.truncate(HISTORY_PREFIX_LEN);
     messages.extend(tail);
+}
+
+fn prune_by_char_budget(messages: &mut Vec<ChatMessage>) {
+    while messages.len() > HISTORY_PREFIX_LEN && history_char_len(messages) > MAX_HISTORY_CHARS {
+        // Drop the oldest non-prefix turn; prefer retaining recent context.
+        messages.remove(HISTORY_PREFIX_LEN);
+    }
+}
+
+fn history_char_len(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum()
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -431,14 +436,8 @@ mod tests {
     #[test]
     fn push_message_keeps_full_history_when_messages_are_pruned() {
         let mut messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "system".to_string(),
-            },
-            ChatMessage {
-                role: ChatRole::User,
-                content: "goal".to_string(),
-            },
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
         ];
         let mut full_history = messages.clone();
 
@@ -446,54 +445,83 @@ mod tests {
             push_message(
                 &mut messages,
                 &mut full_history,
-                ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: format!("assistant-{i}"),
-                },
+                ChatMessage::new(ChatRole::Assistant, format!("assistant-{i}")),
             );
             push_message(
                 &mut messages,
                 &mut full_history,
-                ChatMessage {
-                    role: ChatRole::User,
-                    content: format!("user-{i}"),
-                },
+                ChatMessage::new(ChatRole::User, format!("user-{i}")),
             );
             prune_message_history(&mut messages);
         }
 
         assert!(full_history.len() > messages.len());
-        assert_eq!(full_history.last().unwrap().content, "user-39");
+        assert_eq!(full_history.last().unwrap().content.as_ref(), "user-39");
     }
 
     #[test]
     fn prune_message_history_keeps_prefix_and_tail() {
         let mut messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "system".to_string(),
-            },
-            ChatMessage {
-                role: ChatRole::User,
-                content: "goal".to_string(),
-            },
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
         ];
         for i in 0..40 {
-            messages.push(ChatMessage {
-                role: ChatRole::Assistant,
-                content: format!("assistant-{i}"),
-            });
-            messages.push(ChatMessage {
-                role: ChatRole::User,
-                content: format!("user-{i}"),
-            });
+            messages.push(ChatMessage::new(ChatRole::Assistant, format!("assistant-{i}")));
+            messages.push(ChatMessage::new(ChatRole::User, format!("user-{i}")));
         }
 
         prune_message_history(&mut messages);
 
-        assert_eq!(messages[0].content, "system");
-        assert_eq!(messages[1].content, "goal");
-        assert!(messages.len() <= 2 + MAX_TAIL_MESSAGES);
-        assert_eq!(messages.last().unwrap().content, "user-39");
+        assert_eq!(messages[0].content.as_ref(), "system");
+        assert_eq!(messages[1].content.as_ref(), "goal");
+        assert!(messages.len() <= HISTORY_PREFIX_LEN + MAX_TAIL_MESSAGES);
+        assert_eq!(messages.last().unwrap().content.as_ref(), "user-39");
+    }
+
+    #[test]
+    fn prune_message_history_enforces_char_budget() {
+        let mut messages = vec![
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
+        ];
+        messages.push(ChatMessage::new(ChatRole::Assistant, "a".repeat(80_000)));
+        messages.push(ChatMessage::new(ChatRole::User, "b".repeat(80_000)));
+        messages.push(ChatMessage::new(ChatRole::Assistant, "c".repeat(80_000)));
+
+        prune_message_history(&mut messages);
+
+        assert_eq!(messages[0].content.as_ref(), "system");
+        assert_eq!(messages[1].content.as_ref(), "goal");
+        assert!(history_char_len(&messages) <= MAX_HISTORY_CHARS);
+        assert_eq!(messages.last().unwrap().content.chars().count(), 80_000);
+        assert_eq!(messages.last().unwrap().content.as_ref(), &"c".repeat(80_000));
+        // Oldest oversized middle turn is dropped first.
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.content.as_ref() == "a".repeat(80_000))
+        );
+    }
+
+    #[test]
+    fn prune_message_history_handles_single_oversized_tool_result() {
+        let mut messages = vec![
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
+            ChatMessage::new(ChatRole::User, "t".repeat(100_000)),
+            ChatMessage::new(ChatRole::Assistant, "ok"),
+        ];
+
+        prune_message_history(&mut messages);
+
+        assert!(history_char_len(&messages) <= MAX_HISTORY_CHARS);
+        assert_eq!(messages[0].content.as_ref(), "system");
+        assert_eq!(messages[1].content.as_ref(), "goal");
+        // 100k fits under the 200k budget with prefix retained.
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.content.chars().count() == 100_000)
+        );
     }
 }

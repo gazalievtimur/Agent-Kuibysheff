@@ -8,10 +8,9 @@ use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
 use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibyshev::logging::Loggers;
-use agent_Kuibyshev::mcp::{stdio_client::McpError, ToolExecutor};
+use agent_Kuibyshev::mcp::{Error as ToolError, ToolExecutor};
 use agent_Kuibyshev::output::StopReason;
-use agent_Kuibyshev::provider::openai_compat::ProviderError;
-use agent_Kuibyshev::provider::{ChatMessage, ModelClient, ModelResponse};
+use agent_Kuibyshev::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
 use agent_Kuibyshev::tools::fs_home::HomeFs;
 use agent_Kuibyshev::tools::local_tools::LocalTools;
 use agent_Kuibyshev::tools::CompositeToolExecutor;
@@ -37,7 +36,7 @@ impl ToolExecutor for FakeTools {
         _server: &str,
         _tool: &str,
         _arguments: serde_json::Value,
-    ) -> Result<serde_json::Value, McpError> {
+    ) -> Result<serde_json::Value, ToolError> {
         Ok(serde_json::json!({"ok": true}))
     }
 
