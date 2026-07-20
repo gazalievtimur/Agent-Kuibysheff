@@ -4,27 +4,12 @@ use async_trait::async_trait;
 use rand::Rng;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
 use crate::config::ProviderConfig;
 use crate::limits::TokenUsage;
-use crate::provider::{ChatMessage, ModelClient, ModelResponse};
-
-#[derive(Debug, Error)]
-pub enum ProviderError {
-    #[error("missing provider API key in environment variable `{0}`")]
-    MissingApiKey(String),
-    #[error("http transport error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("provider returned status {status}: {body}")]
-    HttpStatus { status: StatusCode, body: String },
-    #[error("failed to decode provider response: {0}")]
-    Decode(#[from] serde_json::Error),
-    #[error("provider response has no choices")]
-    EmptyChoices,
-}
+use crate::provider::{ChatMessage, Error, ModelClient, ModelResponse};
 
 #[derive(Clone)]
 pub struct OpenAiCompatClient {
@@ -39,11 +24,11 @@ impl OpenAiCompatClient {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderError`] if the API key is missing or the HTTP client cannot be built.
-    pub fn new(cfg: ProviderConfig) -> Result<Self, ProviderError> {
+    /// Returns [`crate::provider::Error`] if the API key is missing or the HTTP client cannot be built.
+    pub fn new(cfg: ProviderConfig) -> Result<Self, Error> {
         let api_key = cfg
             .resolve_api_key()
-            .map_err(|_| ProviderError::MissingApiKey(cfg.api_key_env.clone()))?;
+            .map_err(|_| Error::MissingApiKey(cfg.api_key_env.clone()))?;
 
         let client = Client::builder()
             .timeout(Duration::from_millis(cfg.timeout_ms))
@@ -75,15 +60,15 @@ impl OpenAiCompatClient {
 #[async_trait]
 impl ModelClient for OpenAiCompatClient {
     #[instrument(skip(self, messages), fields(model = %self.cfg.model, message_count = messages.len()))]
-    async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, ProviderError> {
-        let body = ChatCompletionRequest {
-            model: self.cfg.model.clone(),
-            messages: messages.to_vec(),
-            temperature: 0.0,
-            stream: false,
-        };
-
+    async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, Error> {
         for attempt in 0..=self.cfg.max_retries {
+            let body = ChatCompletionRequest {
+                model: &self.cfg.model,
+                messages,
+                temperature: 0.0,
+                stream: false,
+            };
+
             let response = self
                 .client
                 .post(self.endpoint())
@@ -96,7 +81,7 @@ impl ModelClient for OpenAiCompatClient {
                 Ok(v) => v,
                 Err(err) => {
                     if attempt == self.cfg.max_retries {
-                        return Err(ProviderError::Http(err));
+                        return Err(Error::Http(err));
                     }
                     sleep(self.backoff_with_jitter(attempt)).await;
                     continue;
@@ -117,7 +102,7 @@ impl ModelClient for OpenAiCompatClient {
                     sleep(self.backoff_with_jitter(attempt)).await;
                     continue;
                 }
-                return Err(ProviderError::HttpStatus { status, body: text });
+                return Err(Error::HttpStatus { status, body: text });
             }
 
             let payload: ChatCompletionResponse = serde_json::from_str(&text)?;
@@ -125,7 +110,7 @@ impl ModelClient for OpenAiCompatClient {
                 .choices
                 .into_iter()
                 .next()
-                .ok_or(ProviderError::EmptyChoices)?;
+                .ok_or(Error::EmptyChoices)?;
             let content = extract_content(choice.message.content);
             let usage = payload
                 .usage
@@ -156,10 +141,10 @@ fn extract_content(content: MessageContent) -> String {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ChatCompletionRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
+#[derive(Debug, Serialize)]
+struct ChatCompletionRequest<'a> {
+    model: &'a str,
+    messages: &'a [ChatMessage],
     temperature: f32,
     stream: bool,
 }
