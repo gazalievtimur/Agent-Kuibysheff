@@ -6,10 +6,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::config::McpServerConfig;
 use crate::logging::SharedEventSink;
@@ -114,6 +114,34 @@ fn spawn_actor(server_name: String, client: McpStdioClient) -> McpClientHandle {
     McpClientHandle { server_name, tx }
 }
 
+/// Continuously drains MCP stderr so a verbose server cannot fill the pipe and deadlock.
+fn spawn_stderr_drain(server_name: String, stderr: ChildStderr) {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim_end();
+                    if !trimmed.is_empty() {
+                        debug!(server = %server_name, stderr = %trimmed, "mcp server stderr");
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        server = %server_name,
+                        error = %error,
+                        "mcp stderr drain stopped"
+                    );
+                    break;
+                }
+            }
+        }
+    });
+}
+
 impl McpClientHandle {
     async fn request(&self, method: &str, params: Value) -> Result<Value, Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -136,12 +164,7 @@ impl McpClientHandle {
 #[async_trait]
 impl ToolExecutor for McpRegistry {
     #[instrument(skip(self, arguments), fields(server, tool))]
-    async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<Value, Error> {
+    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
         tracing::Span::current().record("server", server);
         tracing::Span::current().record("tool", tool);
 
@@ -223,6 +246,11 @@ impl McpStdioClient {
             server: cfg.name.clone(),
             pipe: "stdout".to_string(),
         })?;
+        let stderr = child.stderr.take().ok_or_else(|| Error::MissingPipe {
+            server: cfg.name.clone(),
+            pipe: "stderr".to_string(),
+        })?;
+        spawn_stderr_drain(cfg.name.clone(), stderr);
 
         Ok(Self {
             server_name: cfg.name.clone(),

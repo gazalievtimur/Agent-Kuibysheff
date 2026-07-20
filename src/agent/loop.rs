@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -7,7 +6,7 @@ use thiserror::Error;
 use tracing::{info, instrument, warn};
 
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
-use crate::logging::{LoggingError, Loggers};
+use crate::logging::{Loggers, LoggingError};
 use crate::mcp::ToolExecutor;
 use crate::output::{RunOutput, StopReason, UsageReport};
 use crate::provider::{ChatMessage, ChatRole, ModelClient};
@@ -38,8 +37,6 @@ pub struct AgentRunRequest {
     pub system_prompt: String,
     pub input_files_context: String,
     pub limits: LimitsConfig,
-    /// `None` allows all tools; `Some(set)` enforces the skills policy.
-    pub allowed_tools: Option<HashSet<String>>,
 }
 
 pub struct AgentEngine {
@@ -81,7 +78,6 @@ impl AgentEngine {
             system_prompt,
             input_files_context,
             limits,
-            allowed_tools,
         } = request;
 
         let available_tools = self.tools.available_tools();
@@ -175,25 +171,6 @@ impl AgentEngine {
 
             for tool_call in directive.tool_calls {
                 let qualified_tool = format!("{}.{}", tool_call.server, tool_call.tool);
-                if let Some(allowed) = &allowed_tools {
-                    if !allowed.contains(&tool_call.tool) && !allowed.contains(&qualified_tool) {
-                        warn!(
-                            tool = %qualified_tool,
-                            "tool call rejected by skills policy"
-                        );
-                        let warning = json!({
-                            "tool_call": tool_call,
-                            "error": "tool is not allowed by skills policy"
-                        });
-                        push_message(
-                            &mut messages,
-                            &mut full_history,
-                            ChatMessage::new(ChatRole::User, warning.to_string()),
-                        );
-                        prune_message_history(&mut messages);
-                        continue;
-                    }
-                }
 
                 let tool_response = match self
                     .tools
@@ -466,7 +443,10 @@ mod tests {
             ChatMessage::new(ChatRole::User, "goal"),
         ];
         for i in 0..40 {
-            messages.push(ChatMessage::new(ChatRole::Assistant, format!("assistant-{i}")));
+            messages.push(ChatMessage::new(
+                ChatRole::Assistant,
+                format!("assistant-{i}"),
+            ));
             messages.push(ChatMessage::new(ChatRole::User, format!("user-{i}")));
         }
 
@@ -494,13 +474,14 @@ mod tests {
         assert_eq!(messages[1].content.as_ref(), "goal");
         assert!(history_char_len(&messages) <= MAX_HISTORY_CHARS);
         assert_eq!(messages.last().unwrap().content.chars().count(), 80_000);
-        assert_eq!(messages.last().unwrap().content.as_ref(), &"c".repeat(80_000));
-        // Oldest oversized middle turn is dropped first.
-        assert!(
-            !messages
-                .iter()
-                .any(|message| message.content.as_ref() == "a".repeat(80_000))
+        assert_eq!(
+            messages.last().unwrap().content.as_ref(),
+            &"c".repeat(80_000)
         );
+        // Oldest oversized middle turn is dropped first.
+        assert!(!messages
+            .iter()
+            .any(|message| message.content.as_ref() == "a".repeat(80_000)));
     }
 
     #[test]
@@ -518,10 +499,8 @@ mod tests {
         assert_eq!(messages[0].content.as_ref(), "system");
         assert_eq!(messages[1].content.as_ref(), "goal");
         // 100k fits under the 200k budget with prefix retained.
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.content.chars().count() == 100_000)
-        );
+        assert!(messages
+            .iter()
+            .any(|message| message.content.chars().count() == 100_000));
     }
 }

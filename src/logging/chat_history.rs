@@ -47,7 +47,10 @@ impl ChatHistoryRecord {
 ///
 /// Returns [`LoggingError`] when the directory cannot be created or the file
 /// cannot be written.
-pub async fn write_chat_history(path: &Path, record: &ChatHistoryRecord) -> Result<(), LoggingError> {
+pub async fn write_chat_history(
+    path: &Path,
+    record: &ChatHistoryRecord,
+) -> Result<(), LoggingError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await

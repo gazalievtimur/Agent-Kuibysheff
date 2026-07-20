@@ -1,0 +1,31 @@
+[package]
+name = "sandbox-linux"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Linux namespace sandbox FFI for agent_Kuibyshev home.run"
+license = "MIT"
+publish = false
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Namespace/seccomp FFI uses libc casts and kernel constant names in docs.
+pedantic = { level = "allow", priority = -1 }
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"

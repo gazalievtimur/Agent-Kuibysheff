@@ -45,17 +45,16 @@ pub enum Error {
         path: String,
         error: String,
     },
+    #[error("tool `{tool}` denied by access policy")]
+    PolicyDenied { tool: String },
+    #[error("sandbox unavailable: {reason}")]
+    SandboxUnavailable { reason: String },
     #[error("MCP server `{server}` actor channel closed")]
     ActorClosed { server: String },
 }
 
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<Value, Error>;
+    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error>;
     fn available_tools(&self) -> Vec<String>;
 }

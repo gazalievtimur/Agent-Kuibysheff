@@ -1,32 +1,44 @@
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
-use tokio::process::Command;
-use tokio::time::timeout;
 
+use crate::access::paths::{is_within_root, relative_components};
+use crate::access::{HomeFsPolicy, PathOperation, ProgramAlias};
 use crate::mcp::Error;
+use crate::sandbox::{
+    absolute_home_grants, build_sandbox_env, SandboxError, SandboxOutput, SandboxRunner,
+    SandboxSpec,
+};
 
 const DEFAULT_MAX_CHARS: usize = 50_000;
 const MAX_READ_CHARS: usize = 200_000;
 const DEFAULT_RUN_TIMEOUT_MS: u64 = 30_000;
-const MAX_RUN_TIMEOUT_MS: u64 = 120_000;
-const MAX_RUN_OUTPUT_CHARS: usize = 200_000;
 
 pub struct HomeFs {
     root: PathBuf,
+    policy: HomeFsPolicy,
+    sandbox: Arc<SandboxRunner>,
 }
 
 impl HomeFs {
-    /// Creates a sandboxed filesystem rooted at `root`.
+    /// Creates a sandboxed filesystem rooted at `root` with the given path/run policy.
+    ///
+    /// When `policy.programs` is non-empty, `sandbox` must successfully [`SandboxRunner::probe`];
+    /// production runners without a native backend fail closed at construction.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::mcp::Error`] if the directory cannot be created or is not a directory.
-    pub async fn new(root: &Path) -> Result<Self, Error> {
+    /// Returns [`crate::mcp::Error`] if the directory cannot be created, is not a directory, or the
+    /// sandbox required for configured programs is unavailable.
+    pub async fn new(
+        root: &Path,
+        policy: HomeFsPolicy,
+        sandbox: Arc<SandboxRunner>,
+    ) -> Result<Self, Error> {
         fs::create_dir_all(root)
             .await
             .map_err(|error| home_io("create_dir_all", root, &error))?;
@@ -43,7 +55,14 @@ impl HomeFs {
                 error: "home is not a directory".to_string(),
             });
         }
-        Ok(Self { root })
+        if !policy.programs.is_empty() {
+            sandbox.probe().map_err(map_sandbox_error)?;
+        }
+        Ok(Self {
+            root,
+            policy,
+            sandbox,
+        })
     }
 
     /// Dispatches a home filesystem tool call.
@@ -77,7 +96,11 @@ impl HomeFs {
     }
 
     async fn list(&self, relative: &Path) -> Result<Value, Error> {
-        let path = self.resolve_existing(relative).await?;
+        self.policy
+            .read
+            .allows_relative(relative, PathOperation::Read)
+            .map_err(|reason| invalid_path(relative, reason))?;
+        let path = self.resolve_existing(relative, PathOperation::Read).await?;
         let metadata = fs::metadata(&path)
             .await
             .map_err(|error| home_io("metadata", &path, &error))?;
@@ -128,7 +151,11 @@ impl HomeFs {
     }
 
     async fn read(&self, relative: &Path, max_chars: Option<usize>) -> Result<Value, Error> {
-        let path = self.resolve_existing(relative).await?;
+        self.policy
+            .read
+            .allows_relative(relative, PathOperation::Read)
+            .map_err(|reason| invalid_path(relative, reason))?;
+        let path = self.resolve_existing(relative, PathOperation::Read).await?;
         let content = fs::read_to_string(&path)
             .await
             .map_err(|error| home_io("read_to_string", &path, &error))?;
@@ -151,7 +178,11 @@ impl HomeFs {
     }
 
     async fn write(&self, relative: &Path, content: &str) -> Result<Value, Error> {
-        validate_relative(relative)?;
+        self.policy
+            .write
+            .allows_relative(relative, PathOperation::Write)
+            .map_err(|reason| invalid_path(relative, reason))?;
+        relative_components(relative).map_err(|reason| invalid_path(relative, reason))?;
         let file_name = relative
             .file_name()
             .ok_or_else(|| invalid_path(relative, "path must name a file"))?;
@@ -164,6 +195,7 @@ impl HomeFs {
                 .await
                 .map_err(|error| home_io("canonicalize", &destination, &error))?;
             self.ensure_within_home(&canonical, relative)?;
+            self.ensure_grant_for_canonical(&canonical, PathOperation::Write, relative)?;
             if fs::metadata(&canonical)
                 .await
                 .map_err(|error| home_io("metadata", &canonical, &error))?
@@ -195,66 +227,94 @@ impl HomeFs {
             });
         }
 
+        let alias = ProgramAlias::parse(program).map_err(|reason| Error::InvalidToolArguments {
+            tool: "home.run".to_string(),
+            error: reason,
+        })?;
+        let program_policy =
+            self.policy
+                .programs
+                .get(&alias)
+                .ok_or_else(|| Error::PolicyDenied {
+                    tool: format!("home.run program `{alias}`"),
+                })?;
+
+        if args.len() > self.policy.max_args {
+            return Err(Error::InvalidToolArguments {
+                tool: "home.run".to_string(),
+                error: format!(
+                    "`args` length {} exceeds access.run.max_args {}",
+                    args.len(),
+                    self.policy.max_args
+                ),
+            });
+        }
+        let mut total_arg_chars = 0usize;
+        for arg in args {
+            if arg.contains('\0') {
+                return Err(Error::InvalidToolArguments {
+                    tool: "home.run".to_string(),
+                    error: "`args` must not contain NUL bytes".to_string(),
+                });
+            }
+            total_arg_chars = total_arg_chars.saturating_add(arg.chars().count());
+            if total_arg_chars > self.policy.max_arg_chars {
+                return Err(Error::InvalidToolArguments {
+                    tool: "home.run".to_string(),
+                    error: format!(
+                        "`args` exceed access.run.max_arg_chars {}",
+                        self.policy.max_arg_chars
+                    ),
+                });
+            }
+        }
+
         let timeout_ms = timeout_ms
             .unwrap_or(DEFAULT_RUN_TIMEOUT_MS)
-            .clamp(1, MAX_RUN_TIMEOUT_MS);
+            .clamp(1, self.policy.max_timeout_ms);
 
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .current_dir(&self.root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let env = build_sandbox_env(&self.root, &program_policy.inherit_env);
+        let spec = SandboxSpec {
+            alias: alias.clone(),
+            executable: program_policy.executable.as_path().to_path_buf(),
+            argv: args.to_vec(),
+            cwd: self.root.clone(),
+            env,
+            home_read: absolute_home_grants(&self.root, &self.policy.read),
+            home_write: absolute_home_grants(&self.root, &self.policy.write),
+            runtime_read_roots: program_policy.runtime_read_roots.clone(),
+            deadline: Duration::from_millis(timeout_ms),
+            max_output_chars: self.policy.max_output_chars,
+            allow_children: program_policy.allow_children,
+        };
 
-        let child = command.spawn().map_err(|error| Error::HomeIo {
-            operation: "spawn".to_string(),
-            path: self.root.display().to_string(),
-            error: format!("failed to start `{program}`: {error}"),
-        })?;
-
-        match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                let (stdout, stdout_truncated) = truncate_output(&output.stdout);
-                let (stderr, stderr_truncated) = truncate_output(&output.stderr);
-                Ok(json!({
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "stdout_truncated": stdout_truncated,
-                    "stderr_truncated": stderr_truncated,
-                    "exit_code": output.status.code(),
-                    "timed_out": false
-                }))
-            }
-            Ok(Err(error)) => Err(Error::HomeIo {
-                operation: "wait".to_string(),
-                path: self.root.display().to_string(),
-                error: error.to_string(),
-            }),
-            Err(_) => Ok(json!({
-                "stdout": "",
-                "stderr": format!("process timed out after {timeout_ms}ms"),
-                "stdout_truncated": false,
-                "stderr_truncated": false,
-                "exit_code": Value::Null,
-                "timed_out": true
-            })),
-        }
+        tracing::info!(
+            capability = "home.run",
+            alias = %alias,
+            timeout_ms,
+            "home.run dispatching to sandbox"
+        );
+        let output = self.sandbox.run(spec).await.map_err(map_sandbox_error)?;
+        Ok(sandbox_output_json(&output))
     }
 
-    async fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, Error> {
-        validate_relative(relative)?;
+    async fn resolve_existing(
+        &self,
+        relative: &Path,
+        operation: PathOperation,
+    ) -> Result<PathBuf, Error> {
+        relative_components(relative).map_err(|reason| invalid_path(relative, reason))?;
         let candidate = self.root.join(relative);
         let canonical = fs::canonicalize(&candidate)
             .await
             .map_err(|error| home_io("canonicalize", &candidate, &error))?;
         self.ensure_within_home(&canonical, relative)?;
+        self.ensure_grant_for_canonical(&canonical, operation, relative)?;
         Ok(canonical)
     }
 
     async fn ensure_directories(&self, relative: &Path) -> Result<PathBuf, Error> {
-        validate_relative(relative)?;
+        relative_components(relative).map_err(|reason| invalid_path(relative, reason))?;
         let mut current = self.root.clone();
         for component in relative.components() {
             let Component::Normal(part) = component else {
@@ -262,7 +322,13 @@ impl HomeFs {
             };
             let next = current.join(part);
             match fs::symlink_metadata(&next).await {
-                Ok(_) => {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        return Err(invalid_path(
+                            relative,
+                            "symlink parent components are not allowed",
+                        ));
+                    }
                     let canonical = fs::canonicalize(&next)
                         .await
                         .map_err(|error| home_io("canonicalize", &next, &error))?;
@@ -280,6 +346,8 @@ impl HomeFs {
                     current = canonical;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // Creating under write grant: the final file path was already checked;
+                    // intermediate dirs must remain inside home.
                     fs::create_dir(&next)
                         .await
                         .map_err(|error| home_io("create_dir", &next, &error))?;
@@ -295,11 +363,29 @@ impl HomeFs {
     }
 
     fn ensure_within_home(&self, canonical: &Path, requested: &Path) -> Result<(), Error> {
-        if canonical.starts_with(&self.root) {
+        if is_within_root(&self.root, canonical) {
             Ok(())
         } else {
             Err(invalid_path(requested, "path resolves outside home"))
         }
+    }
+
+    fn ensure_grant_for_canonical(
+        &self,
+        canonical: &Path,
+        operation: PathOperation,
+        requested: &Path,
+    ) -> Result<(), Error> {
+        let relative = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| invalid_path(requested, "path resolves outside home"))?;
+        let scope = match operation {
+            PathOperation::Read | PathOperation::Execute => &self.policy.read,
+            PathOperation::Write => &self.policy.write,
+        };
+        scope
+            .allows_relative(relative, operation)
+            .map_err(|reason| invalid_path(requested, reason))
     }
 }
 
@@ -333,13 +419,38 @@ fn default_list_path() -> String {
     ".".to_string()
 }
 
-fn truncate_output(bytes: &[u8]) -> (String, bool) {
-    let text = String::from_utf8_lossy(bytes);
-    let total_chars = text.chars().count();
-    if total_chars > MAX_RUN_OUTPUT_CHARS {
-        (text.chars().take(MAX_RUN_OUTPUT_CHARS).collect(), true)
-    } else {
-        (text.into_owned(), false)
+fn sandbox_output_json(output: &SandboxOutput) -> Value {
+    json!({
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "stdout_truncated": output.stdout_truncated,
+        "stderr_truncated": output.stderr_truncated,
+        "exit_code": output.exit_code,
+        "timed_out": output.timed_out
+    })
+}
+
+fn map_sandbox_error(error: SandboxError) -> Error {
+    match error {
+        SandboxError::Unavailable { reason } => Error::SandboxUnavailable { reason },
+        SandboxError::PolicyDenied { reason } => Error::PolicyDenied {
+            tool: format!("home.run ({reason})"),
+        },
+        SandboxError::Setup { stage, reason } => Error::HomeIo {
+            operation: format!("sandbox_setup:{stage}"),
+            path: String::new(),
+            error: reason,
+        },
+        SandboxError::Io { reason } => Error::HomeIo {
+            operation: "sandbox".to_string(),
+            path: String::new(),
+            error: reason,
+        },
+        SandboxError::TimeoutCleanup { reason } => Error::HomeIo {
+            operation: "sandbox_timeout_cleanup".to_string(),
+            path: String::new(),
+            error: reason,
+        },
     }
 }
 
@@ -348,24 +459,6 @@ fn decode_args<T: for<'de> Deserialize<'de>>(tool: &str, value: Value) -> Result
         tool: format!("home.{tool}"),
         error: error.to_string(),
     })
-}
-
-fn validate_relative(path: &Path) -> Result<(), Error> {
-    if path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    for component in path.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(invalid_path(
-                    path,
-                    "only relative paths without `..` are allowed",
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn invalid_path(path: &Path, error: impl Into<String>) -> Error {
@@ -394,11 +487,56 @@ fn display_relative(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access::paths::PathGrantScope;
+    use crate::access::{CanonicalRoot, ProgramAlias, RelativeGrant, ResolvedProgramPolicy};
+    use crate::sandbox::{MockBackend, SandboxOutput, UnavailableBackend};
+    use std::collections::BTreeMap;
+
+    fn mock_sandbox() -> Arc<SandboxRunner> {
+        Arc::new(SandboxRunner::with_backend(Arc::new(
+            MockBackend::with_output(SandboxOutput {
+                stdout: "hello-run\n".to_string(),
+                stderr: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                exit_code: Some(0),
+                timed_out: false,
+            }),
+        )))
+    }
+
+    fn unavailable_sandbox() -> Arc<SandboxRunner> {
+        Arc::new(SandboxRunner::with_backend(Arc::new(UnavailableBackend {
+            reason: "test sandbox unavailable".to_string(),
+        })))
+    }
+
+    fn legacy_home() -> HomeFsPolicy {
+        HomeFsPolicy::legacy()
+    }
+
+    fn strict_home(read: &[&str], write: &[&str]) -> HomeFsPolicy {
+        let mut policy = HomeFsPolicy::legacy();
+        policy.read = PathGrantScope::strict(
+            read.iter()
+                .map(|g| RelativeGrant::parse(g).unwrap())
+                .collect(),
+        );
+        policy.write = PathGrantScope::strict(
+            write
+                .iter()
+                .map(|g| RelativeGrant::parse(g).unwrap())
+                .collect(),
+        );
+        policy
+    }
 
     #[tokio::test]
     async fn writes_reads_and_lists_inside_home() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path()).await.expect("home");
+        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
+            .await
+            .expect("home");
 
         home.call(
             "write",
@@ -422,7 +560,9 @@ mod tests {
     #[tokio::test]
     async fn rejects_parent_traversal() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path()).await.expect("home");
+        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
+            .await
+            .expect("home");
 
         let error = home
             .call("write", json!({"path": "../outside.txt", "content": "no"}))
@@ -432,21 +572,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runs_command_in_home() {
+    async fn rejects_sibling_prefix_outside_grant() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path()).await.expect("home");
+        fs::create_dir_all(dir.path().join("outside"))
+            .await
+            .expect("outside");
+        fs::write(dir.path().join("outside/secret.txt"), "no")
+            .await
+            .expect("secret");
+        let home = HomeFs::new(
+            dir.path(),
+            strict_home(&["out"], &["out"]),
+            unavailable_sandbox(),
+        )
+        .await
+        .expect("home");
 
-        #[cfg(windows)]
-        let (program, args) = ("cmd", json!(["/c", "echo", "hello-run"]));
-        #[cfg(not(windows))]
-        let (program, args) = ("echo", json!(["hello-run"]));
+        let error = home
+            .call("read", json!({"path": "outside/secret.txt"}))
+            .await
+            .expect_err("sibling prefix");
+        assert!(matches!(error, Error::HomePath { .. }));
+    }
 
+    #[tokio::test]
+    async fn allows_write_under_missing_target_when_grant_matches() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(
+            dir.path(),
+            strict_home(&["out"], &["out"]),
+            unavailable_sandbox(),
+        )
+        .await
+        .expect("home");
+
+        home.call(
+            "write",
+            json!({"path": "out/new/file.txt", "content": "ok"}),
+        )
+        .await
+        .expect("write missing target");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("out/new/file.txt"))
+                .await
+                .expect("read"),
+            "ok"
+        );
+    }
+
+    #[tokio::test]
+    async fn runs_command_via_sandbox_runner() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut policy = HomeFsPolicy::legacy();
+        let exe = dir.path().join("python-stub");
+        fs::write(&exe, "stub").await.expect("exe");
+        let executable = CanonicalRoot::canonicalize(&exe).expect("canonicalize exe");
+        let mut programs = BTreeMap::new();
+        programs.insert(
+            ProgramAlias::parse("python").unwrap(),
+            ResolvedProgramPolicy {
+                alias: ProgramAlias::parse("python").unwrap(),
+                executable,
+                runtime_read_roots: Vec::new(),
+                inherit_env: Vec::new(),
+                allow_children: false,
+            },
+        );
+        policy.programs = programs;
+
+        let home = HomeFs::new(dir.path(), policy, mock_sandbox())
+            .await
+            .expect("home");
         let result = home
             .call(
                 "run",
                 json!({
-                    "program": program,
-                    "args": args,
+                    "program": "python",
+                    "args": ["-c", "print(1)"],
                     "timeout_ms": 10_000
                 }),
             )
@@ -466,14 +668,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refuses_programs_without_working_sandbox() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut policy = HomeFsPolicy::legacy();
+        let exe = dir.path().join("python-stub");
+        fs::write(&exe, "stub").await.expect("exe");
+        let executable = CanonicalRoot::canonicalize(&exe).expect("canonicalize exe");
+        let mut programs = BTreeMap::new();
+        programs.insert(
+            ProgramAlias::parse("python").unwrap(),
+            ResolvedProgramPolicy {
+                alias: ProgramAlias::parse("python").unwrap(),
+                executable,
+                runtime_read_roots: Vec::new(),
+                inherit_env: Vec::new(),
+                allow_children: false,
+            },
+        );
+        policy.programs = programs;
+
+        let Err(err) = HomeFs::new(dir.path(), policy, unavailable_sandbox()).await else {
+            panic!("must require working sandbox");
+        };
+        assert!(matches!(err, Error::SandboxUnavailable { .. }));
+    }
+
+    #[tokio::test]
     async fn rejects_empty_program() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path()).await.expect("home");
+        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
+            .await
+            .expect("home");
 
         let error = home
             .call("run", json!({"program": "  ", "args": []}))
             .await
             .expect_err("must reject empty program");
         assert!(matches!(error, Error::InvalidToolArguments { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_program_alias() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
+            .await
+            .expect("home");
+        let error = home
+            .call("run", json!({"program": "python", "args": []}))
+            .await
+            .expect_err("unknown alias");
+        assert!(matches!(error, Error::PolicyDenied { .. }));
     }
 }

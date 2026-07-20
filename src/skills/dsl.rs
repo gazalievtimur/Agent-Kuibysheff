@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::Serialize;
 use thiserror::Error;
+
+use crate::access::QualifiedTool;
 
 static BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)skill\s+"([^"]+)"\s*\{(.*?)\}"#).expect("valid block regex")
@@ -25,6 +27,7 @@ pub enum SkillsError {
 pub struct SkillDefinition {
     pub name: String,
     pub policy: String,
+    /// Qualified `server.tool` names only.
     pub allowed_tools: Vec<String>,
 }
 
@@ -36,9 +39,12 @@ pub struct SkillsCatalog {
 impl SkillsCatalog {
     /// Parses the skills DSL into a catalog of skill definitions.
     ///
+    /// Hard enforcement uses only qualified `allowed_tools` names. Skill `policy` text remains
+    /// prompt guidance.
+    ///
     /// # Errors
     ///
-    /// Returns [`SkillsError`] if the DSL syntax is invalid.
+    /// Returns [`SkillsError`] if the DSL syntax is invalid or a tool name is not qualified.
     pub fn parse(source: &str) -> Result<Self, SkillsError> {
         let mut skills = Vec::new();
         for captures in BLOCK_RE.captures_iter(source) {
@@ -65,10 +71,19 @@ impl SkillsCatalog {
                     SkillsError::Parse(format!("skill `{name}` missing allowed_tools"))
                 })?;
 
-            let allowed_tools = QUOTED_RE
-                .captures_iter(tools_block)
-                .filter_map(|m| m.get(1).map(|inner| inner.as_str().to_string()))
-                .collect::<Vec<_>>();
+            let mut allowed_tools = Vec::new();
+            for tool_capture in QUOTED_RE.captures_iter(tools_block) {
+                let raw = tool_capture
+                    .get(1)
+                    .map(|inner| inner.as_str())
+                    .ok_or_else(|| {
+                        SkillsError::Parse(format!("skill `{name}` has an invalid tool entry"))
+                    })?;
+                let tool = QualifiedTool::parse(raw).map_err(|reason| {
+                    SkillsError::Parse(format!("skill `{name}` allowed_tools: {reason}"))
+                })?;
+                allowed_tools.push(tool.qualified());
+            }
 
             if allowed_tools.is_empty() {
                 return Err(SkillsError::Parse(format!(
@@ -94,6 +109,7 @@ impl SkillsCatalog {
         let mut lines = vec![
             "Skills available to the agent:".to_string(),
             "Follow skill policies strictly when deciding tool usage.".to_string(),
+            "Hard tool enforcement uses qualified names only; MCP tools declared in config are trusted automatically.".to_string(),
         ];
 
         for skill in &self.skills {
@@ -105,6 +121,16 @@ impl SkillsCatalog {
             ));
         }
         lines.join("\n")
+    }
+
+    /// Union of all skill `allowed_tools` as qualified tool identities.
+    #[must_use]
+    pub fn allowed_qualified_tools(&self) -> BTreeSet<QualifiedTool> {
+        self.skills
+            .iter()
+            .flat_map(|skill| skill.allowed_tools.iter())
+            .filter_map(|name| QualifiedTool::parse(name).ok())
+            .collect()
     }
 
     #[must_use]
@@ -126,13 +152,32 @@ mod tests {
             r#"
             skill "research" {
               policy: "use_mcp_tools_first"
-              allowed_tools: ["search_docs", "read_file"]
+              allowed_tools: ["local_tools.search_docs", "local_tools.read_file"]
             }
             "#,
         )
         .expect("skills should parse");
 
         assert_eq!(parsed.skills.len(), 1);
-        assert!(parsed.allowed_tool_set().contains("search_docs"));
+        assert!(parsed
+            .allowed_tool_set()
+            .contains("local_tools.search_docs"));
+        assert!(parsed
+            .allowed_qualified_tools()
+            .contains(&QualifiedTool::parse("local_tools.read_file").unwrap()));
+    }
+
+    #[test]
+    fn rejects_bare_tool_names() {
+        let err = SkillsCatalog::parse(
+            r#"
+            skill "research" {
+              policy: "safe"
+              allowed_tools: ["search_docs"]
+            }
+            "#,
+        )
+        .expect_err("bare names");
+        assert!(err.to_string().contains("qualified"));
     }
 }

@@ -15,6 +15,9 @@ agent-config.local.yaml
 /local/aoc-bank/
 /local/aoc-runs/
 
+# Local code-index cache (not source)
+src/.code-index/
+
 # IDE / OS
 .idea/
 *.swp

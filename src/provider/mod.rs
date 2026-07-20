@@ -14,6 +14,8 @@ use crate::limits::TokenUsage;
 pub enum Error {
     #[error("missing provider API key in environment variable `{0}`")]
     MissingApiKey(String),
+    #[error("invalid provider base_url: {0}")]
+    InvalidBaseUrl(String),
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("provider returned status {status}: {body}")]

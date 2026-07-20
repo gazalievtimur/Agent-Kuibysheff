@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::access::{resolve_access_policy, validate_access_config, ResolvedAccessPolicy};
 use crate::cli::CliArgs;
 use crate::limits::LimitsConfig;
 
@@ -31,6 +32,136 @@ pub struct AppConfig {
     pub limits: LimitsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// When omitted, legacy filesystem behavior is preserved and `home.run` stays unavailable.
+    /// When present, enforcement is fail-closed: anything not listed is denied.
+    #[serde(default)]
+    pub access: Option<AccessPolicyConfig>,
+}
+
+/// Fail-closed capability policy declared in the config file.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct AccessPolicyConfig {
+    #[serde(default)]
+    pub tools: ToolsPolicyConfig,
+    #[serde(default)]
+    pub filesystem: FilesystemPolicyConfig,
+    #[serde(default)]
+    pub run: RunPolicyConfig,
+}
+
+/// Built-in tool allowlist (`server.tool` qualified names only).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ToolsPolicyConfig {
+    /// Empty means no built-ins are allowed (fail-closed).
+    #[serde(default)]
+    pub builtins: Vec<String>,
+}
+
+/// Filesystem grants for home, workspace research tools, and `--files` inputs.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct FilesystemPolicyConfig {
+    #[serde(default)]
+    pub home: HomeFsPolicyConfig,
+    pub workspace: Option<WorkspacePolicyConfig>,
+    /// Host directories; relative paths resolve against the config file directory.
+    #[serde(default)]
+    pub input_roots: Vec<PathBuf>,
+}
+
+/// Relative path prefixes inside CLI `--home`.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct HomeFsPolicyConfig {
+    /// Empty means no home reads are allowed (fail-closed).
+    #[serde(default)]
+    pub read: Vec<String>,
+    /// Empty means no home writes are allowed (fail-closed).
+    #[serde(default)]
+    pub write: Vec<String>,
+}
+
+/// Workspace root and read grants for `local_tools.*`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspacePolicyConfig {
+    /// Host path; relative values resolve against the config file directory.
+    pub root: PathBuf,
+    /// Relative prefixes inside `root`. Empty means only the root itself is readable when
+    /// an empty grant list is interpreted by callers; prefer explicit prefixes.
+    #[serde(default)]
+    pub read: Vec<String>,
+}
+
+/// Sandboxed `home.run` program aliases and argv limits.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RunPolicyConfig {
+    /// Empty means no programs are allowed for `home.run` (fail-closed).
+    #[serde(default)]
+    pub programs: Vec<ProgramPolicyConfig>,
+    #[serde(default = "RunPolicyConfig::default_max_args")]
+    pub max_args: usize,
+    #[serde(default = "RunPolicyConfig::default_max_arg_chars")]
+    pub max_arg_chars: usize,
+    #[serde(default = "RunPolicyConfig::default_max_output_chars")]
+    pub max_output_chars: usize,
+    #[serde(default = "RunPolicyConfig::default_max_timeout_ms")]
+    pub max_timeout_ms: u64,
+}
+
+impl Default for RunPolicyConfig {
+    fn default() -> Self {
+        Self {
+            programs: Vec::new(),
+            max_args: Self::default_max_args(),
+            max_arg_chars: Self::default_max_arg_chars(),
+            max_output_chars: Self::default_max_output_chars(),
+            max_timeout_ms: Self::default_max_timeout_ms(),
+        }
+    }
+}
+
+impl RunPolicyConfig {
+    #[must_use]
+    pub const fn default_max_args() -> usize {
+        32
+    }
+
+    #[must_use]
+    pub const fn default_max_arg_chars() -> usize {
+        4_096
+    }
+
+    #[must_use]
+    pub const fn default_max_output_chars() -> usize {
+        200_000
+    }
+
+    #[must_use]
+    pub const fn default_max_timeout_ms() -> u64 {
+        120_000
+    }
+}
+
+/// One sandboxed executable exposed to the model under a stable alias.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramPolicyConfig {
+    /// Value of `home.run.program` (alias, not a host path).
+    pub name: String,
+    /// Host path to the executable; relative values resolve against the config file directory.
+    pub executable: PathBuf,
+    /// Additional read-only host roots required by the runtime (e.g. interpreter install).
+    #[serde(default)]
+    pub runtime_read_roots: Vec<PathBuf>,
+    /// Environment variable names inherited into the sandbox (values come from the agent process).
+    #[serde(default)]
+    pub inherit_env: Vec<String>,
+    #[serde(default)]
+    pub allow_children: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,12 +255,8 @@ pub struct LoggingConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LogSinkConfig {
-    File {
-        path: Option<PathBuf>,
-    },
-    Db {
-        connection_string: String,
-    },
+    File { path: Option<PathBuf> },
+    Db { connection_string: String },
 }
 
 impl Default for LogSinkConfig {
@@ -147,10 +274,13 @@ pub fn load_dotenv() {
 
 /// Loads and validates runtime configuration from a YAML or JSON file.
 ///
+/// Host paths declared under `access` are resolved relative to the config file directory
+/// and compiled into an immutable [`ResolvedAccessPolicy`].
+///
 /// # Errors
 ///
 /// Returns [`ConfigError`] if the file cannot be read, parsed, or fails validation.
-pub fn load_config(path: &Path) -> Result<AppConfig, ConfigError> {
+pub fn load_config(path: &Path) -> Result<(AppConfig, ResolvedAccessPolicy), ConfigError> {
     let raw = fs::read_to_string(path).map_err(|source| ConfigError::ReadFile {
         path: path.display().to_string(),
         source,
@@ -173,7 +303,16 @@ pub fn load_config(path: &Path) -> Result<AppConfig, ConfigError> {
     };
 
     validate(&cfg)?;
-    Ok(cfg)
+    let access = resolve_access_policy(cfg.access.as_ref(), config_parent_dir(path))?;
+    Ok((cfg, access))
+}
+
+/// Returns the directory that relative `access` host paths resolve against.
+#[must_use]
+pub fn config_parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &CliArgs) {
@@ -259,6 +398,11 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
         }
     }
 
+    validate_access_config(
+        cfg.access.as_ref(),
+        cfg.mcp.iter().map(|server| server.name.as_str()),
+    )?;
+
     Ok(())
 }
 
@@ -296,6 +440,7 @@ mod tests {
                 output_dir: None,
                 sink: LogSinkConfig::default(),
             },
+            access: None,
         }
     }
 
@@ -323,11 +468,11 @@ logging:
 ";
 
         let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
-        assert_eq!(
-            cfg.logging.output_dir,
-            Some(PathBuf::from("./legacy-logs"))
-        );
-        assert!(matches!(cfg.logging.sink, LogSinkConfig::File { path: None }));
+        assert_eq!(cfg.logging.output_dir, Some(PathBuf::from("./legacy-logs")));
+        assert!(matches!(
+            cfg.logging.sink,
+            LogSinkConfig::File { path: None }
+        ));
     }
 
     #[test]
@@ -411,5 +556,190 @@ limits:
 ";
 
         assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
+    }
+
+    #[test]
+    fn legacy_config_without_access_parses() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+";
+
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        assert!(cfg.access.is_none());
+        validate(&cfg).expect("validate");
+        let policy = resolve_access_policy(None, Path::new(".")).expect("legacy");
+        assert!(policy.is_legacy());
+        assert!(!policy.allows_builtin(&crate::access::QualifiedTool::parse("home.run").unwrap()));
+    }
+
+    #[test]
+    fn strict_access_section_parses_and_validates() {
+        let yaml = r#"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]
+  run:
+    max_args: 16
+    max_arg_chars: 1024
+"#;
+
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        let access = cfg.access.as_ref().expect("access");
+        assert_eq!(access.tools.builtins.len(), 3);
+        assert_eq!(access.filesystem.home.read, ["in", "out"]);
+        assert_eq!(access.run.max_args, 16);
+        validate(&cfg).expect("validate");
+    }
+
+    #[test]
+    fn access_rejects_unknown_fields() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  network:
+    allow: true
+";
+
+        assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
+    }
+
+    #[test]
+    fn access_rejects_malformed_home_grant() {
+        let yaml = r#"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  filesystem:
+    home:
+      read: ["../escape"]
+"#;
+
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        let err = validate(&cfg).expect_err("parent grant");
+        assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn access_rejects_duplicate_program_alias() {
+        let mut cfg = sample_config();
+        cfg.access = Some(AccessPolicyConfig {
+            tools: ToolsPolicyConfig::default(),
+            filesystem: FilesystemPolicyConfig::default(),
+            run: RunPolicyConfig {
+                programs: vec![
+                    ProgramPolicyConfig {
+                        name: "python".to_string(),
+                        executable: PathBuf::from("a.exe"),
+                        runtime_read_roots: Vec::new(),
+                        inherit_env: Vec::new(),
+                        allow_children: false,
+                    },
+                    ProgramPolicyConfig {
+                        name: "python".to_string(),
+                        executable: PathBuf::from("b.exe"),
+                        runtime_read_roots: Vec::new(),
+                        inherit_env: Vec::new(),
+                        allow_children: false,
+                    },
+                ],
+                ..RunPolicyConfig::default()
+            },
+        });
+        let err = validate(&cfg).expect_err("duplicate");
+        assert!(err.to_string().contains("duplicate program alias"));
+    }
+
+    #[test]
+    fn access_rejects_reserved_mcp_server_names() {
+        let mut cfg = sample_config();
+        cfg.mcp[0].name = "home".to_string();
+        let err = validate(&cfg).expect_err("reserved");
+        assert!(err.to_string().contains("reserved"));
+    }
+
+    #[test]
+    fn load_config_resolves_access_relative_to_config_dir() {
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let inputs = dir.path().join("inputs");
+        fs::create_dir_all(&inputs).expect("inputs");
+
+        let config_path = dir.path().join("agent-config.yaml");
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  tools:
+    builtins: [home.read]
+  filesystem:
+    home:
+      read: [in]
+    input_roots: [inputs]
+";
+        {
+            let mut file = fs::File::create(&config_path).expect("create config");
+            write!(file, "{yaml}").expect("write");
+        }
+
+        let (cfg, policy) = load_config(&config_path).expect("load");
+        assert!(cfg.access.is_some());
+        assert!(!policy.is_legacy());
+        assert_eq!(
+            policy.input_roots()[0].as_path(),
+            fs::canonicalize(&inputs).unwrap().as_path()
+        );
+    }
+
+    #[test]
+    fn example_config_file_loads() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("agent-config.example.yaml");
+        let (cfg, policy) = load_config(&path).expect("load agent-config.example.yaml");
+        assert!(cfg.access.is_some(), "example should demonstrate access");
+        assert!(!policy.is_legacy());
+        assert!(policy.allows_builtin(&crate::access::QualifiedTool::parse("home.run").unwrap()));
+        assert!(policy.programs().is_empty());
     }
 }

@@ -151,7 +151,10 @@ pub type JsonlLogger = FileJsonlSink;
 /// # Errors
 ///
 /// Returns [`LoggingError`] when the target file cannot be opened.
-pub async fn create_file_sink(base_dir: &Path, file_name: &str) -> Result<SharedEventSink, LoggingError> {
+pub async fn create_file_sink(
+    base_dir: &Path,
+    file_name: &str,
+) -> Result<SharedEventSink, LoggingError> {
     let sink = FileJsonlSink::new(base_dir.join(file_name)).await?;
     Ok(Arc::new(sink))
 }
@@ -171,7 +174,9 @@ pub async fn create_event_sink(
             let base_dir = resolve_base_dir(config)?;
             create_file_sink(&base_dir, file_name).await
         }
-        LogSinkConfig::Db { connection_string } => Ok(Arc::new(DbEventSink::new(connection_string.clone()))),
+        LogSinkConfig::Db { connection_string } => {
+            Ok(Arc::new(DbEventSink::new(connection_string.clone())))
+        }
     }
 }
 

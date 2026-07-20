@@ -33,10 +33,7 @@ async fn logging_pipeline_writes_trace_and_jsonl_files() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let report = loggers.report();
-    assert_eq!(
-        report.system_log,
-        Some(trace_path.display().to_string())
-    );
+    assert_eq!(report.system_log, Some(trace_path.display().to_string()));
     assert!(std::path::Path::new(report.ai_log.as_ref().expect("ai log")).exists());
     assert!(std::path::Path::new(report.mcp_log.as_ref().expect("mcp log")).exists());
     assert!(trace_path.exists());
