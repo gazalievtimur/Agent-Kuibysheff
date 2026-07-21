@@ -19,7 +19,7 @@ mcp: []
 #     transport: http
 #     url: "https://mcp.example.com/mcp"
 #     headers:
-#       Authorization: "Bearer ${TOKEN}"   # or use auth: below for OAuth 2.1
+#       Authorization: "Bearer REPLACE_WITH_STATIC_TOKEN"   # or use auth: below for OAuth 2.1
 #     timeout_ms: 20000
 #     auth:
 #       client_id: "agent-kuibyshev"

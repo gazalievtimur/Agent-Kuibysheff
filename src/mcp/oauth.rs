@@ -43,11 +43,15 @@ pub struct TokenSet {
 }
 
 impl TokenSet {
+    /// Returns whether the access token should be treated as unusable.
+    ///
+    /// Missing `expires_at` is treated as expired so callers refresh or re-auth instead of
+    /// assuming an immortal token (`api-parse-dont-validate`).
     #[must_use]
     pub fn is_expired(&self, skew_secs: u64) -> bool {
         match self.expires_at {
             Some(at) => now_unix().saturating_add(skew_secs) >= at,
-            None => false,
+            None => true,
         }
     }
 }
@@ -143,23 +147,65 @@ impl McpOAuth {
             if !tokens.is_expired(30) {
                 return Ok(tokens.access_token.clone());
             }
-            if tokens.refresh_token.is_some() {
-                match self.refresh_tokens(challenge).await {
-                    Ok(token) => return Ok(token),
-                    Err(err) => {
-                        warn!(
-                            server = %self.server_name,
-                            error = %err,
-                            "MCP token refresh failed; falling back to interactive login"
-                        );
-                    }
+        }
+        self.refresh_or_authorize(challenge).await
+    }
+
+    /// Recovers after an HTTP `401` / `403 insufficient_scope` challenge.
+    ///
+    /// Unlike [`Self::ensure_access_token`], this never reuses a cached access token that the
+    /// server has already rejected. Scope step-up always runs interactive authorization with the
+    /// challenged scopes; other challenges try refresh first, then interactive login.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] when refresh or interactive login fails.
+    pub async fn recover_access_token(
+        &mut self,
+        challenge: Option<&BearerChallenge>,
+    ) -> Result<String, Error> {
+        let step_up = challenge
+            .and_then(|c| c.error.as_deref())
+            .is_some_and(|e| e == "insufficient_scope");
+        if step_up {
+            // Drop the under-scoped access token so we cannot accidentally reuse it.
+            if let Some(tokens) = &mut self.tokens {
+                tokens.access_token.clear();
+                tokens.expires_at = Some(0);
+            }
+            return self.authorize_interactive(challenge).await;
+        }
+        self.refresh_or_authorize(challenge).await
+    }
+
+    async fn refresh_or_authorize(
+        &mut self,
+        challenge: Option<&BearerChallenge>,
+    ) -> Result<String, Error> {
+        if self
+            .tokens
+            .as_ref()
+            .and_then(|t| t.refresh_token.as_ref())
+            .is_some()
+        {
+            match self.refresh_tokens(challenge).await {
+                Ok(token) => return Ok(token),
+                Err(err) => {
+                    warn!(
+                        server = %self.server_name,
+                        error = %err,
+                        "MCP token refresh failed; falling back to interactive login"
+                    );
                 }
             }
         }
         self.authorize_interactive(challenge).await
     }
 
-    async fn refresh_tokens(&mut self, challenge: Option<&BearerChallenge>) -> Result<String, Error> {
+    async fn refresh_tokens(
+        &mut self,
+        challenge: Option<&BearerChallenge>,
+    ) -> Result<String, Error> {
         let refresh = self
             .tokens
             .as_ref()
@@ -211,23 +257,19 @@ impl McpOAuth {
         let scopes = challenged_scopes(challenge, &self.cfg, &prm);
         let resource = canonical_resource_uri(&self.mcp_url, prm.resource.as_deref());
 
-        let listener = TcpListener::bind(SocketAddr::from((
-            [127, 0, 0, 1],
-            self.cfg.redirect_port,
-        )))
-        .await?;
+        let listener =
+            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], self.cfg.redirect_port))).await?;
         let local = listener.local_addr()?;
         let redirect_uri = format!("http://127.0.0.1:{}/callback", local.port());
 
         let (verifier, challenge_s256) = pkce_pair();
         let state = random_urlsafe(16);
 
-        let mut auth_url = Url::parse(&as_meta.authorization_endpoint).map_err(|err| {
-            Error::OAuth {
+        let mut auth_url =
+            Url::parse(&as_meta.authorization_endpoint).map_err(|err| Error::OAuth {
                 server: self.server_name.clone(),
                 error: format!("invalid authorization_endpoint: {err}"),
-            }
-        })?;
+            })?;
         {
             let mut q = auth_url.query_pairs_mut();
             q.append_pair("response_type", "code");
@@ -311,15 +353,24 @@ impl McpOAuth {
         Ok(self.tokens.as_ref().unwrap().access_token.clone())
     }
 
+    /// Injects a cached token set for unit tests (e.g. revoked-but-unexpired access tokens).
+    #[cfg(test)]
+    pub fn inject_tokens_for_test(&mut self, tokens: TokenSet) {
+        self.tokens = Some(tokens);
+    }
+
     async fn discover(
         &self,
         challenge: Option<&BearerChallenge>,
     ) -> Result<(ProtectedResourceMetadata, AuthorizationServerMetadata), Error> {
         let prm = self.fetch_protected_resource_metadata(challenge).await?;
-        let as_url = prm.authorization_servers.first().ok_or_else(|| Error::OAuth {
-            server: self.server_name.clone(),
-            error: "protected resource metadata has no authorization_servers".to_string(),
-        })?;
+        let as_url = prm
+            .authorization_servers
+            .first()
+            .ok_or_else(|| Error::OAuth {
+                server: self.server_name.clone(),
+                error: "protected resource metadata has no authorization_servers".to_string(),
+            })?;
         let as_meta = self.fetch_authorization_server_metadata(as_url).await?;
         Ok((prm, as_meta))
     }
@@ -330,7 +381,17 @@ impl McpOAuth {
     ) -> Result<ProtectedResourceMetadata, Error> {
         let mut candidates = Vec::new();
         if let Some(url) = challenge.and_then(|c| c.resource_metadata.clone()) {
-            candidates.push(url);
+            match validate_metadata_fetch_url(&url, Some(&self.mcp_url)) {
+                Ok(()) => candidates.push(url),
+                Err(reason) => {
+                    warn!(
+                        server = %self.server_name,
+                        url = %url,
+                        reason = %reason,
+                        "ignoring unsafe resource_metadata URL from WWW-Authenticate"
+                    );
+                }
+            }
         }
         candidates.extend(well_known_resource_metadata_urls(&self.mcp_url));
 
@@ -366,14 +427,26 @@ impl McpOAuth {
             server: self.server_name.clone(),
             error: format!("invalid authorization server issuer `{issuer}`: {err}"),
         })?;
+        validate_metadata_fetch_url(issuer, None).map_err(|reason| Error::OAuth {
+            server: self.server_name.clone(),
+            error: format!("rejected authorization server issuer `{issuer}`: {reason}"),
+        })?;
         let mut last_err = None;
         for url in authorization_server_metadata_urls(&issuer_url) {
             match self.http.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp.json().await.map_err(|source| Error::Http {
-                        server: self.server_name.clone(),
-                        source,
-                    });
+                    let meta: AuthorizationServerMetadata =
+                        resp.json().await.map_err(|source| Error::Http {
+                            server: self.server_name.clone(),
+                            source,
+                        })?;
+                    validate_authorization_server_metadata(&issuer_url, &meta).map_err(
+                        |reason| Error::OAuth {
+                            server: self.server_name.clone(),
+                            error: reason,
+                        },
+                    )?;
+                    return Ok(meta);
                 }
                 Ok(resp) => last_err = Some(format!("{url} -> HTTP {}", resp.status())),
                 Err(err) => last_err = Some(format!("{url} -> {err}")),
@@ -538,14 +611,21 @@ impl McpOAuth {
             server: self.server_name.clone(),
             source,
         })?;
+        if !raw.token_type.eq_ignore_ascii_case("bearer") {
+            return Err(Error::OAuth {
+                server: self.server_name.clone(),
+                error: format!(
+                    "unsupported token_type `{}` (expected Bearer)",
+                    raw.token_type
+                ),
+            });
+        }
         let expires_at = raw.expires_in.map(|secs| now_unix().saturating_add(secs));
         Ok(TokenSet {
             access_token: raw.access_token,
-            refresh_token: raw.refresh_token.or_else(|| {
-                self.tokens
-                    .as_ref()
-                    .and_then(|t| t.refresh_token.clone())
-            }),
+            refresh_token: raw
+                .refresh_token
+                .or_else(|| self.tokens.as_ref().and_then(|t| t.refresh_token.clone())),
             token_type: raw.token_type,
             scope: raw.scope,
             expires_at,
@@ -570,6 +650,107 @@ impl McpOAuth {
 
 fn default_bearer_token_type() -> String {
     "Bearer".to_string()
+}
+
+/// Rejects metadata fetch URLs that are not HTTPS (except loopback HTTP for local development).
+///
+/// When `same_origin_as` is set, HTTP(S) URLs must share that origin (scheme+host+port).
+fn validate_metadata_fetch_url(raw: &str, same_origin_as: Option<&Url>) -> Result<(), String> {
+    let url = Url::parse(raw).map_err(|err| format!("invalid URL: {err}"))?;
+    if !is_allowed_oauth_endpoint(&url) {
+        return Err(format!(
+            "URL must use https (or http only for loopback); got `{}`",
+            url.scheme()
+        ));
+    }
+    if let Some(origin) = same_origin_as {
+        if !urls_same_origin(&url, origin) && !is_loopback_url(&url) {
+            return Err(
+                "resource_metadata URL must share the MCP server origin or be loopback".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_authorization_server_metadata(
+    expected_issuer: &Url,
+    meta: &AuthorizationServerMetadata,
+) -> Result<(), String> {
+    let reported = Url::parse(&meta.issuer).map_err(|err| {
+        format!(
+            "authorization server metadata has invalid issuer `{}`: {err}",
+            meta.issuer
+        )
+    })?;
+    if !issuers_match(expected_issuer, &reported) {
+        return Err(format!(
+            "authorization server issuer mismatch: expected `{}`, got `{}`",
+            expected_issuer, meta.issuer
+        ));
+    }
+    for (label, endpoint) in [
+        (
+            "authorization_endpoint",
+            meta.authorization_endpoint.as_str(),
+        ),
+        ("token_endpoint", meta.token_endpoint.as_str()),
+    ] {
+        let url =
+            Url::parse(endpoint).map_err(|err| format!("invalid {label} `{endpoint}`: {err}"))?;
+        if !is_allowed_oauth_endpoint(&url) {
+            return Err(format!(
+                "{label} must use https (or http only for loopback); got `{endpoint}`"
+            ));
+        }
+    }
+    if let Some(reg) = &meta.registration_endpoint {
+        let url = Url::parse(reg)
+            .map_err(|err| format!("invalid registration_endpoint `{reg}`: {err}"))?;
+        if !is_allowed_oauth_endpoint(&url) {
+            return Err(format!(
+                "registration_endpoint must use https (or http only for loopback); got `{reg}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_allowed_oauth_endpoint(url: &Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => is_loopback_url(url),
+        _ => false,
+    }
+}
+
+fn is_loopback_url(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        Some(url::Host::Domain(host)) => {
+            host.eq_ignore_ascii_case("localhost") || host.eq_ignore_ascii_case("localhost.")
+        }
+        None => false,
+    }
+}
+
+fn urls_same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// RFC 8414 issuer comparison: identical after stripping a single trailing slash.
+fn issuers_match(expected: &Url, reported: &Url) -> bool {
+    fn normalize(url: &Url) -> String {
+        let mut s = url.as_str().trim_end_matches('/').to_string();
+        if s.is_empty() {
+            s = url.as_str().to_string();
+        }
+        s
+    }
+    normalize(expected) == normalize(reported)
 }
 
 fn now_unix() -> u64 {
@@ -920,5 +1101,80 @@ mod tests {
             canonical_resource_uri(&url, None),
             "https://mcp.example.com/mcp"
         );
+    }
+
+    #[test]
+    fn missing_expires_at_is_treated_as_expired() {
+        let tokens = TokenSet {
+            access_token: "a".into(),
+            refresh_token: None,
+            token_type: "Bearer".into(),
+            scope: None,
+            expires_at: None,
+        };
+        assert!(tokens.is_expired(0));
+    }
+
+    #[test]
+    fn rejects_issuer_mismatch() {
+        let expected = Url::parse("https://auth.example.com").unwrap();
+        let meta = AuthorizationServerMetadata {
+            issuer: "https://evil.example.com".into(),
+            authorization_endpoint: "https://evil.example.com/authorize".into(),
+            token_endpoint: "https://evil.example.com/token".into(),
+            registration_endpoint: None,
+            code_challenge_methods_supported: vec!["S256".into()],
+            client_id_metadata_document_supported: false,
+        };
+        let err = validate_authorization_server_metadata(&expected, &meta).unwrap_err();
+        assert!(err.contains("issuer mismatch"));
+    }
+
+    #[test]
+    fn rejects_non_loopback_http_token_endpoint() {
+        let expected = Url::parse("https://auth.example.com").unwrap();
+        let meta = AuthorizationServerMetadata {
+            issuer: "https://auth.example.com".into(),
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "http://auth.example.com/token".into(),
+            registration_endpoint: None,
+            code_challenge_methods_supported: vec!["S256".into()],
+            client_id_metadata_document_supported: false,
+        };
+        let err = validate_authorization_server_metadata(&expected, &meta).unwrap_err();
+        assert!(err.contains("token_endpoint"));
+    }
+
+    #[test]
+    fn allows_loopback_http_endpoints() {
+        let expected = Url::parse("http://127.0.0.1:8080").unwrap();
+        let meta = AuthorizationServerMetadata {
+            issuer: "http://127.0.0.1:8080".into(),
+            authorization_endpoint: "http://127.0.0.1:8080/authorize".into(),
+            token_endpoint: "http://127.0.0.1:8080/token".into(),
+            registration_endpoint: None,
+            code_challenge_methods_supported: vec!["S256".into()],
+            client_id_metadata_document_supported: false,
+        };
+        validate_authorization_server_metadata(&expected, &meta).expect("loopback http ok");
+    }
+
+    #[test]
+    fn rejects_cross_origin_resource_metadata() {
+        let mcp = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let err =
+            validate_metadata_fetch_url("https://169.254.169.254/latest/meta-data", Some(&mcp))
+                .unwrap_err();
+        assert!(err.contains("origin") || err.contains("https"));
+    }
+
+    #[test]
+    fn accepts_same_origin_resource_metadata() {
+        let mcp = Url::parse("https://mcp.example.com/mcp").unwrap();
+        validate_metadata_fetch_url(
+            "https://mcp.example.com/.well-known/oauth-protected-resource",
+            Some(&mcp),
+        )
+        .expect("same origin");
     }
 }
