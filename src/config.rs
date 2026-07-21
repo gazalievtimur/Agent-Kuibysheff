@@ -219,21 +219,202 @@ impl ProviderConfig {
     }
 }
 
+/// One configured MCP server (stdio subprocess or Streamable HTTP).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "McpServerConfigRaw")]
 pub struct McpServerConfig {
     pub name: String,
+    pub timeout_ms: u64,
+    pub transport: McpTransport,
+}
+
+impl McpServerConfig {
+    #[must_use]
+    pub const fn default_timeout_ms() -> u64 {
+        20_000
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Transport-specific MCP connection settings.
+#[derive(Debug, Clone)]
+pub enum McpTransport {
+    Stdio(McpStdioConfig),
+    Http(McpHttpConfig),
+}
+
+/// Local MCP server launched as a subprocess (stdio transport).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpStdioConfig {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    #[serde(default = "McpServerConfig::default_timeout_ms")]
-    pub timeout_ms: u64,
 }
 
-impl McpServerConfig {
-    fn default_timeout_ms() -> u64 {
-        20_000
+/// Remote MCP server over Streamable HTTP (protocol 2025-11-25).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpHttpConfig {
+    pub url: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    pub auth: Option<McpOAuthConfig>,
+}
+
+/// OAuth 2.1 client settings for a protected Streamable HTTP MCP server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpOAuthConfig {
+    /// Static OAuth client_id. Mutually exclusive with `client_id_metadata_url`.
+    pub client_id: Option<String>,
+    /// Environment variable holding the client secret (confidential clients).
+    pub client_secret_env: Option<String>,
+    /// Client ID Metadata Document URL (SHOULD when AS supports CIMD).
+    pub client_id_metadata_url: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Localhost callback port; `0` binds an ephemeral port.
+    #[serde(default)]
+    pub redirect_port: u16,
+    /// Persistent token cache path (tilde/`~` expanded at runtime).
+    pub token_store: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpServerConfigRaw {
+    name: String,
+    transport: Option<String>,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    url: Option<String>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    auth: Option<McpOAuthConfig>,
+    #[serde(default = "McpServerConfig::default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+impl TryFrom<McpServerConfigRaw> for McpServerConfig {
+    type Error = String;
+
+    fn try_from(raw: McpServerConfigRaw) -> Result<Self, Self::Error> {
+        let has_command = raw.command.as_ref().is_some_and(|c| !c.trim().is_empty());
+        let has_url = raw.url.as_ref().is_some_and(|u| !u.trim().is_empty());
+        let kind = raw
+            .transport
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase);
+
+        let transport = match kind.as_deref() {
+            Some("stdio") => {
+                if !has_command {
+                    return Err("mcp transport `stdio` requires `command`".to_string());
+                }
+                if has_url {
+                    return Err("mcp transport `stdio` must not set `url`".to_string());
+                }
+                if raw.auth.is_some() || !raw.headers.is_empty() {
+                    return Err(
+                        "mcp transport `stdio` must not set `url`/`headers`/`auth`".to_string(),
+                    );
+                }
+                McpTransport::Stdio(McpStdioConfig {
+                    command: raw
+                        .command
+                        .ok_or_else(|| "mcp transport `stdio` requires `command`".to_string())?,
+                    args: raw.args,
+                    env: raw.env,
+                })
+            }
+            Some("http") => {
+                if !has_url {
+                    return Err("mcp transport `http` requires `url`".to_string());
+                }
+                if has_command || !raw.args.is_empty() || !raw.env.is_empty() {
+                    return Err(
+                        "mcp transport `http` must not set `command`/`args`/`env`".to_string(),
+                    );
+                }
+                McpTransport::Http(McpHttpConfig {
+                    url: raw
+                        .url
+                        .ok_or_else(|| "mcp transport `http` requires `url`".to_string())?,
+                    headers: raw.headers,
+                    auth: raw.auth,
+                })
+            }
+            Some(other) => {
+                return Err(format!(
+                    "unknown mcp transport `{other}` (expected `stdio` or `http`)"
+                ));
+            }
+            None if has_url && !has_command => McpTransport::Http(McpHttpConfig {
+                url: raw
+                    .url
+                    .ok_or_else(|| "mcp http entry requires `url`".to_string())?,
+                headers: raw.headers,
+                auth: raw.auth,
+            }),
+            None if has_command && !has_url => {
+                if raw.auth.is_some() || !raw.headers.is_empty() {
+                    return Err(
+                        "stdio mcp servers must not set `headers`/`auth` (use `url` for HTTP)"
+                            .to_string(),
+                    );
+                }
+                McpTransport::Stdio(McpStdioConfig {
+                    command: raw
+                        .command
+                        .ok_or_else(|| "mcp stdio entry requires `command`".to_string())?,
+                    args: raw.args,
+                    env: raw.env,
+                })
+            }
+            None if has_url && has_command => {
+                return Err("mcp entry must set either `command` or `url`, not both".to_string());
+            }
+            None => {
+                return Err("mcp entry requires `command` (stdio) or `url` (http)".to_string());
+            }
+        };
+
+        if let McpTransport::Http(http) = &transport {
+            if let Some(auth) = &http.auth {
+                let has_id = auth
+                    .client_id
+                    .as_ref()
+                    .is_some_and(|id| !id.trim().is_empty());
+                let has_meta = auth
+                    .client_id_metadata_url
+                    .as_ref()
+                    .is_some_and(|u| !u.trim().is_empty());
+                if has_id && has_meta {
+                    return Err(
+                        "mcp auth must set only one of `client_id` or `client_id_metadata_url`"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        Ok(Self {
+            name: raw.name,
+            timeout_ms: raw.timeout_ms,
+            transport,
+        })
     }
 }
 
@@ -391,17 +572,45 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
                 server.name
             )));
         }
-        if server.command.trim().is_empty() {
-            return Err(ConfigError::Validation(format!(
-                "`mcp[{name}].command` must not be empty",
-                name = server.name
-            )));
-        }
         if server.timeout_ms == 0 {
             return Err(ConfigError::Validation(format!(
                 "`mcp[{name}].timeout_ms` must be > 0",
                 name = server.name
             )));
+        }
+        match &server.transport {
+            McpTransport::Stdio(stdio) => {
+                if stdio.command.trim().is_empty() {
+                    return Err(ConfigError::Validation(format!(
+                        "`mcp[{name}].command` must not be empty",
+                        name = server.name
+                    )));
+                }
+            }
+            McpTransport::Http(http) => {
+                let parsed = url::Url::parse(http.url.trim()).map_err(|err| {
+                    ConfigError::Validation(format!(
+                        "`mcp[{name}].url` is invalid: {err}",
+                        name = server.name
+                    ))
+                })?;
+                if parsed.scheme() != "http" && parsed.scheme() != "https" {
+                    return Err(ConfigError::Validation(format!(
+                        "`mcp[{name}].url` must use http or https",
+                        name = server.name
+                    )));
+                }
+                if let Some(auth) = &http.auth {
+                    if let Some(meta) = &auth.client_id_metadata_url {
+                        url::Url::parse(meta.trim()).map_err(|err| {
+                            ConfigError::Validation(format!(
+                                "`mcp[{name}].auth.client_id_metadata_url` is invalid: {err}",
+                                name = server.name
+                            ))
+                        })?;
+                    }
+                }
+            }
         }
     }
 
@@ -430,10 +639,12 @@ mod tests {
             },
             mcp: vec![McpServerConfig {
                 name: "local".to_string(),
-                command: "mcp-server".to_string(),
-                args: vec![],
-                env: HashMap::new(),
                 timeout_ms: 1000,
+                transport: McpTransport::Stdio(McpStdioConfig {
+                    command: "mcp-server".to_string(),
+                    args: vec![],
+                    env: HashMap::new(),
+                }),
             }],
             limits: LimitsConfig {
                 max_iterations: 5,
@@ -748,5 +959,87 @@ access:
         assert!(!policy.is_legacy());
         assert!(policy.allows_builtin(&crate::access::QualifiedTool::parse("home.run").unwrap()));
         assert!(policy.programs().is_empty());
+    }
+
+    #[test]
+    fn mcp_parses_stdio_without_transport_tag() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+mcp:
+  - name: local
+    command: mcp-server
+    args: [--flag]
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        validate(&cfg).expect("valid");
+        match &cfg.mcp[0].transport {
+            McpTransport::Stdio(stdio) => {
+                assert_eq!(stdio.command, "mcp-server");
+                assert_eq!(stdio.args, vec!["--flag"]);
+            }
+            McpTransport::Http(_) => panic!("expected stdio"),
+        }
+    }
+
+    #[test]
+    fn mcp_parses_http_with_auth() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+mcp:
+  - name: remote
+    transport: http
+    url: https://mcp.example.com/mcp
+    headers:
+      X-Test: one
+    auth:
+      client_id: agent-kuibyshev
+      scopes: [mcp:tools]
+      redirect_port: 0
+      token_store: ./tokens.json
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        validate(&cfg).expect("valid");
+        match &cfg.mcp[0].transport {
+            McpTransport::Http(http) => {
+                assert_eq!(http.url, "https://mcp.example.com/mcp");
+                assert_eq!(http.headers.get("X-Test").map(String::as_str), Some("one"));
+                let auth = http.auth.as_ref().expect("auth");
+                assert_eq!(auth.client_id.as_deref(), Some("agent-kuibyshev"));
+            }
+            McpTransport::Stdio(_) => panic!("expected http"),
+        }
+    }
+
+    #[test]
+    fn mcp_rejects_command_and_url_together() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+mcp:
+  - name: bad
+    command: mcp-server
+    url: https://mcp.example.com/mcp
+";
+        assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
     }
 }

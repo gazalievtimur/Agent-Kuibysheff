@@ -63,6 +63,28 @@ cp -R ./local/aoc-bank.example ./local/aoc-bank
 | ID | Назначение |
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
+| [searxng](./searxng/) | Web search через Streamable HTTP MCP `mcp-searxng` → локальный SearXNG |
+
+## SearXNG web search
+
+Нужны: SearXNG (JSON API) и `mcp-searxng` на `http://127.0.0.1:3000/mcp`.
+
+```powershell
+# SearXNG уже на 127.0.0.1:8080 (пример: контейнер 1c-odata-searxng)
+docker run -d --name mcp-searxng -p 3000:3000 `
+  --network 1c-odata-skill_default `
+  -e MCP_HTTP_PORT=3000 -e MCP_HTTP_HOST=0.0.0.0 `
+  -e SEARXNG_URL=http://searxng:8080 `
+  isokoliuk/mcp-searxng:latest
+
+New-Item -ItemType Directory -Force -Path .\demo-home\searxng | Out-Null
+cargo run -- `
+  --config .\test-agents\searxng\agent-config.example.yaml `
+  --settings-dir .\test-agents\searxng `
+  --prompt "Find what SearXNG is and write a short brief to out/search_brief.md" `
+  --home .\demo-home\searxng
+```
+
 
 AoC solve regression is part of `scripts/check.ps1` / `scripts/check.sh` via
 `scripts/aoc-regression.ps1` / `scripts/aoc-regression.sh`

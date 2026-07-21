@@ -54,12 +54,13 @@ effective = builtins ∪ mcp
 ```
 
 - Tool names must be qualified `server.tool` (bare names are rejected).
-- Declared MCP servers are trusted capabilities: their `command` / `env` and the
-  tools from `tools/list` are allowed without listing them in skills.
+- Declared MCP servers are trusted capabilities: their `command` / `env` (stdio)
+  or `url` / `headers` / OAuth (Streamable HTTP) and the tools from `tools/list`
+  are allowed without listing them in skills.
 - There is no generic `network` config section. The agent process may call only
   the configured `provider.base_url` origin (no proxy, no cross-origin
-  redirects). MCP processes may use the network. `home.run` payloads never get
-  network access.
+  redirects). MCP stdio subprocesses and configured MCP HTTP endpoints may use
+  the network. `home.run` payloads never get network access.
 
 See [`agent-config.example.yaml`](agent-config.example.yaml) for the schema and
 comments.
