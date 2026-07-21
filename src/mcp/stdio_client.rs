@@ -11,8 +11,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
 
-use crate::config::McpServerConfig;
+use crate::config::{McpServerConfig, McpStdioConfig, McpTransport};
 use crate::logging::SharedEventSink;
+use crate::mcp::http_client::McpHttpClient;
 use crate::mcp::{Error, ToolExecutor};
 
 pub struct McpRegistry {
@@ -34,6 +35,28 @@ struct ActorRequest {
     method: String,
     params: Value,
     reply: oneshot::Sender<Result<Value, Error>>,
+}
+
+enum LiveClient {
+    Stdio(Box<McpStdioClient>),
+    Http(Box<McpHttpClient>),
+}
+
+impl LiveClient {
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, Error> {
+        match self {
+            Self::Stdio(client) => client.request(method, params).await,
+            Self::Http(client) => client.request(method, params).await,
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Self::Http(client) = self {
+            if let Err(err) = client.shutdown().await {
+                warn!(error = %err, "MCP HTTP session shutdown failed");
+            }
+        }
+    }
 }
 
 struct McpStdioClient {
@@ -59,9 +82,22 @@ impl McpRegistry {
         let mut servers = HashMap::with_capacity(configs.len());
 
         for cfg in configs {
-            let mut client = McpStdioClient::connect(cfg)?;
-            client.initialize().await?;
-            let tools = client.list_tools().await?;
+            let mut client = match &cfg.transport {
+                McpTransport::Stdio(stdio) => {
+                    let mut client = McpStdioClient::connect(&cfg.name, stdio, cfg.timeout_ms)?;
+                    client.initialize().await?;
+                    LiveClient::Stdio(Box::new(client))
+                }
+                McpTransport::Http(http) => {
+                    let client = McpHttpClient::connect(&cfg.name, http, cfg.timeout_ms).await?;
+                    LiveClient::Http(Box::new(client))
+                }
+            };
+
+            let tools = match &mut client {
+                LiveClient::Stdio(c) => c.list_tools().await?,
+                LiveClient::Http(c) => c.list_tools().await?,
+            };
             let tool_set: HashSet<_> = tools.into_iter().collect();
 
             if let Some(log) = &logger {
@@ -94,7 +130,7 @@ impl McpRegistry {
     }
 }
 
-fn spawn_actor(server_name: String, client: McpStdioClient) -> McpClientHandle {
+fn spawn_actor(server_name: String, client: LiveClient) -> McpClientHandle {
     let (tx, mut rx) = mpsc::channel::<ActorRequest>(32);
     let actor_name = server_name.clone();
     tokio::spawn(async move {
@@ -110,6 +146,7 @@ fn spawn_actor(server_name: String, client: McpStdioClient) -> McpClientHandle {
                 debug!(server = %actor_name, "MCP actor caller dropped before reply");
             }
         }
+        client.shutdown().await;
     });
     McpClientHandle { server_name, tx }
 }
@@ -224,7 +261,7 @@ impl ToolExecutor for McpRegistry {
 }
 
 impl McpStdioClient {
-    fn connect(cfg: &McpServerConfig) -> Result<Self, Error> {
+    fn connect(server_name: &str, cfg: &McpStdioConfig, timeout_ms: u64) -> Result<Self, Error> {
         let mut cmd = Command::new(&cfg.command);
         cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped());
@@ -235,26 +272,26 @@ impl McpStdioClient {
         }
 
         let mut child = cmd.spawn().map_err(|source| Error::Spawn {
-            server: cfg.name.clone(),
+            server: server_name.to_string(),
             source,
         })?;
         let stdin = child.stdin.take().ok_or_else(|| Error::MissingPipe {
-            server: cfg.name.clone(),
+            server: server_name.to_string(),
             pipe: "stdin".to_string(),
         })?;
         let stdout = child.stdout.take().ok_or_else(|| Error::MissingPipe {
-            server: cfg.name.clone(),
+            server: server_name.to_string(),
             pipe: "stdout".to_string(),
         })?;
         let stderr = child.stderr.take().ok_or_else(|| Error::MissingPipe {
-            server: cfg.name.clone(),
+            server: server_name.to_string(),
             pipe: "stderr".to_string(),
         })?;
-        spawn_stderr_drain(cfg.name.clone(), stderr);
+        spawn_stderr_drain(server_name.to_string(), stderr);
 
         Ok(Self {
-            server_name: cfg.name.clone(),
-            timeout: Duration::from_millis(cfg.timeout_ms),
+            server_name: server_name.to_string(),
+            timeout: Duration::from_millis(timeout_ms),
             child,
             stdin,
             stdout: BufReader::new(stdout),

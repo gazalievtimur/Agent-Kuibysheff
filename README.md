@@ -7,7 +7,7 @@ Minimal and reliable CLI agent worker in Rust.
 - Takes runtime config, an agent settings directory, a prompt, read-only input
   files, and an isolated home workspace.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
-- Uses MCP servers over `stdio` when the model requests tools.
+- Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
 - Enforces hard stop limits: iterations, tokens, and max duration.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /

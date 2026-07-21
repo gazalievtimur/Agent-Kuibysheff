@@ -1,0 +1,50 @@
+# Requires: mcp-searxng listening on http://127.0.0.1:3000/mcp
+# and a SearXNG instance reachable from that MCP (e.g. http://127.0.0.1:8080).
+#
+# Start MCP (Docker Desktop / Windows):
+#   docker run -d --name mcp-searxng -p 3000:3000 `
+#     --add-host=host.docker.internal:host-gateway `
+#     -e MCP_HTTP_PORT=3000 -e MCP_HTTP_HOST=0.0.0.0 `
+#     -e SEARXNG_URL=http://host.docker.internal:8080 `
+#     isokoliuk/mcp-searxng:latest
+#
+# Or attach to the same compose network as SearXNG and set
+# SEARXNG_URL=http://searxng:8080
+
+provider:
+  base_url: "https://polza.ai/api/v1"
+  model: "openai/gpt-5.6-luna"
+  api_key_env: "POLZA_API_KEY"
+  timeout_ms: 60000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp:
+  - name: searxng
+    transport: http
+    url: "http://127.0.0.1:3000/mcp"
+    timeout_ms: 60000
+
+limits:
+  max_iterations: 12
+  max_tokens: 25000
+  max_duration_sec: 180
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: false
+  sink:
+    type: file
+    path: "./logs/searxng-agent"
+
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]

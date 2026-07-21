@@ -1,3 +1,6 @@
+pub mod http_client;
+pub mod oauth;
+pub mod sse;
 pub mod stdio_client;
 
 use async_trait::async_trait;
@@ -6,6 +9,8 @@ use thiserror::Error;
 
 use crate::logging::LoggingError;
 use crate::sandbox::SandboxError;
+
+use self::oauth::BearerChallenge;
 
 /// Tool-layer error shared by MCP servers and builtin tool executors.
 #[derive(Debug, Error)]
@@ -22,6 +27,21 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("MCP payload encode/decode failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("MCP HTTP error on server `{server}`: {source}")]
+    Http {
+        server: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("MCP OAuth error on server `{server}`: {error}")]
+    OAuth { server: String, error: String },
+    #[error("MCP server `{server}` requires authorization")]
+    Unauthorized {
+        server: String,
+        challenge: Option<BearerChallenge>,
+    },
+    #[error("MCP session expired on server `{server}`")]
+    SessionExpired { server: String },
     #[error("MCP call timed out on server `{server}` for method `{method}`")]
     Timeout { server: String, method: String },
     #[error("MCP server `{server}` returned protocol error: {error}")]

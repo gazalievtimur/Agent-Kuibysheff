@@ -8,6 +8,25 @@ provider:
   retry_base_delay_ms: 500
 
 mcp: []
+# Examples:
+# mcp:
+#   - name: local
+#     transport: stdio
+#     command: "npx"
+#     args: ["-y", "mcp-server"]
+#     timeout_ms: 20000
+#   - name: remote
+#     transport: http
+#     url: "https://mcp.example.com/mcp"
+#     headers:
+#       Authorization: "Bearer ${TOKEN}"   # or use auth: below for OAuth 2.1
+#     timeout_ms: 20000
+#     auth:
+#       client_id: "agent-kuibyshev"
+#       client_secret_env: "MCP_REMOTE_CLIENT_SECRET"
+#       scopes: ["mcp:tools"]
+#       redirect_port: 0
+#       token_store: "~/.agent-kuibyshev/mcp-tokens/remote.json"
 
 limits:
   max_iterations: 10
@@ -31,8 +50,8 @@ logging:
 # - When `access` is present, everything not listed is denied.
 #
 # Network is not configured here:
-# - provider.base_url is the only HTTP origin the agent process may call
-# - each mcp entry is a trusted capability (may use the network)
+# - provider.base_url is the only HTTP origin the agent process may call for the model API
+# - each mcp entry is a trusted capability (stdio subprocess or Streamable HTTP URL / OAuth)
 # - home.run payloads always run with no network (OS sandbox)
 #
 # Relative host paths under filesystem / run resolve against this file's directory.
