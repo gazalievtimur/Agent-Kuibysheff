@@ -12,10 +12,8 @@ use tokio::time::{timeout, Instant};
 use tracing::{debug, warn};
 
 use crate::config::McpHttpConfig;
-use crate::mcp::oauth::{
-    apply_bearer, parse_www_authenticate, BearerChallenge, McpOAuth,
-};
-use crate::mcp::sse::{parse_json_data, SseParser};
+use crate::mcp::oauth::{apply_bearer, parse_www_authenticate, BearerChallenge, McpOAuth};
+use crate::mcp::sse::{parse_json_data, SseEvent, SseParser, Utf8StreamDecoder};
 use crate::mcp::Error;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -44,13 +42,19 @@ impl McpHttpClient {
     /// # Errors
     ///
     /// Returns [`Error`] when the URL/headers are invalid, OAuth setup fails, or initialize fails.
-    pub async fn connect(server_name: &str, cfg: &McpHttpConfig, timeout_ms: u64) -> Result<Self, Error> {
+    pub async fn connect(
+        server_name: &str,
+        cfg: &McpHttpConfig,
+        timeout_ms: u64,
+    ) -> Result<Self, Error> {
         let endpoint = Url::parse(cfg.url.trim()).map_err(|err| Error::Protocol {
             server: server_name.to_string(),
             error: format!("invalid mcp url: {err}"),
         })?;
         let http = Client::builder()
-            .timeout(Duration::from_millis(timeout_ms.saturating_mul(4).max(60_000)))
+            .timeout(Duration::from_millis(
+                timeout_ms.saturating_mul(4).max(60_000),
+            ))
             .no_proxy()
             .build()
             .map_err(|source| Error::Http {
@@ -200,9 +204,7 @@ impl McpHttpClient {
 
     fn apply_initialize_result(&mut self, result: &Value) -> Result<(), Error> {
         if let Some(version) = result.get("protocolVersion").and_then(Value::as_str) {
-            if version != MCP_PROTOCOL_VERSION
-                && version != "2025-03-26"
-                && version != "2025-06-18"
+            if version != MCP_PROTOCOL_VERSION && version != "2025-03-26" && version != "2025-06-18"
             {
                 return Err(Error::Protocol {
                     server: self.server_name.clone(),
@@ -231,10 +233,7 @@ impl McpHttpClient {
         if !response.status().is_success() {
             return Err(Error::Protocol {
                 server: self.server_name.clone(),
-                error: format!(
-                    "legacy HTTP+SSE GET failed: HTTP {}",
-                    response.status()
-                ),
+                error: format!("legacy HTTP+SSE GET failed: HTTP {}", response.status()),
             });
         }
         let (events, _) = self
@@ -244,7 +243,6 @@ impl McpHttpClient {
             e.event
                 .as_deref()
                 .is_some_and(|name| name.eq_ignore_ascii_case("endpoint"))
-                || parse_json_data(&e.data).is_none() && !e.data.trim().is_empty()
         });
         let Some(ev) = endpoint_event else {
             return Err(Error::Protocol {
@@ -252,10 +250,13 @@ impl McpHttpClient {
                 error: "legacy HTTP+SSE stream missing endpoint event".to_string(),
             });
         };
-        let message_url = self.endpoint.join(ev.data.trim()).map_err(|err| Error::Protocol {
-            server: self.server_name.clone(),
-            error: format!("invalid legacy endpoint URL: {err}"),
-        })?;
+        let message_url = self
+            .endpoint
+            .join(ev.data.trim())
+            .map_err(|err| Error::Protocol {
+                server: self.server_name.clone(),
+                error: format!("invalid legacy endpoint URL: {err}"),
+            })?;
         self.legacy_message_url = Some(message_url);
         let params = json!({
             "protocolVersion": MCP_PROTOCOL_VERSION,
@@ -271,20 +272,15 @@ impl McpHttpClient {
         Ok(())
     }
 
-    async fn handle_unauthorized(&mut self, challenge: Option<&BearerChallenge>) -> Result<(), Error> {
+    async fn handle_unauthorized(
+        &mut self,
+        challenge: Option<&BearerChallenge>,
+    ) -> Result<(), Error> {
         let oauth = self.oauth.as_mut().ok_or_else(|| Error::Unauthorized {
             server: self.server_name.clone(),
             challenge: challenge.cloned(),
         })?;
-        let step_up = challenge
-            .and_then(|c| c.error.as_deref())
-            .is_some_and(|e| e == "insufficient_scope");
-        if step_up {
-            // Force interactive re-auth with challenged scopes by clearing access token expiry.
-            let _ = oauth.ensure_access_token(challenge).await?;
-        } else {
-            let _ = oauth.ensure_access_token(challenge).await?;
-        }
+        let _ = oauth.recover_access_token(challenge).await?;
         Ok(())
     }
 
@@ -307,6 +303,24 @@ impl McpHttpClient {
             return Err(Error::Unauthorized {
                 server: self.server_name.clone(),
                 challenge,
+            });
+        }
+        if status == StatusCode::FORBIDDEN {
+            let challenge = parse_www_authenticate(response.headers());
+            if challenge
+                .as_ref()
+                .and_then(|c| c.error.as_deref())
+                .is_some_and(|e| e == "insufficient_scope")
+            {
+                return Err(Error::Unauthorized {
+                    server: self.server_name.clone(),
+                    challenge,
+                });
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Protocol {
+                server: self.server_name.clone(),
+                error: format!("HTTP {status}: {body}"),
             });
         }
         if status == StatusCode::NOT_FOUND && self.session_id.is_some() {
@@ -361,20 +375,19 @@ impl McpHttpClient {
         {
             let mut parser = SseParser::new();
             let mut result = None;
-            for event in parser.push(&as_text) {
-                if let Some(value) = parse_json_data(&event.data) {
-                    if value.get("id").and_then(Value::as_u64) == Some(id) {
-                        result = Some(extract_result(&self.server_name, id, &value)?);
-                        break;
-                    }
+            for event in parser.push(&as_text).map_err(|error| Error::Protocol {
+                server: self.server_name.clone(),
+                error,
+            })? {
+                if let Some(value) = self.sse_event_result(&event, Some(id))? {
+                    result = Some(value);
+                    break;
                 }
             }
-            if let Some(event) = parser.finish() {
-                if result.is_none() {
-                    if let Some(value) = parse_json_data(&event.data) {
-                        if value.get("id").and_then(Value::as_u64) == Some(id) {
-                            result = Some(extract_result(&self.server_name, id, &value)?);
-                        }
+            if result.is_none() {
+                if let Some(event) = parser.finish() {
+                    if let Some(value) = self.sse_event_result(&event, Some(id))? {
+                        result = Some(value);
                     }
                 }
             }
@@ -388,9 +401,7 @@ impl McpHttpClient {
 
         let message: Value = serde_json::from_slice(&bytes).map_err(|err| Error::Protocol {
             server: self.server_name.clone(),
-            error: format!(
-                "failed to decode JSON-RPC body (content-type: {content_type}): {err}"
-            ),
+            error: format!("failed to decode JSON-RPC body (content-type: {content_type}): {err}"),
         })?;
         extract_result(&self.server_name, id, &message)
     }
@@ -461,14 +472,18 @@ impl McpHttpClient {
         target_id: Option<u64>,
         overall_timeout: Duration,
         resume_on_disconnect: bool,
-    ) -> Result<(Vec<crate::mcp::sse::SseEvent>, Option<Value>), Error> {
+    ) -> Result<(Vec<SseEvent>, Option<Value>), Error> {
         let mut parser = SseParser::new();
-        let mut events = Vec::new();
-        let mut last_event_id = None::<String>;
-        let mut last_retry = Duration::from_secs(1);
-        let mut result = None;
+        let mut utf8 = Utf8StreamDecoder::new();
+        let mut state = SseReadState {
+            events: Vec::new(),
+            last_event_id: None,
+            last_retry: Duration::from_secs(1),
+            result: None,
+        };
         let deadline = Instant::now() + overall_timeout;
         let mut stream = response.bytes_stream();
+        let mut resumes_remaining = if resume_on_disconnect { 3_u8 } else { 0 };
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -481,83 +496,66 @@ impl McpHttpClient {
             let next = timeout(remaining, stream.next()).await;
             match next {
                 Ok(Some(Ok(chunk))) => {
-                    let text = String::from_utf8_lossy(&chunk);
-                    for event in parser.push(&text) {
-                        if let Some(retry) = event.retry_ms {
-                            last_retry = Duration::from_millis(retry);
-                        }
-                        if let Some(id) = &event.id {
-                            last_event_id = Some(id.clone());
-                        }
-                        if let Some(value) = parse_json_data(&event.data) {
-                            if let Some(tid) = target_id {
-                                if value.get("id").and_then(Value::as_u64) == Some(tid) {
-                                    result = Some(extract_result(
-                                        &self.server_name,
-                                        tid,
-                                        &value,
-                                    )?);
-                                } else if value.get("method").is_some() {
-                                    // progress / logging notifications — ignore for tools client
-                                    debug!(
-                                        server = %self.server_name,
-                                        method = ?value.get("method"),
-                                        "ignoring MCP SSE notification"
-                                    );
-                                }
-                            }
-                        }
-                        events.push(event);
-                        if result.is_some() {
-                            return Ok((events, result));
+                    let text = utf8.push(&chunk).map_err(|error| Error::Protocol {
+                        server: self.server_name.clone(),
+                        error,
+                    })?;
+                    for event in parser.push(&text).map_err(|error| Error::Protocol {
+                        server: self.server_name.clone(),
+                        error,
+                    })? {
+                        self.ingest_sse_event(event, target_id, &mut state)?;
+                        if state.result.is_some() {
+                            return Ok((state.events, state.result));
                         }
                     }
                 }
                 Ok(Some(Err(err))) => {
-                    return Err(Error::Http {
-                        server: self.server_name.clone(),
-                        source: err,
-                    });
-                }
-                Ok(None) => {
-                    if let Some(event) = parser.finish() {
-                        events.push(event);
-                    }
-                    if result.is_some() || !resume_on_disconnect || target_id.is_none() {
-                        return Ok((events, result));
-                    }
-                    // Resume via GET + Last-Event-ID
-                    tokio::time::sleep(last_retry).await;
-                    let mut req = self
-                        .http
-                        .get(self.endpoint.clone())
-                        .header(ACCEPT, "text/event-stream")
-                        .header(HEADER_PROTOCOL_VERSION, self.protocol_version.as_str());
-                    if let Some(session) = &self.session_id {
-                        req = req.header(HEADER_SESSION_ID, session);
-                    }
-                    if let Some(id) = &last_event_id {
-                        req = req.header(HEADER_LAST_EVENT_ID, id);
-                    }
-                    req = self.apply_common_headers(req)?;
-                    let response = req.send().await.map_err(|source| Error::Http {
-                        server: self.server_name.clone(),
-                        source,
-                    })?;
-                    if response.status() == StatusCode::METHOD_NOT_ALLOWED {
-                        return Ok((events, result));
-                    }
-                    if !response.status().is_success() {
-                        return Err(Error::Protocol {
+                    if resumes_remaining == 0 || target_id.is_none() {
+                        return Err(Error::Http {
                             server: self.server_name.clone(),
-                            error: format!(
-                                "SSE resume GET failed: HTTP {}",
-                                response.status()
-                            ),
+                            source: err,
                         });
                     }
-                    stream = response.bytes_stream();
-                    parser = SseParser::new();
+                    warn!(
+                        server = %self.server_name,
+                        error = %err,
+                        "MCP SSE stream interrupted; attempting resume"
+                    );
+                    self.flush_sse_finish(&mut parser, &mut utf8, target_id, &mut state)?;
+                    if state.result.is_some() {
+                        return Ok((state.events, state.result));
+                    }
+                    resumes_remaining = resumes_remaining.saturating_sub(1);
+                    match self
+                        .resume_sse_response(&state.last_event_id, state.last_retry, deadline)
+                        .await?
+                    {
+                        Some(response) => {
+                            stream = response.bytes_stream();
+                            parser = SseParser::new();
+                            utf8 = Utf8StreamDecoder::new();
+                        }
+                        None => return Ok((state.events, state.result)),
+                    }
+                }
+                Ok(None) => {
+                    self.flush_sse_finish(&mut parser, &mut utf8, target_id, &mut state)?;
+                    if state.result.is_some() || resumes_remaining == 0 || target_id.is_none() {
+                        return Ok((state.events, state.result));
+                    }
+                    resumes_remaining = resumes_remaining.saturating_sub(1);
+                    match self
+                        .resume_sse_response(&state.last_event_id, state.last_retry, deadline)
+                        .await?
+                    {
+                        Some(response) => {
+                            stream = response.bytes_stream();
+                            parser = SseParser::new();
+                            utf8 = Utf8StreamDecoder::new();
+                        }
+                        None => return Ok((state.events, state.result)),
+                    }
                 }
                 Err(_) => {
                     return Err(Error::Timeout {
@@ -568,6 +566,146 @@ impl McpHttpClient {
             }
         }
     }
+
+    fn flush_sse_finish(
+        &self,
+        parser: &mut SseParser,
+        utf8: &mut Utf8StreamDecoder,
+        target_id: Option<u64>,
+        state: &mut SseReadState,
+    ) -> Result<(), Error> {
+        let trailing = utf8.finish();
+        if !trailing.is_empty() {
+            for event in parser.push(&trailing).map_err(|error| Error::Protocol {
+                server: self.server_name.clone(),
+                error,
+            })? {
+                self.ingest_sse_event(event, target_id, state)?;
+                if state.result.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+        if let Some(event) = parser.finish() {
+            self.ingest_sse_event(event, target_id, state)?;
+        }
+        Ok(())
+    }
+
+    fn ingest_sse_event(
+        &self,
+        event: SseEvent,
+        target_id: Option<u64>,
+        state: &mut SseReadState,
+    ) -> Result<(), Error> {
+        if let Some(retry) = event.retry_ms {
+            state.last_retry = Duration::from_millis(retry);
+        }
+        if let Some(id) = &event.id {
+            state.last_event_id = Some(id.clone());
+        }
+        if let Some(value) = self.sse_event_result(&event, target_id)? {
+            state.result = Some(value);
+        }
+        state.events.push(event);
+        Ok(())
+    }
+
+    fn sse_event_result(
+        &self,
+        event: &SseEvent,
+        target_id: Option<u64>,
+    ) -> Result<Option<Value>, Error> {
+        let Some(tid) = target_id else {
+            return Ok(None);
+        };
+        let Some(value) = parse_json_data(&event.data) else {
+            return Ok(None);
+        };
+        if let Some(id_value) = value.get("id") {
+            if jsonrpc_id_matches(id_value, tid) {
+                return Ok(Some(extract_result(&self.server_name, tid, &value)?));
+            }
+        } else if value.get("method").is_some() {
+            debug!(
+                server = %self.server_name,
+                method = ?value.get("method"),
+                "ignoring MCP SSE notification"
+            );
+        }
+        Ok(None)
+    }
+
+    async fn resume_sse_response(
+        &self,
+        last_event_id: &Option<String>,
+        last_retry: Duration,
+        deadline: Instant,
+    ) -> Result<Option<Response>, Error> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::Timeout {
+                server: self.server_name.clone(),
+                method: "sse".to_string(),
+            });
+        }
+        let sleep_for = last_retry.min(remaining);
+        tokio::time::sleep(sleep_for).await;
+        let mut req = self
+            .http
+            .get(self.endpoint.clone())
+            .header(ACCEPT, "text/event-stream")
+            .header(HEADER_PROTOCOL_VERSION, self.protocol_version.as_str());
+        if let Some(session) = &self.session_id {
+            req = req.header(HEADER_SESSION_ID, session);
+        }
+        if let Some(id) = last_event_id {
+            req = req.header(HEADER_LAST_EVENT_ID, id);
+        }
+        req = self.apply_common_headers(req)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::Timeout {
+                server: self.server_name.clone(),
+                method: "sse".to_string(),
+            });
+        }
+        let response = timeout(remaining, req.send())
+            .await
+            .map_err(|_| Error::Timeout {
+                server: self.server_name.clone(),
+                method: "sse".to_string(),
+            })?
+            .map_err(|source| Error::Http {
+                server: self.server_name.clone(),
+                source,
+            })?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            let challenge = parse_www_authenticate(response.headers());
+            if status == StatusCode::UNAUTHORIZED
+                || challenge
+                    .as_ref()
+                    .and_then(|c| c.error.as_deref())
+                    .is_some_and(|e| e == "insufficient_scope")
+            {
+                return Err(Error::Unauthorized {
+                    server: self.server_name.clone(),
+                    challenge,
+                });
+            }
+        }
+        if status == StatusCode::METHOD_NOT_ALLOWED {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(Error::Protocol {
+                server: self.server_name.clone(),
+                error: format!("SSE resume GET failed: HTTP {status}"),
+            });
+        }
+        Ok(Some(response))
+    }
 }
 
 fn build_static_headers(
@@ -576,10 +714,11 @@ fn build_static_headers(
 ) -> Result<HeaderMap, Error> {
     let mut map = HeaderMap::new();
     for (name, value) in headers {
-        let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|err| Error::Protocol {
-            server: server.to_string(),
-            error: format!("invalid header name `{name}`: {err}"),
-        })?;
+        let header_name =
+            HeaderName::from_bytes(name.as_bytes()).map_err(|err| Error::Protocol {
+                server: server.to_string(),
+                error: format!("invalid header name `{name}`: {err}"),
+            })?;
         let header_value = HeaderValue::from_str(value).map_err(|err| Error::Protocol {
             server: server.to_string(),
             error: format!("invalid header value for `{name}`: {err}"),
@@ -589,6 +728,13 @@ fn build_static_headers(
     Ok(map)
 }
 
+struct SseReadState {
+    events: Vec<SseEvent>,
+    last_event_id: Option<String>,
+    last_retry: Duration,
+    result: Option<Value>,
+}
+
 fn extract_result(server: &str, target_id: u64, message: &Value) -> Result<Value, Error> {
     let Some(id_value) = message.get("id") else {
         return Err(Error::Protocol {
@@ -596,10 +742,7 @@ fn extract_result(server: &str, target_id: u64, message: &Value) -> Result<Value
             error: "JSON-RPC response missing id".to_string(),
         });
     };
-    if id_value.as_u64() != Some(target_id)
-        && id_value.as_i64() != Some(target_id as i64)
-        && id_value.as_str().and_then(|s| s.parse().ok()) != Some(target_id)
-    {
+    if !jsonrpc_id_matches(id_value, target_id) {
         return Err(Error::Protocol {
             server: server.to_string(),
             error: format!("JSON-RPC response id mismatch (expected {target_id})"),
@@ -612,6 +755,12 @@ fn extract_result(server: &str, target_id: u64, message: &Value) -> Result<Value
         });
     }
     Ok(message.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn jsonrpc_id_matches(id_value: &Value, target_id: u64) -> bool {
+    id_value.as_u64() == Some(target_id)
+        || id_value.as_i64() == Some(target_id as i64)
+        || id_value.as_str().and_then(|s| s.parse().ok()) == Some(target_id)
 }
 
 /// Test helper: build client without initialize (wiremock tests drive initialize themselves).
@@ -714,7 +863,9 @@ mod tests {
                                 "tools": [{ "name": "echo" }]
                             }
                         })),
-                    other => ResponseTemplate::new(500).set_body_string(format!("unexpected {other}")),
+                    other => {
+                        ResponseTemplate::new(500).set_body_string(format!("unexpected {other}"))
+                    }
                 }
             })
             .mount(&server)
@@ -821,7 +972,9 @@ mod tests {
                             }
                         })),
                     "notifications/initialized" => ResponseTemplate::new(202),
-                    other => ResponseTemplate::new(500).set_body_string(format!("unexpected {other}")),
+                    other => {
+                        ResponseTemplate::new(500).set_body_string(format!("unexpected {other}"))
+                    }
                 }
             })
             .mount(&server)
@@ -860,6 +1013,271 @@ mod tests {
                 .expect("token");
         }
 
-        client.initialize_for_test().await.expect("init with bearer");
+        client
+            .initialize_for_test()
+            .await
+            .expect("init with bearer");
+    }
+
+    #[tokio::test]
+    async fn sse_accepts_final_event_without_trailing_blank_line() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(|req: &Request| {
+                let (id, method) = jsonrpc_method(req);
+                match method.as_str() {
+                    "initialize" => ResponseTemplate::new(200)
+                        .insert_header("content-type", "application/json")
+                        .insert_header("mcp-session-id", "s")
+                        .set_body_json(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2025-11-25",
+                                "capabilities": {},
+                                "serverInfo": { "name": "mock", "version": "0" }
+                            }
+                        })),
+                    "notifications/initialized" => ResponseTemplate::new(202),
+                    "tools/call" => {
+                        // Final JSON-RPC response with no trailing blank line.
+                        let sse = format!(
+                            "data: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"ok\":true}}}}\n"
+                        );
+                        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+                    }
+                    other => {
+                        ResponseTemplate::new(500).set_body_string(format!("unexpected {other}"))
+                    }
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let mut client = McpHttpClient::connect_uninitialized_for_test(
+            "remote",
+            &format!("{}/mcp", server.uri()),
+            HashMap::new(),
+            None,
+            5_000,
+        )
+        .await
+        .expect("client");
+        client.initialize_for_test().await.expect("init");
+        let result = client
+            .request("tools/call", json!({"name": "echo", "arguments": {}}))
+            .await
+            .expect("call");
+        assert_eq!(result["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn sse_matches_string_jsonrpc_ids() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(|req: &Request| {
+                let (id, method) = jsonrpc_method(req);
+                match method.as_str() {
+                    "initialize" => ResponseTemplate::new(200)
+                        .insert_header("content-type", "application/json")
+                        .insert_header("mcp-session-id", "s")
+                        .set_body_json(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2025-11-25",
+                                "capabilities": {},
+                                "serverInfo": { "name": "mock", "version": "0" }
+                            }
+                        })),
+                    "notifications/initialized" => ResponseTemplate::new(202),
+                    "tools/call" => {
+                        let sse = format!(
+                            "data: {{\"jsonrpc\":\"2.0\",\"id\":\"{id}\",\"result\":{{\"ok\":true}}}}\n\n"
+                        );
+                        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+                    }
+                    other => ResponseTemplate::new(500).set_body_string(format!("unexpected {other}")),
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let mut client = McpHttpClient::connect_uninitialized_for_test(
+            "remote",
+            &format!("{}/mcp", server.uri()),
+            HashMap::new(),
+            None,
+            5_000,
+        )
+        .await
+        .expect("client");
+        client.initialize_for_test().await.expect("init");
+        let result = client
+            .request("tools/call", json!({"name": "echo", "arguments": {}}))
+            .await
+            .expect("call");
+        assert_eq!(result["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn forbidden_insufficient_scope_is_unauthorized() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(|req: &Request| {
+                let (id, method) = jsonrpc_method(req);
+                match method.as_str() {
+                    "initialize" => ResponseTemplate::new(200)
+                        .insert_header("content-type", "application/json")
+                        .insert_header("mcp-session-id", "s")
+                        .set_body_json(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2025-11-25",
+                                "capabilities": {},
+                                "serverInfo": { "name": "mock", "version": "0" }
+                            }
+                        })),
+                    "notifications/initialized" => ResponseTemplate::new(202),
+                    "tools/call" => ResponseTemplate::new(403)
+                        .insert_header(
+                            "www-authenticate",
+                            r#"Bearer error="insufficient_scope", scope="tools:write""#,
+                        )
+                        .set_body_string("forbidden"),
+                    other => {
+                        ResponseTemplate::new(500).set_body_string(format!("unexpected {other}"))
+                    }
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let mut client = McpHttpClient::connect_uninitialized_for_test(
+            "remote",
+            &format!("{}/mcp", server.uri()),
+            HashMap::new(),
+            None,
+            5_000,
+        )
+        .await
+        .expect("client");
+        client.initialize_for_test().await.expect("init");
+        let err = client
+            .request("tools/call", json!({"name": "echo", "arguments": {}}))
+            .await
+            .expect_err("should be unauthorized");
+        match err {
+            Error::Unauthorized { challenge, .. } => {
+                assert_eq!(
+                    challenge.as_ref().and_then(|c| c.error.as_deref()),
+                    Some("insufficient_scope")
+                );
+                assert_eq!(
+                    challenge.as_ref().and_then(|c| c.scope.as_deref()),
+                    Some("tools:write")
+                );
+            }
+            other => panic!("expected Unauthorized, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recover_access_token_refreshes_instead_of_reusing_cached() {
+        let server = MockServer::start().await;
+        let token_store = tempfile::NamedTempFile::new().expect("tmp");
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": format!("{}/mcp", server.uri()),
+                "authorization_servers": [server.uri()],
+                "scopes_supported": ["mcp:tools"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": server.uri(),
+                "authorization_endpoint": format!("{}/authorize", server.uri()),
+                "token_endpoint": format!("{}/token", server.uri()),
+                "code_challenge_methods_supported": ["S256"]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "access-refreshed",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "refresh-xyz"
+            })))
+            .mount(&server)
+            .await;
+
+        let auth = crate::config::McpOAuthConfig {
+            client_id: Some("test-client".to_string()),
+            client_secret_env: None,
+            client_id_metadata_url: None,
+            scopes: vec!["mcp:tools".to_string()],
+            redirect_port: 0,
+            token_store: Some(token_store.path().to_path_buf()),
+        };
+        let mut client = McpHttpClient::connect_uninitialized_for_test(
+            "secure",
+            &format!("{}/mcp", server.uri()),
+            HashMap::new(),
+            Some(auth),
+            5_000,
+        )
+        .await
+        .expect("client");
+
+        {
+            let oauth = client.oauth.as_mut().expect("oauth");
+            // Seed a still-"valid" but server-rejected access token with a refresh token.
+            oauth.inject_tokens_for_test(crate::mcp::oauth::TokenSet {
+                access_token: "stale-access".into(),
+                refresh_token: Some("refresh-xyz".into()),
+                token_type: "Bearer".into(),
+                scope: Some("mcp:tools".into()),
+                expires_at: Some(now_unix_for_test().saturating_add(3600)),
+            });
+            // ensure_access_token would return the stale token; recover must refresh.
+            assert_eq!(
+                oauth.ensure_access_token(None).await.expect("ensure"),
+                "stale-access"
+            );
+            let token = oauth
+                .recover_access_token(Some(&BearerChallenge {
+                    error: Some("invalid_token".into()),
+                    scope: None,
+                    resource_metadata: Some(format!(
+                        "{}/.well-known/oauth-protected-resource",
+                        server.uri()
+                    )),
+                }))
+                .await
+                .expect("recover");
+            assert_eq!(token, "access-refreshed");
+        }
+    }
+
+    fn now_unix_for_test() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
     }
 }
