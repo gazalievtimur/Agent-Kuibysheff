@@ -51,6 +51,11 @@ Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
 .\scripts\aoc-eval.ps1 -TaskId 2024-01-1
 ```
 
+```bash
+cp -R ./local/aoc-bank.example ./local/aoc-bank
+./scripts/aoc-eval.sh --task-id 2024-01-1
+```
+
 Конфиг: [`referent/agent-config.aoc.example.yaml`](./referent/agent-config.aoc.example.yaml).
 
 ## Агенты
@@ -59,5 +64,6 @@ Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
 
-AoC solve regression is part of `scripts/check.ps1` via `scripts/aoc-regression.ps1`
+AoC solve regression is part of `scripts/check.ps1` / `scripts/check.sh` via
+`scripts/aoc-regression.ps1` / `scripts/aoc-regression.sh`
 (see [local/README.md](../local/README.md)).

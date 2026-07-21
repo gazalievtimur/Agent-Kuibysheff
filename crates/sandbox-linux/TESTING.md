@@ -93,6 +93,25 @@ cd ~/src/agent-kuibyshev-test   # or current sync dir
 cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
 ```
 
+## AoC agent regression (on Linux)
+
+Same live-agent gate as Windows `scripts/aoc-regression.ps1`, but as bash:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+cd ~/src/agent-kuibyshev-test
+chmod +x ./scripts/*.sh
+cp -Rn ./local/aoc-bank.example ./local/aoc-bank   # if bank missing
+# Provide API key via .env / agent-config.local.yaml / POLZA_API_KEY
+./scripts/aoc-regression.sh
+./scripts/aoc-regression.sh --task-id 2024-01-1
+./scripts/check.sh --skip-aoc   # fmt/clippy/cargo test only
+```
+
+Requires Node.js + `python3` on `PATH`, a populated `local/aoc-bank/`, and working
+unprivileged userns (see AppArmor notes above). Details:
+[local/README.md](../../local/README.md).
+
 Cross-check from Windows without running tests:
 
 ```powershell
