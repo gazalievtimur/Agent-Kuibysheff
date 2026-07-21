@@ -11,8 +11,17 @@ This directory holds **local-only** Advent of Code evaluation assets.
 
 ## Setup
 
+Windows:
+
 ```powershell
 Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
+# Edit/replace JSON files under local/aoc-bank with real puzzles.
+```
+
+Linux:
+
+```bash
+cp -R ./local/aoc-bank.example ./local/aoc-bank
 # Edit/replace JSON files under local/aoc-bank with real puzzles.
 ```
 
@@ -20,6 +29,10 @@ Optional:
 
 ```powershell
 $env:AOC_BANK_DIR = (Resolve-Path .\local\aoc-bank).Path
+```
+
+```bash
+export AOC_BANK_DIR="$(pwd)/local/aoc-bank"
 ```
 
 Requirements:
@@ -30,21 +43,40 @@ Requirements:
 
 ## Run eval (Referent)
 
+Windows:
+
 ```powershell
 .\scripts\aoc-eval.ps1
 .\scripts\aoc-eval.ps1 -TaskId 2024-01-1
 ```
 
+Linux:
+
+```bash
+chmod +x ./scripts/*.sh
+./scripts/aoc-eval.sh
+./scripts/aoc-eval.sh --task-id 2024-01-1
+```
+
 ### Regression gate
 
-AoC eval is part of the normal local quality gate and runs on every
-`scripts/check.ps1` invocation (unless `-SkipAoc`):
+AoC eval is part of the normal local quality gate:
+
+- Windows: every `scripts/check.ps1` (unless `-SkipAoc`)
+- Linux: every `scripts/check.sh` (unless `--skip-aoc`)
 
 ```powershell
 $env:POLZA_API_KEY = "..."   # or set provider.api_key / .env
 .\scripts\check.ps1
 .\scripts\aoc-regression.ps1              # AoC-only
 .\scripts\check.ps1 -SkipAoc              # fmt/clippy/cargo test only
+```
+
+```bash
+export POLZA_API_KEY="..."   # or set provider.api_key / .env
+./scripts/check.sh
+./scripts/aoc-regression.sh              # AoC-only
+./scripts/check.sh --skip-aoc            # fmt/clippy/cargo test only
 ```
 
 Requirements for the gate:
@@ -57,12 +89,16 @@ Requirements for the gate:
 
 The harness:
 
-1. Builds a fresh `target/release` agent (`aoc-regression.ps1`)
+1. Builds a fresh `target/release` agent (`aoc-regression.ps1` / `aoc-regression.sh`)
 2. Loads tasks from `local/aoc-bank`
 3. Writes a per-run config with fail-closed `access` (python alias + runtime roots)
 4. Runs `agent_Kuibyshev` once per task with `--settings-dir test-agents/referent`
 5. Compares `RunOutput.result` to `expected`
 6. Writes `local/aoc-runs/<run-id>/report.json`
+
+On Linux the harness uses the host `python3` directly (namespace mounts cover
+runtime roots). See also [crates/sandbox-linux/TESTING.md](../crates/sandbox-linux/TESTING.md)
+for userns / AppArmor notes on lab hosts.
 
 Each AoC task run writes agent logs under:
 

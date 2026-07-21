@@ -138,6 +138,12 @@ $env:POLZA_API_KEY = "..."   # only if not using provider.api_key or .env
 .\scripts\check.ps1 -SkipAoc  # skip live agent eval when needed
 ```
 
+```bash
+export POLZA_API_KEY="..."   # only if not using provider.api_key or .env
+./scripts/check.sh
+./scripts/check.sh --skip-aoc  # skip live agent eval when needed
+```
+
 Individual commands:
 
 ```powershell
@@ -145,6 +151,13 @@ cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test
 .\scripts\aoc-regression.ps1
+```
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test
+./scripts/aoc-regression.sh
 ```
 
 Cursor/VS Code picks up [`.vscode/settings.json`](.vscode/settings.json) for
