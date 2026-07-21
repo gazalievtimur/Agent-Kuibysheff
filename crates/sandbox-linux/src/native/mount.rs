@@ -173,6 +173,7 @@ pub fn setup_rootfs(
 
     // Mount proc before pivot while still PID1 in the new pid namespace.
     // Some kernels reject proc mounts after pivot_root/umount of the old root.
+    // SAFETY: getpid is always safe; used only to build a unique scratch path name.
     let pid = unsafe { libc::getpid() };
     if pid != 1 {
         return Err(SandboxLinuxError::setup(

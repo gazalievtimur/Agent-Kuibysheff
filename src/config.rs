@@ -267,9 +267,16 @@ impl Default for LogSinkConfig {
 
 /// Loads variables from a `.env` file in the current working directory when present.
 ///
-/// Existing process environment variables are not overwritten.
+/// Existing process environment variables are not overwritten. A missing `.env` file is ignored;
+/// other I/O or parse failures are logged.
 pub fn load_dotenv() {
-    let _ = dotenvy::dotenv();
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(err) if err.not_found() => {}
+        Err(err) => {
+            eprintln!("warning: failed to load .env file: {err}");
+        }
+    }
 }
 
 /// Loads and validates runtime configuration from a YAML or JSON file.

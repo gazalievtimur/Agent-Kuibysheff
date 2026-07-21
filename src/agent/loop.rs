@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
 
+use crate::access::QualifiedTool;
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
 use crate::mcp::ToolExecutor;
@@ -170,11 +171,42 @@ impl AgentEngine {
             );
 
             for tool_call in directive.tool_calls {
-                let qualified_tool = format!("{}.{}", tool_call.server, tool_call.tool);
+                let qualified = match QualifiedTool::parse(&format!(
+                    "{}.{}",
+                    tool_call.server, tool_call.tool
+                )) {
+                    Ok(qualified) => qualified,
+                    Err(reason) => {
+                        warn!(
+                            server = %tool_call.server,
+                            tool = %tool_call.tool,
+                            error = %reason,
+                            "tool call name rejected; returning error to the model"
+                        );
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage::new(
+                                ChatRole::User,
+                                json!({
+                                    "tool_result": {
+                                        "server": tool_call.server,
+                                        "tool": tool_call.tool,
+                                        "error": reason
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        );
+                        prune_message_history(&mut messages);
+                        continue;
+                    }
+                };
+                let qualified_tool = qualified.qualified();
 
                 let tool_response = match self
                     .tools
-                    .call_tool(&tool_call.server, &tool_call.tool, tool_call.arguments)
+                    .call_tool(&qualified.server, &qualified.tool, tool_call.arguments)
                     .await
                 {
                     Ok(value) => value,
@@ -191,8 +223,8 @@ impl AgentEngine {
                                 ChatRole::User,
                                 json!({
                                     "tool_result": {
-                                        "server": tool_call.server,
-                                        "tool": tool_call.tool,
+                                        "server": qualified.server,
+                                        "tool": qualified.tool,
                                         "error": err.to_string()
                                     }
                                 })
@@ -215,8 +247,8 @@ impl AgentEngine {
                         ChatRole::User,
                         json!({
                             "tool_result": {
-                                "server": tool_call.server,
-                                "tool": tool_call.tool,
+                                "server": qualified.server,
+                                "tool": qualified.tool,
                                 "result": tool_response
                             }
                         })

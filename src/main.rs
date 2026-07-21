@@ -20,7 +20,7 @@ use agent_Kuibyshev::tools::local_tools::LocalTools;
 use agent_Kuibyshev::tools::{CompositeToolExecutor, PolicyToolExecutor};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use tracing::info;
+use tracing::{error, info};
 
 fn main() {
     // Must run before Tokio so the Linux sandbox helper stays single-threaded.
@@ -40,9 +40,12 @@ fn main() {
 
     match serde_json::to_string_pretty(&output) {
         Ok(payload) => println!("{payload}"),
-        Err(_) => println!(
-            "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
-        ),
+        Err(err) => {
+            error!(error = %err, "failed to serialize RunOutput as JSON");
+            println!(
+                "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
+            );
+        }
     }
 }
 

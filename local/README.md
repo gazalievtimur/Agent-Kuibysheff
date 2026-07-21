@@ -7,6 +7,7 @@ This directory holds **local-only** Advent of Code evaluation assets.
 | `aoc-bank.example/` | yes | Schema sample and one toy task |
 | `aoc-bank/` | **no** | Your real task bank (`id`, `text`, `input`, `expected`) |
 | `aoc-runs/` | **no** | Per-run homes and `report.json` from the harness |
+| `aoc-sandbox-runtime/` | **no** | Staged Python tree for AppContainer ACL grants |
 
 ## Setup
 
@@ -51,14 +52,17 @@ Requirements for the gate:
 - `local/aoc-bank/` with at least one task JSON
 - `agent-config.local.yaml` (preferred) or `test-agents/referent/agent-config.aoc.example.yaml`
 - API key env var from that config
-- Node.js + Python on `PATH`
+- Node.js + Python on `PATH` (resolved into sandboxed `home.run`)
+- OS sandbox available (Windows AppContainer / Linux namespaces)
 
 The harness:
 
-1. Loads tasks from `local/aoc-bank`
-2. Runs `agent_Kuibyshev` once per task with `--settings-dir test-agents/referent`
-3. Compares `RunOutput.result` to `expected`
-4. Writes `local/aoc-runs/<run-id>/report.json`
+1. Builds a fresh `target/release` agent (`aoc-regression.ps1`)
+2. Loads tasks from `local/aoc-bank`
+3. Writes a per-run config with fail-closed `access` (python alias + runtime roots)
+4. Runs `agent_Kuibyshev` once per task with `--settings-dir test-agents/referent`
+5. Compares `RunOutput.result` to `expected`
+6. Writes `local/aoc-runs/<run-id>/report.json`
 
 Each AoC task run writes agent logs under:
 

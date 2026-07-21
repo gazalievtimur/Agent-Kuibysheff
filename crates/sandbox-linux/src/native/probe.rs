@@ -80,14 +80,17 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
         unsafe {
             libc::close(write_fd);
         }
+        // SAFETY: unshare creates new user/net/mount namespaces for this probe child only.
         let unshare_rc =
             unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET | libc::CLONE_NEWNS) };
         if unshare_rc != 0 {
+            // SAFETY: terminate the probe child without unwinding into the parent runtime.
             unsafe { libc::_exit(1) };
         }
         // Block until parent closes write end (maps written) or errors out.
         let mut buf = [0u8; 1];
         loop {
+            // SAFETY: read on the owned pipe end; buf is valid for one byte.
             let n = unsafe { libc::read(read_fd, buf.as_mut_ptr().cast(), 1) };
             if n == 0 {
                 break;
@@ -97,6 +100,7 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
                 if err.raw_os_error() == Some(libc::EINTR) {
                     continue;
                 }
+                // SAFETY: terminate the probe child after an unrecoverable read error.
                 unsafe { libc::_exit(2) };
             }
         }
@@ -111,6 +115,7 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
                 std::ptr::null(),
             )
         };
+        // SAFETY: exit with mount result; must not return into the agent runtime.
         unsafe { libc::_exit(if mount_rc == 0 { 0 } else { 3 }) };
     }
 
@@ -162,6 +167,7 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
 }
 
 fn write_probe_id_maps(child_pid: libc::pid_t) -> Result<(), SandboxLinuxError> {
+    // SAFETY: geteuid/getegid are always safe; they only read the calling process credentials.
     let uid = unsafe { libc::geteuid() };
     let gid = unsafe { libc::getegid() };
     let proc = format!("/proc/{child_pid}");

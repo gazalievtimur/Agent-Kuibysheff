@@ -106,7 +106,33 @@ impl AclJournal {
             return Ok(());
         }
 
-        let wide = path_to_wide_null(&path_buf);
+        match self.try_grant_dacl(&path_buf, package_sid, access, inherit) {
+            Ok(()) => Ok(()),
+            // Some third-party install trees (e.g. C:\Python312) reject inheritable ACE
+            // updates with ERROR_INVALID_PARAMETER; retry without inheritance.
+            Err(first) if inherit => match self.try_grant_dacl(&path_buf, package_sid, access, false)
+            {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    self.seen.remove(&path_buf);
+                    Err(first)
+                }
+            },
+            Err(err) => {
+                self.seen.remove(&path_buf);
+                Err(err)
+            }
+        }
+    }
+
+    fn try_grant_dacl(
+        &mut self,
+        path_buf: &Path,
+        package_sid: PSID,
+        access: u32,
+        inherit: bool,
+    ) -> Result<(), SandboxWindowsError> {
+        let wide = path_to_wide_null(path_buf);
         let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
         let mut dacl: *mut ACL = ptr::null_mut();
 
@@ -124,7 +150,6 @@ impl AclJournal {
             )
         };
         if status != ERROR_SUCCESS {
-            self.seen.remove(&path_buf);
             return Err(setup_last(
                 SandboxStage::AclGrant,
                 &format!("GetNamedSecurityInfoW({})", path_buf.display()),
@@ -154,7 +179,6 @@ impl AclJournal {
         // SAFETY: SetEntriesInAclW merges `ea` into `dacl` and allocates `new_dacl`.
         let acl_status = unsafe { SetEntriesInAclW(1, &mut ea, dacl, &mut new_dacl) };
         if acl_status != ERROR_SUCCESS {
-            self.seen.remove(&path_buf);
             // SAFETY: free the SD we just retrieved before returning.
             unsafe {
                 LocalFree(sd.cast());
@@ -182,7 +206,6 @@ impl AclJournal {
             LocalFree(new_dacl.cast());
         }
         if set_status != ERROR_SUCCESS {
-            self.seen.remove(&path_buf);
             unsafe {
                 LocalFree(sd.cast());
             }
@@ -193,7 +216,7 @@ impl AclJournal {
         }
 
         self.grants.push(AclGrant {
-            path: path_buf,
+            path: path_buf.to_path_buf(),
             original_sd: sd,
         });
         Ok(())

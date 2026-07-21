@@ -13,6 +13,23 @@ use crate::mcp::{Error, ToolExecutor};
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
 
+/// Built-in tool servers routed by [`CompositeToolExecutor`] before MCP fallthrough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltinServer {
+    Home,
+    LocalTools,
+}
+
+impl BuiltinServer {
+    fn parse(server: &str) -> Option<Self> {
+        match server {
+            "home" => Some(Self::Home),
+            "local_tools" => Some(Self::LocalTools),
+            _ => None,
+        }
+    }
+}
+
 pub struct CompositeToolExecutor {
     home: HomeFs,
     local_tools: LocalTools,
@@ -20,6 +37,7 @@ pub struct CompositeToolExecutor {
 }
 
 impl CompositeToolExecutor {
+    #[must_use]
     pub fn new(home: HomeFs, local_tools: LocalTools, external: Arc<dyn ToolExecutor>) -> Self {
         Self {
             home,
@@ -32,10 +50,10 @@ impl CompositeToolExecutor {
 #[async_trait]
 impl ToolExecutor for CompositeToolExecutor {
     async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
-        match server {
-            "home" => self.home.call(tool, arguments).await,
-            "local_tools" => self.local_tools.call(tool, arguments).await,
-            _ => self.external.call_tool(server, tool, arguments).await,
+        match BuiltinServer::parse(server) {
+            Some(BuiltinServer::Home) => self.home.call(tool, arguments).await,
+            Some(BuiltinServer::LocalTools) => self.local_tools.call(tool, arguments).await,
+            None => self.external.call_tool(server, tool, arguments).await,
         }
     }
 
@@ -80,8 +98,8 @@ impl PolicyToolExecutor {
 #[async_trait]
 impl ToolExecutor for PolicyToolExecutor {
     async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
+        let qualified = format!("{server}.{tool}");
         if !self.policy.allows_server_tool(server, tool) {
-            let qualified = format!("{server}.{tool}");
             warn!(
                 capability = %qualified,
                 decision = "deny",
@@ -89,7 +107,6 @@ impl ToolExecutor for PolicyToolExecutor {
             );
             return Err(Error::PolicyDenied { tool: qualified });
         }
-        let qualified = format!("{server}.{tool}");
         tracing::info!(
             capability = %qualified,
             decision = "allow",

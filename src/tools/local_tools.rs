@@ -42,13 +42,13 @@ impl LocalTools {
     pub async fn new(root: &Path, policy: WorkspaceFsPolicy) -> Result<Self, Error> {
         fs::create_dir_all(root)
             .await
-            .map_err(|error| local_io("create_dir_all", root, &error))?;
+            .map_err(|error| local_io("create_dir_all", root, error))?;
         let root = fs::canonicalize(root)
             .await
-            .map_err(|error| local_io("canonicalize", root, &error))?;
+            .map_err(|error| local_io("canonicalize", root, error))?;
         if !fs::metadata(&root)
             .await
-            .map_err(|error| local_io("metadata", &root, &error))?
+            .map_err(|error| local_io("metadata", &root, error))?
             .is_dir()
         {
             return Err(local_path(
@@ -106,7 +106,7 @@ impl LocalTools {
             .map_err(|error| Error::LocalIo {
                 operation: "spawn_blocking".to_string(),
                 path: root_display,
-                error: error.to_string(),
+                source: std::io::Error::other(error.to_string()),
             })
     }
 
@@ -131,17 +131,32 @@ impl LocalTools {
             MIN_READ_CHARS,
             MAX_READ_CHARS,
         );
+        // Hard ceiling uses MAX_READ_CHARS so a small max_chars only truncates, not rejects.
+        let max_bytes = (MAX_READ_CHARS as u64).saturating_mul(4);
+        let file_len = fs::metadata(&path)
+            .await
+            .map_err(|error| local_io("metadata", &path, error))?
+            .len();
+        if file_len > max_bytes {
+            return Err(local_path(
+                relative.display().to_string(),
+                format!(
+                    "file size {file_len} bytes exceeds read limit of {max_bytes} bytes \
+                     ({MAX_READ_CHARS} chars at UTF-8 worst case)"
+                ),
+            ));
+        }
 
         let content = fs::read_to_string(&path)
             .await
-            .map_err(|error| local_io("read_to_string", &path, &error))?;
+            .map_err(|error| local_io("read_to_string", &path, error))?;
 
         let total_chars = content.chars().count();
         let content = if total_chars > max_chars {
-            format!(
-                "{}\n...[truncated]",
-                content.chars().take(max_chars).collect::<String>()
-            )
+            let mut truncated = String::with_capacity(max_chars.saturating_add(16));
+            truncated.extend(content.chars().take(max_chars));
+            truncated.push_str("\n...[truncated]");
+            truncated
         } else {
             content
         };
@@ -158,16 +173,16 @@ impl LocalTools {
         let candidate = self.root.join(relative);
         let symlink_meta = fs::symlink_metadata(&candidate)
             .await
-            .map_err(|error| local_io("symlink_metadata", &candidate, &error))?;
+            .map_err(|error| local_io("symlink_metadata", &candidate, error))?;
         if symlink_meta.file_type().is_symlink() {
             let canonical = fs::canonicalize(&candidate)
                 .await
-                .map_err(|error| local_io("canonicalize", &candidate, &error))?;
+                .map_err(|error| local_io("canonicalize", &candidate, error))?;
             ensure_within_root(&self.root, &canonical, relative)?;
             ensure_grant_for_canonical(&self.root, &self.policy, &canonical, relative)?;
             if !fs::metadata(&canonical)
                 .await
-                .map_err(|error| local_io("metadata", &canonical, &error))?
+                .map_err(|error| local_io("metadata", &canonical, error))?
                 .is_file()
             {
                 return Err(local_path(
@@ -180,7 +195,7 @@ impl LocalTools {
 
         let canonical = fs::canonicalize(&candidate)
             .await
-            .map_err(|error| local_io("canonicalize", &candidate, &error))?;
+            .map_err(|error| local_io("canonicalize", &candidate, error))?;
         ensure_within_root(&self.root, &canonical, relative)?;
         ensure_grant_for_canonical(&self.root, &self.policy, &canonical, relative)?;
         Ok(canonical)
@@ -289,7 +304,7 @@ fn initial_search_dirs(root: &Path, policy: &WorkspaceFsPolicy) -> Vec<(PathBuf,
         return Vec::new();
     }
 
-    let mut dirs = Vec::new();
+    let mut dirs = Vec::with_capacity(policy.read.grants().len());
     for grant in policy.read.grants() {
         let path = if grant.components().is_empty() {
             root.to_path_buf()
@@ -471,11 +486,11 @@ fn local_path(path: String, error: impl Into<String>) -> Error {
     }
 }
 
-fn local_io(operation: &str, path: &Path, error: &std::io::Error) -> Error {
+fn local_io(operation: &str, path: &Path, error: std::io::Error) -> Error {
     Error::LocalIo {
         operation: operation.to_string(),
         path: path.display().to_string(),
-        error: error.to_string(),
+        source: error,
     }
 }
 

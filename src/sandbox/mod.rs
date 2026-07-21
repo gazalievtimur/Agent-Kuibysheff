@@ -63,7 +63,8 @@ pub enum SandboxError {
     TimeoutCleanup { reason: String },
 }
 
-/// Platform backend that executes a validated [`SandboxSpec`].
+/// Object-safe sandbox backend; `async_trait` is required because native `async fn` in traits is not
+/// dyn-compatible for `Arc<dyn SandboxBackend>`.
 #[async_trait]
 pub trait SandboxBackend: Send + Sync {
     /// Confirms the backend can enforce the sandbox before any payload starts.

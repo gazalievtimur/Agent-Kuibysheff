@@ -73,9 +73,9 @@ impl McpRegistry {
                     }),
                 )
                 .await
-                .map_err(|err| Error::Protocol {
+                .map_err(|err| Error::Logging {
                     server: cfg.name.clone(),
-                    error: err.to_string(),
+                    source: err,
                 })?;
             }
 
@@ -202,9 +202,9 @@ impl ToolExecutor for McpRegistry {
                 }),
             )
             .await
-            .map_err(|err| Error::Protocol {
+            .map_err(|err| Error::Logging {
                 server: server.to_string(),
-                error: err.to_string(),
+                source: err,
             })?;
         }
 

@@ -34,6 +34,8 @@ impl JobObject {
         // SAFETY: `raw` is a uniquely owned job handle from CreateJobObjectW.
         let handle = unsafe { OwnedHandle::from_raw(raw) };
 
+        // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is a Win32 POD struct; all-bits-zero is a
+        // valid representation before we set LimitFlags and related fields.
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if !allow_children {

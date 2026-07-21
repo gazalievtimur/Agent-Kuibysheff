@@ -10,6 +10,7 @@ use crate::error::{SandboxLinuxError, SandboxStage};
 
 /// Maps the caller's UID/GID to 0 inside the child's user namespace.
 pub fn write_id_maps(child_pid: pid_t) -> Result<(), SandboxLinuxError> {
+    // SAFETY: geteuid/getegid are always safe; they only read the calling process credentials.
     let uid = unsafe { libc::geteuid() };
     let gid = unsafe { libc::getegid() };
     let proc = PathBuf::from(format!("/proc/{child_pid}"));

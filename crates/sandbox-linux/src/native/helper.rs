@@ -102,6 +102,8 @@ fn wait_pidfd(pidfd: OwnedFd, deadline: Duration) -> Result<i32, SandboxLinuxErr
             continue;
         }
 
+        // SAFETY: waitid writes into `info`; all-bits-zero is a valid POD representation before
+        // a successful waitid call, after which only documented fields are read.
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         // SAFETY: waitid with P_PIDFD retrieves exit status without pid reuse races.
         let wr = unsafe {

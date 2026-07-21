@@ -41,13 +41,13 @@ impl HomeFs {
     ) -> Result<Self, Error> {
         fs::create_dir_all(root)
             .await
-            .map_err(|error| home_io("create_dir_all", root, &error))?;
+            .map_err(|error| home_io("create_dir_all", root, error))?;
         let root = fs::canonicalize(root)
             .await
-            .map_err(|error| home_io("canonicalize", root, &error))?;
+            .map_err(|error| home_io("canonicalize", root, error))?;
         if !fs::metadata(&root)
             .await
-            .map_err(|error| home_io("metadata", &root, &error))?
+            .map_err(|error| home_io("metadata", &root, error))?
             .is_dir()
         {
             return Err(Error::HomePath {
@@ -56,7 +56,15 @@ impl HomeFs {
             });
         }
         if !policy.programs.is_empty() {
-            sandbox.probe().map_err(map_sandbox_error)?;
+            let probe_sandbox = Arc::clone(&sandbox);
+            tokio::task::spawn_blocking(move || probe_sandbox.probe())
+                .await
+                .map_err(|error| Error::HomeIo {
+                    operation: "spawn_blocking".to_string(),
+                    path: String::new(),
+                    source: std::io::Error::other(error.to_string()),
+                })?
+                .map_err(map_sandbox_error)?;
         }
         Ok(Self {
             root,
@@ -86,7 +94,7 @@ impl HomeFs {
             }
             "run" => {
                 let args: RunArgs = decode_args(tool, arguments)?;
-                self.run(&args.program, &args.args, args.timeout_ms).await
+                self.run(args.program, args.args, args.timeout_ms).await
             }
             _ => Err(Error::UnknownTool {
                 server: "home".to_string(),
@@ -103,7 +111,7 @@ impl HomeFs {
         let path = self.resolve_existing(relative, PathOperation::Read).await?;
         let metadata = fs::metadata(&path)
             .await
-            .map_err(|error| home_io("metadata", &path, &error))?;
+            .map_err(|error| home_io("metadata", &path, error))?;
         if !metadata.is_dir() {
             return Err(Error::HomePath {
                 path: relative.display().to_string(),
@@ -113,36 +121,34 @@ impl HomeFs {
 
         let mut reader = fs::read_dir(&path)
             .await
-            .map_err(|error| home_io("read_dir", &path, &error))?;
-        let mut entries = Vec::new();
+            .map_err(|error| home_io("read_dir", &path, error))?;
+        let mut entries = Vec::with_capacity(32);
         while let Some(entry) = reader
             .next_entry()
             .await
-            .map_err(|error| home_io("read_dir", &path, &error))?
+            .map_err(|error| home_io("read_dir", &path, error))?
         {
             let file_type = entry
                 .file_type()
                 .await
-                .map_err(|error| home_io("file_type", &entry.path(), &error))?;
-            entries.push(json!({
-                "name": entry.file_name().to_string_lossy(),
-                "kind": if file_type.is_dir() {
-                    "directory"
-                } else if file_type.is_file() {
-                    "file"
-                } else if file_type.is_symlink() {
-                    "symlink"
-                } else {
-                    "other"
-                }
-            }));
+                .map_err(|error| home_io("file_type", &entry.path(), error))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let kind = if file_type.is_dir() {
+                "directory"
+            } else if file_type.is_file() {
+                "file"
+            } else if file_type.is_symlink() {
+                "symlink"
+            } else {
+                "other"
+            };
+            entries.push((name, kind));
         }
-        entries.sort_by(|a, b| {
-            a["name"]
-                .as_str()
-                .unwrap_or_default()
-                .cmp(b["name"].as_str().unwrap_or_default())
-        });
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let entries: Vec<Value> = entries
+            .into_iter()
+            .map(|(name, kind)| json!({ "name": name, "kind": kind }))
+            .collect();
 
         Ok(json!({
             "path": display_relative(relative),
@@ -156,12 +162,27 @@ impl HomeFs {
             .allows_relative(relative, PathOperation::Read)
             .map_err(|reason| invalid_path(relative, reason))?;
         let path = self.resolve_existing(relative, PathOperation::Read).await?;
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|error| home_io("read_to_string", &path, &error))?;
         let max_chars = max_chars
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1, MAX_READ_CHARS);
+        // Hard ceiling uses MAX_READ_CHARS so a small max_chars only truncates, not rejects.
+        let max_bytes = (MAX_READ_CHARS as u64).saturating_mul(4);
+        let file_len = fs::metadata(&path)
+            .await
+            .map_err(|error| home_io("metadata", &path, error))?
+            .len();
+        if file_len > max_bytes {
+            return Err(invalid_path(
+                relative,
+                format!(
+                    "file size {file_len} bytes exceeds read limit of {max_bytes} bytes \
+                     ({MAX_READ_CHARS} chars at UTF-8 worst case)"
+                ),
+            ));
+        }
+        let content = fs::read_to_string(&path)
+            .await
+            .map_err(|error| home_io("read_to_string", &path, error))?;
         let total_chars = content.chars().count();
         let truncated = total_chars > max_chars;
         let content = if truncated {
@@ -193,12 +214,12 @@ impl HomeFs {
         if fs::symlink_metadata(&destination).await.is_ok() {
             let canonical = fs::canonicalize(&destination)
                 .await
-                .map_err(|error| home_io("canonicalize", &destination, &error))?;
+                .map_err(|error| home_io("canonicalize", &destination, error))?;
             self.ensure_within_home(&canonical, relative)?;
             self.ensure_grant_for_canonical(&canonical, PathOperation::Write, relative)?;
             if fs::metadata(&canonical)
                 .await
-                .map_err(|error| home_io("metadata", &canonical, &error))?
+                .map_err(|error| home_io("metadata", &canonical, error))?
                 .is_dir()
             {
                 return Err(invalid_path(relative, "path is a directory"));
@@ -207,7 +228,7 @@ impl HomeFs {
 
         fs::write(&destination, content)
             .await
-            .map_err(|error| home_io("write", &destination, &error))?;
+            .map_err(|error| home_io("write", &destination, error))?;
         Ok(json!({
             "path": display_relative(relative),
             "bytes_written": content.len()
@@ -216,8 +237,8 @@ impl HomeFs {
 
     async fn run(
         &self,
-        program: &str,
-        args: &[String],
+        program: String,
+        args: Vec<String>,
         timeout_ms: Option<u64>,
     ) -> Result<Value, Error> {
         if program.trim().is_empty() {
@@ -227,7 +248,7 @@ impl HomeFs {
             });
         }
 
-        let alias = ProgramAlias::parse(program).map_err(|reason| Error::InvalidToolArguments {
+        let alias = ProgramAlias::parse(&program).map_err(|reason| Error::InvalidToolArguments {
             tool: "home.run".to_string(),
             error: reason,
         })?;
@@ -250,7 +271,7 @@ impl HomeFs {
             });
         }
         let mut total_arg_chars = 0usize;
-        for arg in args {
+        for arg in &args {
             if arg.contains('\0') {
                 return Err(Error::InvalidToolArguments {
                     tool: "home.run".to_string(),
@@ -274,10 +295,16 @@ impl HomeFs {
             .clamp(1, self.policy.max_timeout_ms);
 
         let env = build_sandbox_env(&self.root, &program_policy.inherit_env);
+        tracing::info!(
+            capability = "home.run",
+            alias = %alias,
+            timeout_ms,
+            "home.run dispatching to sandbox"
+        );
         let spec = SandboxSpec {
-            alias: alias.clone(),
+            alias,
             executable: program_policy.executable.as_path().to_path_buf(),
-            argv: args.to_vec(),
+            argv: args,
             cwd: self.root.clone(),
             env,
             home_read: absolute_home_grants(&self.root, &self.policy.read),
@@ -288,12 +315,6 @@ impl HomeFs {
             allow_children: program_policy.allow_children,
         };
 
-        tracing::info!(
-            capability = "home.run",
-            alias = %alias,
-            timeout_ms,
-            "home.run dispatching to sandbox"
-        );
         let output = self.sandbox.run(spec).await.map_err(map_sandbox_error)?;
         Ok(sandbox_output_json(&output))
     }
@@ -307,7 +328,7 @@ impl HomeFs {
         let candidate = self.root.join(relative);
         let canonical = fs::canonicalize(&candidate)
             .await
-            .map_err(|error| home_io("canonicalize", &candidate, &error))?;
+            .map_err(|error| home_io("canonicalize", &candidate, error))?;
         self.ensure_within_home(&canonical, relative)?;
         self.ensure_grant_for_canonical(&canonical, operation, relative)?;
         Ok(canonical)
@@ -331,11 +352,11 @@ impl HomeFs {
                     }
                     let canonical = fs::canonicalize(&next)
                         .await
-                        .map_err(|error| home_io("canonicalize", &next, &error))?;
+                        .map_err(|error| home_io("canonicalize", &next, error))?;
                     self.ensure_within_home(&canonical, relative)?;
                     if !fs::metadata(&canonical)
                         .await
-                        .map_err(|error| home_io("metadata", &canonical, &error))?
+                        .map_err(|error| home_io("metadata", &canonical, error))?
                         .is_dir()
                     {
                         return Err(invalid_path(
@@ -350,13 +371,13 @@ impl HomeFs {
                     // intermediate dirs must remain inside home.
                     fs::create_dir(&next)
                         .await
-                        .map_err(|error| home_io("create_dir", &next, &error))?;
+                        .map_err(|error| home_io("create_dir", &next, error))?;
                     current = fs::canonicalize(&next)
                         .await
-                        .map_err(|error| home_io("canonicalize", &next, &error))?;
+                        .map_err(|error| home_io("canonicalize", &next, error))?;
                     self.ensure_within_home(&current, relative)?;
                 }
-                Err(error) => return Err(home_io("symlink_metadata", &next, &error)),
+                Err(error) => return Err(home_io("symlink_metadata", &next, error)),
             }
         }
         Ok(current)
@@ -436,21 +457,7 @@ fn map_sandbox_error(error: SandboxError) -> Error {
         SandboxError::PolicyDenied { reason } => Error::PolicyDenied {
             tool: format!("home.run ({reason})"),
         },
-        SandboxError::Setup { stage, reason } => Error::HomeIo {
-            operation: format!("sandbox_setup:{stage}"),
-            path: String::new(),
-            error: reason,
-        },
-        SandboxError::Io { reason } => Error::HomeIo {
-            operation: "sandbox".to_string(),
-            path: String::new(),
-            error: reason,
-        },
-        SandboxError::TimeoutCleanup { reason } => Error::HomeIo {
-            operation: "sandbox_timeout_cleanup".to_string(),
-            path: String::new(),
-            error: reason,
-        },
+        other => Error::Sandbox { source: other },
     }
 }
 
@@ -468,11 +475,11 @@ fn invalid_path(path: &Path, error: impl Into<String>) -> Error {
     }
 }
 
-fn home_io(operation: &str, path: &Path, error: &std::io::Error) -> Error {
+fn home_io(operation: &str, path: &Path, error: std::io::Error) -> Error {
     Error::HomeIo {
         operation: operation.to_string(),
         path: path.display().to_string(),
-        error: error.to_string(),
+        source: error,
     }
 }
 

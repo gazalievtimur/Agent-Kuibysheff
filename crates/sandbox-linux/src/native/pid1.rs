@@ -40,8 +40,9 @@ fn pid1_try(
     // Wait until parent finished uid/gid maps.
     wait_for_start_barrier(start_pipe_read)?;
 
-    let scratch = PathBuf::from(format!("/tmp/agent-kuibyshev-sb-{}", unsafe {
-        libc::getpid()
+    let scratch = PathBuf::from(format!("/tmp/agent-kuibyshev-sb-{}", {
+        // SAFETY: getpid is always safe; used only to build a unique scratch path name.
+        unsafe { libc::getpid() }
     }));
     fs::create_dir_all(&scratch).map_err(|err| {
         SandboxLinuxError::setup(SandboxStage::Mount, format!("scratch dir: {err}"))
@@ -144,6 +145,8 @@ fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
     let _ = unsafe { libc::fexecve(exec_fd.as_raw_fd(), argv_ptr.as_ptr(), env_ptr.as_ptr()) };
     let err = std::io::Error::last_os_error();
     let msg = format!("exec payload failed: {err}\n");
+    // SAFETY: write a best-effort message to stderr then terminate; `msg` is a live byte buffer
+    // and `_exit` must not unwind into the helper frame.
     unsafe {
         let _ = libc::write(2, msg.as_ptr().cast(), msg.len());
         libc::_exit(127);

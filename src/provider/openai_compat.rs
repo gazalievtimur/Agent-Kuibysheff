@@ -159,7 +159,7 @@ impl ModelClient for OpenAiCompatClient {
 
             let response = self
                 .client
-                .post(self.endpoint.clone())
+                .post(self.endpoint.as_str())
                 .bearer_auth(&self.api_key)
                 .json(&body)
                 .send()

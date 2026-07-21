@@ -275,6 +275,8 @@ fn create_suspended_appcontainer(
         ));
     }
 
+    // SAFETY: STARTUPINFOEXW is a Win32 POD struct; all-bits-zero is a valid representation
+    // before we set `cb`, std handles, and the attribute list pointer.
     let mut siex: STARTUPINFOEXW = unsafe { mem::zeroed() };
     siex.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
     siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -289,6 +291,8 @@ fn create_suspended_appcontainer(
     let env = build_environment_block(&runtime_env)?;
     let cwd = path_to_wide_null(&request.cwd);
 
+    // SAFETY: PROCESS_INFORMATION is a Win32 POD struct; all-bits-zero is valid until
+    // CreateProcessW overwrites the process and thread handles on success.
     let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
     let flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
     // SAFETY: all buffers are NUL-terminated; siex attribute list is initialized.
@@ -434,7 +438,7 @@ fn verify_suspended_token(
     Ok(())
 }
 
-/// Full AppContainer launch: grants → stage under profile folder → create → wait.
+/// Full AppContainer launch: grants → optionally stage under profile folder → create → wait.
 pub fn run_sandboxed(
     request: &SandboxLaunchRequest,
     profile: &AppContainerProfile,
@@ -443,7 +447,7 @@ pub fn run_sandboxed(
     apply_access_grants(journal, profile.sid(), request)?;
     assert_no_loopback_exemption(profile.sid())?;
 
-    let staged = stage_in_profile_folder(request, profile.sid())?;
+    let staged = stage_launch(request, profile.sid())?;
     let staged_request = SandboxLaunchRequest {
         executable: staged.executable,
         argv: request.argv.clone(),
@@ -511,6 +515,7 @@ pub fn run_sandboxed(
         job.terminate(1);
         let _ = unsafe { WaitForSingleObject(launched.process.as_raw(), 5_000) };
     } else if wait != WAIT_OBJECT_0 {
+        // SAFETY: WaitForSingleObject failed; force-kill the primary process then the job tree.
         let _ = unsafe { TerminateProcess(launched.process.as_raw(), 1) };
         job.terminate(1);
         return Err(setup_last(SandboxStage::Resume, "WaitForSingleObject"));
@@ -590,8 +595,43 @@ struct StagedLaunch {
     cwd: PathBuf,
 }
 
-/// Copies the executable into the AppContainer profile folder so path traversal to
-/// host temp directories is not required for process creation.
+fn path_is_under(root: &Path, candidate: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let Ok(candidate) = std::fs::canonicalize(candidate) else {
+        return false;
+    };
+    candidate.starts_with(&root)
+}
+
+/// Chooses how to present the payload executable to `CreateProcessW`.
+///
+/// Interpreters that already live under an ACL-granted `runtime_read_roots` entry
+/// (for example a staged Python tree) are launched in place so sibling DLLs and
+/// `Lib/` stay resolvable and `cwd` remains the policy home.
+///
+/// Bare fixtures with no runtime roots are still copied into the AppContainer
+/// profile folder (self-contained test binaries).
+fn stage_launch(
+    request: &SandboxLaunchRequest,
+    package_sid: PSID,
+) -> Result<StagedLaunch, SandboxWindowsError> {
+    if request
+        .runtime_read_roots
+        .iter()
+        .any(|root| path_is_under(root, &request.executable))
+    {
+        return Ok(StagedLaunch {
+            executable: request.executable.clone(),
+            cwd: request.cwd.clone(),
+        });
+    }
+
+    stage_in_profile_folder(request, package_sid)
+}
+
+/// Copies the executable (and sibling DLLs) into the AppContainer profile folder.
 fn stage_in_profile_folder(
     request: &SandboxLaunchRequest,
     package_sid: PSID,
@@ -623,9 +663,31 @@ fn stage_in_profile_folder(
         )
     })?;
 
+    // Interpreters often need adjacent DLLs (e.g. python312.dll next to python.exe).
+    if let Some(parent) = request.executable.parent() {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name() else {
+                    continue;
+                };
+                let is_dll = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"));
+                if !is_dll {
+                    continue;
+                }
+                let dest = folder.join(name);
+                let _ = std::fs::copy(&path, &dest);
+            }
+        }
+    }
+
     Ok(StagedLaunch {
         executable: staged_exe,
-        cwd: folder,
+        // Keep policy cwd (home); profile folder is only for the staged image.
+        cwd: request.cwd.clone(),
     })
 }
 

@@ -56,6 +56,8 @@ pub struct ModelResponse {
     pub usage: TokenUsage,
 }
 
+/// Object-safe model client; `async_trait` is required because native `async fn` in traits is not
+/// dyn-compatible for `Arc<dyn ModelClient>`.
 #[async_trait]
 pub trait ModelClient: Send + Sync {
     async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, Error>;
