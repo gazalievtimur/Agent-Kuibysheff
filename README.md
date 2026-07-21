@@ -9,7 +9,9 @@ Minimal and reliable CLI agent worker in Rust.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` when the model requests tools.
 - Enforces hard stop limits: iterations, tokens, and max duration.
-- Provides sandboxed `home.list`, `home.read`, `home.write`, and `home.run` tools.
+- Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
+  programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
+  Windows AppContainer) with no network.
 - Produces a final JSON result with usage stats and optional AI/MCP logs.
 
 The CLI is a worker, not an orchestrator. It never applies generated files to a
@@ -29,7 +31,7 @@ external orchestrator must implement.
 ## Quick start
 
 Prerequisites:
-- Rust toolchain (`cargo`)
+- Rust toolchain (`cargo`), MSRV **1.86**
 
 PowerShell commands:
 
@@ -74,10 +76,22 @@ cargo run -- <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
-See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config,
+See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
+(including the optional `access` policy),
 [`settings/`](settings/) for the settings layout,
 [`test-agents/`](test-agents/) for specialized test agent profiles, and
 [`prompt-examples.md`](prompt-examples.md) for ready-to-use `--prompt` templates.
+
+## Access policy and sandbox
+
+Omit `access` for legacy filesystem behavior (`home.run` stays hidden). Add an
+`access` block for fail-closed tools, path grants, and program aliases. Details
+and migration steps: [CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
+
+`home.run` always uses the host OS sandbox (no network). Platform notes:
+
+- Windows AppContainer integration tests: `cargo test -p sandbox-windows --test appcontainer`
+- Linux namespaces: [crates/sandbox-linux/TESTING.md](crates/sandbox-linux/TESTING.md)
 
 ## Rust skills
 
@@ -210,17 +224,38 @@ skill "name" {
 }
 ```
 
-The union of `allowed_tools` is enforced at runtime. Qualified `server.tool`
-names are recommended; bare tool names remain supported.
+The union of skill `allowed_tools` intersects with `access.tools.builtins` for
+built-ins. Declared MCP tools are trusted automatically and are not filtered by
+skills. Tool names must be qualified `server.tool` (bare names are rejected).
 
 ## Reliability notes
 
-- Config is validated before start.
+- Config is validated before start; unknown `access` fields are rejected.
 - Provider and MCP calls use timeout controls.
-- Provider retries on transport errors and `429/5xx`.
+- Provider retries on transport errors and `429/5xx`; cross-origin redirects and
+  HTTP proxies are disabled.
 - Agent exits deterministically on limits and emits `limit_reached`.
 - AI and MCP logs are JSONL for auditing.
+- Policy and sandbox decisions are logged as metadata (capability, allow/deny,
+  exit/truncation); secrets and full env are not logged.
 
 ## Development
 
 - Further improvement roadmap: [docs/FURTHER_FIXES.md](docs/FURTHER_FIXES.md)
+- Linux namespace sandbox remote testing: [crates/sandbox-linux/TESTING.md](crates/sandbox-linux/TESTING.md)
+- Orchestrator contract (access, sandbox, migration): [CONTRACT.md](CONTRACT.md)
+
+```powershell
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo +1.86.0 check --workspace
+```
+
+Platform suites (do not silently skip on the matching OS):
+
+```powershell
+cargo test -p sandbox-windows --test appcontainer
+# On Linux (see crates/sandbox-linux/TESTING.md):
+# cargo test -p sandbox-linux --test namespaces -- --test-threads=1
+```

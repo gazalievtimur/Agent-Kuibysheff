@@ -14,6 +14,10 @@ agent-config.local.yaml
 # AoC eval data and run artifacts (not committed)
 /local/aoc-bank/
 /local/aoc-runs/
+/local/aoc-sandbox-runtime/
+
+# Local code-index cache (not source)
+src/.code-index/
 
 # IDE / OS
 .idea/

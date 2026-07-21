@@ -14,6 +14,8 @@ use crate::limits::TokenUsage;
 pub enum Error {
     #[error("missing provider API key in environment variable `{0}`")]
     MissingApiKey(String),
+    #[error("invalid provider base_url: {0}")]
+    InvalidBaseUrl(String),
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("provider returned status {status}: {body}")]
@@ -54,6 +56,8 @@ pub struct ModelResponse {
     pub usage: TokenUsage,
 }
 
+/// Object-safe model client; `async_trait` is required because native `async fn` in traits is not
+/// dyn-compatible for `Arc<dyn ModelClient>`.
 #[async_trait]
 pub trait ModelClient: Send + Sync {
     async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, Error>;

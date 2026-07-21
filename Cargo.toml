@@ -1,8 +1,12 @@
+[workspace]
+resolver = "2"
+members = [".", "crates/sandbox-linux", "crates/sandbox-windows"]
+
 [package]
 name = "agent_Kuibyshev"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.86"
 
 [dependencies]
 anyhow = "1"
@@ -19,19 +23,29 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sandbox-linux = { path = "crates/sandbox-linux" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+sandbox-windows = { path = "crates/sandbox-windows" }
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 
 [lints.rust]
 unsafe_code = "forbid"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
+# Keep the agent crate actionable under `-D warnings` without drowning in pedantic noise.
+pedantic = { level = "allow", priority = -1 }
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+
+[[bin]]
+name = "sandbox_e2e_fixture"
+path = "src/bin/sandbox_e2e_fixture.rs"

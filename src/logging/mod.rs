@@ -6,11 +6,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use tracing::warn;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
-use tracing::warn;
 
 use crate::config::LoggingConfig;
 use crate::output::LogReport;
@@ -199,11 +199,17 @@ struct FileWriter(Arc<Mutex<std::fs::File>>);
 
 impl Write for FileWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).write(buf)
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).flush()
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush()
     }
 }
 
@@ -240,7 +246,10 @@ mod tests {
         );
 
         let report = loggers.report();
-        assert_eq!(report.ai_log, Some(dir.path().join("ai_usage.jsonl").display().to_string()));
+        assert_eq!(
+            report.ai_log,
+            Some(dir.path().join("ai_usage.jsonl").display().to_string())
+        );
         assert_eq!(
             report.mcp_log,
             Some(dir.path().join("mcp_usage.jsonl").display().to_string())

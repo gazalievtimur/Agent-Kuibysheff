@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod access;
 pub mod agent;
 pub mod cli;
 pub mod config;
@@ -9,6 +10,7 @@ pub mod logging;
 pub mod mcp;
 pub mod output;
 pub mod provider;
+pub mod sandbox;
 pub mod settings;
 pub mod skills;
 pub mod tools;

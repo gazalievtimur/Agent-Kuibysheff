@@ -103,6 +103,89 @@ $maxIterations = Get-YamlScalar $baseConfigText "max_iterations" "40"
 $maxTokens = Get-YamlScalar $baseConfigText "max_tokens" "500000"
 $maxDurationSec = Get-YamlScalar $baseConfigText "max_duration_sec" "900"
 
+function Resolve-PythonForSandbox {
+    $candidates = @()
+    foreach ($name in @("python", "python3")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($null -ne $cmd -and $cmd.Source) {
+            $candidates += [string]$cmd.Source
+        }
+    }
+    try {
+        $pyOut = & py -3 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($pyOut)) {
+            $candidates += ([string]$pyOut).Trim()
+        }
+    } catch {
+        # py launcher optional
+    }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if ($candidate -match '(?i)\\WindowsApps\\') { continue }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    throw "Could not resolve a real python.exe for sandboxed home.run (avoid WindowsApps stub)."
+}
+
+function Ensure-AoCPythonRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$SourceExe
+    )
+
+    # Host installs like C:\Python312 often reject AppContainer ACL inheritance
+    # (win32=87). Stage a user-writable copy under local/ that we can grant.
+    $destRoot = Join-Path $RepoRoot "local\aoc-sandbox-runtime\python"
+    $marker = Join-Path $destRoot ".ak-source"
+    $srcRoot = Split-Path -Parent $SourceExe
+    $destExe = Join-Path $destRoot "python.exe"
+    $needSync = $true
+    if ((Test-Path -LiteralPath $destExe -PathType Leaf) -and (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        $prev = (Get-Content -LiteralPath $marker -Raw -Encoding UTF8).Trim()
+        if ($prev -eq $srcRoot) {
+            $needSync = $false
+        }
+    }
+    if ($needSync) {
+        New-Item -ItemType Directory -Force -Path $destRoot | Out-Null
+        Write-Host "Staging sandboxed Python runtime from $srcRoot -> $destRoot"
+        & robocopy $srcRoot $destRoot /E `
+            /XD Doc Docs tcl tk include Test tests Tools `
+            /XF *.pdb *.htm *.chm `
+            /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+        if ($LASTEXITCODE -ge 8) {
+            throw "robocopy python runtime failed with code $LASTEXITCODE"
+        }
+        Set-Content -LiteralPath $marker -Value $srcRoot -Encoding UTF8
+    }
+    if (-not (Test-Path -LiteralPath $destExe -PathType Leaf)) {
+        throw "Staged python runtime missing executable: $destExe"
+    }
+    return (Resolve-Path -LiteralPath $destRoot).Path
+}
+
+$hostPythonExe = Resolve-PythonForSandbox
+$pythonRoot = Ensure-AoCPythonRuntime -RepoRoot $RepoRoot -SourceExe $hostPythonExe
+$pythonExe = Join-Path $pythonRoot "python.exe"
+$pythonExePosix = ($pythonExe -replace '\\', '/')
+$pythonRootPosix = ($pythonRoot -replace '\\', '/')
+$isWindowsHost = $env:OS -eq "Windows_NT"
+if ($isWindowsHost) {
+    $pythonInheritEnvYaml = '["SYSTEMROOT", "SystemRoot"]'
+} else {
+    # On Linux, use the host interpreter directly (namespace mounts handle roots).
+    $pythonExe = $hostPythonExe
+    $pythonRoot = Split-Path -Parent $hostPythonExe
+    $pythonExePosix = ($pythonExe -replace '\\', '/')
+    $pythonRootPosix = ($pythonRoot -replace '\\', '/')
+    $pythonInheritEnvYaml = "[]"
+}
+
+Write-Host "sandbox python=$pythonExe root=$pythonRoot"
+
 $taskFiles = @(Get-ChildItem -LiteralPath $BankDir -Filter "*.json" | Sort-Object Name)
 if ($taskFiles.Count -eq 0) {
     throw "No JSON tasks in $BankDir"
@@ -202,6 +285,31 @@ logging:
   enable_mcp_log: true
   enable_chat_history: true
   output_dir: "$logDirPosix"
+
+# Fail-closed OS sandbox for home.run (AppContainer / Linux namespaces).
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+  filesystem:
+    home:
+      # AoC solutions and input.txt live at home root; in/out kept for artifacts.
+      read: [".", "in", "out"]
+      write: [".", "out"]
+  run:
+    programs:
+      - name: python
+        executable: "$pythonExePosix"
+        runtime_read_roots: ["$pythonRootPosix"]
+        inherit_env: $pythonInheritEnvYaml
+        allow_children: false
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000
 "@
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($runConfigPath, $runConfigBody, $utf8NoBom)
@@ -246,25 +354,19 @@ logging:
             $prevEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                if (Test-Path -LiteralPath $agentExe -PathType Leaf) {
-                    $allOutput = & $agentExe `
-                        --config $effectiveConfig `
-                        --settings-dir $SettingsDir `
-                        --prompt $prompt `
-                        --home $homeDir `
-                        --save-chat-history `
-                        2>&1
-                    $exitCode = $LASTEXITCODE
-                } else {
-                    $allOutput = & cargo run --release -- `
-                        --config $effectiveConfig `
-                        --settings-dir $SettingsDir `
-                        --prompt $prompt `
-                        --home $homeDir `
-                        --save-chat-history `
-                        2>&1
-                    $exitCode = $LASTEXITCODE
+                # Always prefer a freshly built release binary so sandbox/access
+                # changes are exercised (do not silently reuse a stale exe).
+                if (-not (Test-Path -LiteralPath $agentExe -PathType Leaf)) {
+                    throw "Release binary missing: $agentExe (run cargo build --release first)"
                 }
+                $allOutput = & $agentExe `
+                    --config $effectiveConfig `
+                    --settings-dir $SettingsDir `
+                    --prompt $prompt `
+                    --home $homeDir `
+                    --save-chat-history `
+                    2>&1
+                $exitCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $prevEap
             }

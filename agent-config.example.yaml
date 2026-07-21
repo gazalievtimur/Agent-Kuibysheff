@@ -23,3 +23,52 @@ logging:
   sink:
     type: file
     # path: "./custom-logs"
+
+# Optional fail-closed capability policy.
+# - Omit `access` entirely for legacy mode: home.list/read/write and local_tools
+#   keep previous behavior, but `home.run` is not advertised until you declare
+#   programs under `access.run.programs` (and include `home.run` in builtins).
+# - When `access` is present, everything not listed is denied.
+#
+# Network is not configured here:
+# - provider.base_url is the only HTTP origin the agent process may call
+# - each mcp entry is a trusted capability (may use the network)
+# - home.run payloads always run with no network (OS sandbox)
+#
+# Relative host paths under filesystem / run resolve against this file's directory.
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+      - local_tools.search_docs
+      - local_tools.read_file
+
+  filesystem:
+    home:
+      # Relative prefixes inside CLI --home
+      read: ["in", "out"]
+      write: ["out"]
+    # Optional workspace research root for local_tools.*
+    # workspace:
+    #   root: "."
+    #   read: ["src", "docs", "Cargo.toml"]
+    # Host dirs allowed for --files (must exist at startup)
+    # input_roots: ["./inputs"]
+
+  run:
+    # Empty programs => home.run cannot execute anything even if the tool is allowed.
+    programs: []
+    # Example program alias (uncomment and adjust paths for your host):
+    # programs:
+    #   - name: python
+    #     executable: "C:/Python312/python.exe"   # or /usr/bin/python3
+    #     runtime_read_roots: ["C:/Python312"]    # interpreter install / libs
+    #     inherit_env: ["SYSTEMROOT"]             # Windows; Linux often needs none
+    #     allow_children: false
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000

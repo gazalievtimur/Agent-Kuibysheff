@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::logging::LoggingError;
+use crate::sandbox::SandboxError;
+
 /// Tool-layer error shared by MCP servers and builtin tool executors.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -23,6 +26,12 @@ pub enum Error {
     Timeout { server: String, method: String },
     #[error("MCP server `{server}` returned protocol error: {error}")]
     Protocol { server: String, error: String },
+    #[error("MCP logging failure on server `{server}`")]
+    Logging {
+        server: String,
+        #[source]
+        source: LoggingError,
+    },
     #[error("unknown MCP server `{0}`")]
     UnknownServer(String),
     #[error("tool `{tool}` is not exposed by server `{server}`")]
@@ -31,31 +40,39 @@ pub enum Error {
     InvalidToolArguments { tool: String, error: String },
     #[error("home path `{path}` is not allowed: {error}")]
     HomePath { path: String, error: String },
-    #[error("home filesystem operation `{operation}` failed for `{path}`: {error}")]
+    #[error("home filesystem operation `{operation}` failed for `{path}`: {source}")]
     HomeIo {
         operation: String,
         path: String,
-        error: String,
+        #[source]
+        source: std::io::Error,
     },
     #[error("local tools path `{path}` is not allowed: {error}")]
     LocalPath { path: String, error: String },
-    #[error("local tools operation `{operation}` failed for `{path}`: {error}")]
+    #[error("local tools operation `{operation}` failed for `{path}`: {source}")]
     LocalIo {
         operation: String,
         path: String,
-        error: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("tool `{tool}` denied by access policy")]
+    PolicyDenied { tool: String },
+    #[error("sandbox unavailable: {reason}")]
+    SandboxUnavailable { reason: String },
+    #[error("sandbox failure")]
+    Sandbox {
+        #[source]
+        source: SandboxError,
     },
     #[error("MCP server `{server}` actor channel closed")]
     ActorClosed { server: String },
 }
 
+/// Object-safe tool dispatch; `async_trait` is required because native `async fn` in traits is not
+/// dyn-compatible for `Arc<dyn ToolExecutor>`.
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<Value, Error>;
+    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error>;
     fn available_tools(&self) -> Vec<String>;
 }

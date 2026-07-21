@@ -1,0 +1,52 @@
+[package]
+name = "sandbox-windows"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Windows AppContainer sandbox FFI for agent_Kuibyshev home.run"
+license = "MIT"
+publish = false
+
+[dependencies]
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "sandbox_fixture"
+path = "src/bin/sandbox_fixture.rs"
+required-features = []
+
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Win32 FFI uses size casts, mutable out-params, and CamelCase API names in docs.
+pedantic = { level = "allow", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+unnecessary_mut_passed = "allow"
+needless_pass_by_value = "allow"
+borrow_as_ptr = "allow"
+unnecessary_wraps = "allow"
+manual_repeat_n = "allow"

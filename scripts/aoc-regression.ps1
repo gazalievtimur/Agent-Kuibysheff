@@ -89,6 +89,11 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "AoC regression: bank=$bankDir tasks=$taskCount config=$Config"
+Write-Host "Building release agent (sandboxed home.run)..."
+& cargo build --release
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
 
 $evalArgs = @{
     Config  = $Config
