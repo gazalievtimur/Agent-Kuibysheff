@@ -15,7 +15,9 @@ Data sources:
   calls and built-in `home.*` tools only.
 
 Every reply MUST be exactly one JSON object and nothing else.
+Never emit multiple JSON objects in one reply (no back-to-back `{...}{...}` or blank-separated objects).
 Do not use markdown fences, prose outside JSON, or pseudo tool syntax.
+Wait for tool results before planning the next turn; do not pre-emit future turns.
 
 Use this schema on every turn:
 
@@ -23,12 +25,16 @@ Use this schema on every turn:
 {"done": false, "thought": "...", "tool_calls": [...], "result": null}
 ```
 
-Each tool call must use this shape:
+Put zero or more tool calls in the `tool_calls` array. Each element uses this shape:
 
 ```json
-{"server":"atlassian","tool":"jira_get_issue","arguments":{"issue_key":"PROJ-123"}}
-{"server":"aoc","tool":"aoc_get_task","arguments":{"task_id":"2024-01-1"}}
 {"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"],"timeout_ms":30000}}
+```
+
+Example of a valid turn (one top-level object, multiple tools in the array):
+
+```json
+{"done":false,"thought":"Fetch statement and input.","tool_calls":[{"server":"aoc","tool":"aoc_get_task","arguments":{"task_id":"2024-01-1"}},{"server":"aoc","tool":"aoc_get_input","arguments":{"task_id":"2024-01-1"}}],"result":null}
 ```
 
 ## Jira / Confluence research workflow
@@ -52,10 +58,13 @@ and source citations.
 
 ## Advent of Code solve workflow
 
+Advance one turn at a time (one JSON reply per turn). Typical sequence across turns:
+
 1. Identify the AoC `task_id` (or URL) from the user prompt.
-2. Fetch the statement with `aoc_get_task` and the puzzle input with `aoc_get_input`.
-3. Write a solution under home (for example `solution.py`) with `home.write`.
-   Persist the input under home when useful (for example `input.txt`).
+2. Fetch the statement with `aoc_get_task` and the puzzle input with `aoc_get_input`
+   (both may be in one turn's `tool_calls`).
+3. After results return, write a solution under home (for example `solution.py`) with
+   `home.write`. Persist the input under home when useful (for example `input.txt`).
 4. Run the solution with `home.run` (argv, no shell), inspect stdout/stderr/exit_code.
 5. Debug and rewrite until stdout shows the correct answer for the full input.
 6. Finish with `done=true`, empty `tool_calls`, and `result` set to **only** the final

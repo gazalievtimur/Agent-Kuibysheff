@@ -20,7 +20,7 @@ pub use chat_history::{write_chat_history, ChatHistoryRecord};
 pub use paths::{default_log_dir, resolve_base_dir};
 pub use sink::{
     create_event_sink, create_file_sink, DbEventSink, EventSink, FileJsonlSink, JsonlLogger,
-    SharedEventSink, SinkDestination,
+    MemoryEventSink, SharedEventSink, SinkDestination,
 };
 
 use thiserror::Error;
@@ -49,6 +49,8 @@ pub enum LoggingError {
     Encode(#[from] serde_json::Error),
     #[error("log writer channel closed")]
     ChannelClosed,
+    #[error("log writer task failed: {0}")]
+    TaskJoin(String),
     #[error("user home directory is not set")]
     HomeNotFound,
     #[error("unsupported log sink: {0}")]
@@ -87,6 +89,16 @@ impl Loggers {
         }
 
         Ok(loggers)
+    }
+
+    /// Builds loggers with explicit AI/MCP sinks (for tests and custom wiring).
+    #[must_use]
+    pub fn with_sinks(ai: Option<SharedEventSink>, mcp: Option<SharedEventSink>) -> Self {
+        Self {
+            ai,
+            mcp,
+            ..Self::default()
+        }
     }
 
     #[must_use]
@@ -139,6 +151,20 @@ impl Loggers {
                 .chat_history_path
                 .as_ref()
                 .map(|path| path.display().to_string()),
+        }
+    }
+
+    /// Flushes any buffered records from active sinks and waits for writer tasks to finish.
+    pub async fn shutdown(&self) {
+        if let Some(ai) = &self.ai {
+            if let Err(err) = ai.shutdown().await {
+                warn!(error = %err, "failed to flush AI log sink");
+            }
+        }
+        if let Some(mcp) = &self.mcp {
+            if let Err(err) = mcp.shutdown().await {
+                warn!(error = %err, "failed to flush MCP log sink");
+            }
         }
     }
 

@@ -88,6 +88,7 @@ When vision is not available:
 
 # Response protocol
 
-- Output JSON only.
+- Output exactly one JSON object per reply — never multiple objects in one message.
+- Wait for tool results before the next turn; do not pre-emit future steps as extra JSON.
 - Use `done=false` while work is still in progress.
 - One main file per `home.write` call when possible.
