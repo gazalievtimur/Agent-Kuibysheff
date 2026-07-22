@@ -95,7 +95,7 @@ function Get-YamlScalar {
 
 $baseConfigText = Get-Content -LiteralPath $Config -Raw -Encoding UTF8
 $providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://polza.ai/api/v1"
-$providerModel = Get-YamlScalar $baseConfigText "model" "openai/gpt-5.6-luna-pro"
+$providerModel = Get-YamlScalar $baseConfigText "model" "deepseek/deepseek-v4-flash"
 $providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "POLZA_API_KEY"
 $providerApiKey = Get-YamlProviderApiKey $baseConfigText
 $providerTimeoutMs = Get-YamlScalar $baseConfigText "timeout_ms" "180000"
