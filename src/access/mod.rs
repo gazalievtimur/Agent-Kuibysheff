@@ -10,8 +10,6 @@ use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use thiserror::Error;
-
 use crate::config::{
     AccessPolicyConfig, ConfigError, FilesystemPolicyConfig, ProgramPolicyConfig, RunPolicyConfig,
     ToolsPolicyConfig,
@@ -81,33 +79,33 @@ impl fmt::Display for PathOperation {
     }
 }
 
-/// Structured policy denial reasons used by enforcing gates.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum PolicyError {
-    #[error("tool `{tool}` denied by access policy")]
-    ToolDenied { tool: String },
-    #[error("path `{path}` denied for {operation}: {reason}")]
-    PathDenied {
-        path: String,
-        operation: PathOperation,
-        reason: String,
-    },
-    #[error("program `{program}` denied: {reason}")]
-    ProgramDenied { program: String, reason: String },
-    #[error("network access denied: {reason}")]
-    NetworkDenied { reason: String },
-    #[error("sandbox unavailable: {reason}")]
-    SandboxUnavailable { reason: String },
-}
-
 /// Qualified tool identity parsed only from `server.tool` (bare names are rejected).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QualifiedTool {
-    pub server: String,
-    pub tool: String,
+    server: String,
+    tool: String,
 }
 
 impl QualifiedTool {
+    /// Creates a validated qualified tool from raw server and tool segments.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason when either segment is empty or contains `.`.
+    pub fn new(server: impl Into<String>, tool: impl Into<String>) -> Result<Self, String> {
+        let server = server.into();
+        let tool = tool.into();
+        if server.is_empty() || tool.is_empty() {
+            return Err(
+                "qualified tool name must use non-empty `server.tool` segments".to_string(),
+            );
+        }
+        if server.contains('.') || tool.contains('.') {
+            return Err("qualified tool name segments must not contain `.`".to_string());
+        }
+        Ok(Self { server, tool })
+    }
+
     /// Parses `server.tool`. Bare names and empty segments are rejected.
     ///
     /// # Errors
@@ -120,25 +118,23 @@ impl QualifiedTool {
                 "bare tool name `{trimmed}` is not allowed; use qualified `server.tool`"
             ));
         };
-        if server.is_empty() || tool.is_empty() {
-            return Err(format!(
-                "tool name `{trimmed}` must use non-empty `server.tool` segments"
-            ));
-        }
-        if server.contains('.') {
-            return Err(format!(
-                "tool name `{trimmed}` has an invalid server segment (extra `.`)"
-            ));
-        }
-        Ok(Self {
-            server: server.to_string(),
-            tool: tool.to_string(),
-        })
+        Self::new(server, tool)
+            .map_err(|reason| format!("tool name `{trimmed}` is invalid: {reason}"))
+    }
+
+    #[must_use]
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
+    #[must_use]
+    pub fn tool(&self) -> &str {
+        &self.tool
     }
 
     #[must_use]
     pub fn qualified(&self) -> String {
-        format!("{server}.{tool}", server = self.server, tool = self.tool)
+        format!("{}.{}", self.server, self.tool)
     }
 }
 
@@ -399,7 +395,7 @@ impl EffectiveToolPolicy {
     /// Compiles the runtime tool allowlist.
     ///
     /// Built-ins: `KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools`.
-    /// MCP tools discovered from declared servers are always included (not intersected with skills).
+    /// MCP tools: `discovered_mcp_tools ∩ skills.allowed_tools`.
     #[must_use]
     pub fn compile(
         access: &ResolvedAccessPolicy,
@@ -414,7 +410,9 @@ impl EffectiveToolPolicy {
             }
         }
         for tool in mcp_tools {
-            tools.insert(tool);
+            if skills_allowed.contains(&tool) {
+                tools.insert(tool);
+            }
         }
         Self { tools }
     }
@@ -426,10 +424,9 @@ impl EffectiveToolPolicy {
 
     #[must_use]
     pub fn allows_server_tool(&self, server: &str, tool: &str) -> bool {
-        self.tools.contains(&QualifiedTool {
-            server: server.to_string(),
-            tool: tool.to_string(),
-        })
+        QualifiedTool::new(server, tool)
+            .map(|qualified| self.tools.contains(&qualified))
+            .unwrap_or(false)
     }
 
     /// Sorted qualified names for prompt advertisement.
@@ -796,8 +793,10 @@ mod tests {
         assert!(QualifiedTool::parse(".read").is_err());
         assert!(QualifiedTool::parse("home.").is_err());
         let tool = QualifiedTool::parse("home.read").expect("parse");
-        assert_eq!(tool.server, "home");
-        assert_eq!(tool.tool, "read");
+        assert_eq!(tool.server(), "home");
+        assert_eq!(tool.tool(), "read");
+        assert!(QualifiedTool::new("home", "").is_err());
+        assert!(QualifiedTool::new("home", "read").is_ok());
     }
 
     #[test]
@@ -962,14 +961,18 @@ mod tests {
     }
 
     #[test]
-    fn effective_policy_intersects_builtins_and_unions_mcp() {
+    fn effective_policy_intersects_builtins_and_mcp_with_skills() {
         let access = ResolvedAccessPolicy::legacy();
         let skills = BTreeSet::from([
             QualifiedTool::parse("home.read").unwrap(),
             QualifiedTool::parse("home.write").unwrap(),
             QualifiedTool::parse("home.run").unwrap(),
+            QualifiedTool::parse("docs.search").unwrap(),
         ]);
-        let mcp = BTreeSet::from([QualifiedTool::parse("docs.search").unwrap()]);
+        let mcp = BTreeSet::from([
+            QualifiedTool::parse("docs.search").unwrap(),
+            QualifiedTool::parse("docs.secret").unwrap(),
+        ]);
 
         let effective = EffectiveToolPolicy::compile(&access, &skills, mcp);
         assert!(effective.allows(&QualifiedTool::parse("home.read").unwrap()));
@@ -984,7 +987,11 @@ mod tests {
         );
         assert!(
             effective.allows(&QualifiedTool::parse("docs.search").unwrap()),
-            "MCP tools are trusted without skills intersection"
+            "MCP tools listed in skills are allowed"
+        );
+        assert!(
+            !effective.allows(&QualifiedTool::parse("docs.secret").unwrap()),
+            "MCP tools not listed in skills are denied"
         );
         assert_eq!(
             effective.advertised(),
@@ -994,5 +1001,39 @@ mod tests {
                 "home.write".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn legacy_builtins_are_subset_of_known() {
+        for name in LEGACY_BUILTINS {
+            assert!(
+                KNOWN_BUILTINS.contains(name),
+                "legacy builtin `{name}` must be known"
+            );
+            assert!(
+                QualifiedTool::parse(name).is_ok(),
+                "legacy builtin `{name}` must be a valid qualified tool"
+            );
+        }
+    }
+
+    #[test]
+    fn known_builtins_minus_legacy_is_only_home_run() {
+        let known: std::collections::HashSet<_> = KNOWN_BUILTINS.iter().copied().collect();
+        let legacy: std::collections::HashSet<_> = LEGACY_BUILTINS.iter().copied().collect();
+        let diff: Vec<_> = known.difference(&legacy).copied().collect();
+        assert_eq!(diff, vec!["home.run"]);
+    }
+
+    #[test]
+    fn known_builtins_are_unique_and_qualified() {
+        let mut seen = std::collections::HashSet::new();
+        for name in KNOWN_BUILTINS {
+            assert!(seen.insert(*name), "duplicate builtin `{name}`");
+            assert!(
+                QualifiedTool::parse(name).is_ok(),
+                "builtin `{name}` must be a valid qualified tool"
+            );
+        }
     }
 }

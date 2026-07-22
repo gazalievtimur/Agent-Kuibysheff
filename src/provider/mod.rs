@@ -11,6 +11,7 @@ use crate::limits::TokenUsage;
 
 /// Provider-layer error returned by [`ModelClient`] implementations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("missing provider API key in environment variable `{0}`")]
     MissingApiKey(String),

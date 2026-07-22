@@ -8,13 +8,14 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::logging::LoggingError;
-use crate::sandbox::SandboxError;
+use crate::tools::ToolError;
 
 use self::oauth::BearerChallenge;
 
-/// Tool-layer error shared by MCP servers and builtin tool executors.
+/// MCP-specific error (JSON-RPC, transport, OAuth, server lifecycle).
 #[derive(Debug, Error)]
-pub enum Error {
+#[non_exhaustive]
+pub enum McpError {
     #[error("failed to spawn MCP server `{server}`: {source}")]
     Spawn {
         server: String,
@@ -58,41 +59,22 @@ pub enum Error {
     UnknownTool { server: String, tool: String },
     #[error("invalid arguments for tool `{tool}`: {error}")]
     InvalidToolArguments { tool: String, error: String },
-    #[error("home path `{path}` is not allowed: {error}")]
-    HomePath { path: String, error: String },
-    #[error("home filesystem operation `{operation}` failed for `{path}`: {source}")]
-    HomeIo {
-        operation: String,
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("local tools path `{path}` is not allowed: {error}")]
-    LocalPath { path: String, error: String },
-    #[error("local tools operation `{operation}` failed for `{path}`: {source}")]
-    LocalIo {
-        operation: String,
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("tool `{tool}` denied by access policy")]
-    PolicyDenied { tool: String },
-    #[error("sandbox unavailable: {reason}")]
-    SandboxUnavailable { reason: String },
-    #[error("sandbox failure")]
-    Sandbox {
-        #[source]
-        source: SandboxError,
-    },
     #[error("MCP server `{server}` actor channel closed")]
     ActorClosed { server: String },
 }
+
+/// Backwards-compatible alias for the MCP-specific error type.
+pub type Error = McpError;
 
 /// Object-safe tool dispatch; `async_trait` is required because native `async fn` in traits is not
 /// dyn-compatible for `Arc<dyn ToolExecutor>`.
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error>;
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, ToolError>;
     fn available_tools(&self) -> Vec<String>;
 }

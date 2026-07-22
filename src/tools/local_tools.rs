@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::access::paths::{is_within_root, relative_components};
 use crate::access::{PathOperation, WorkspaceFsPolicy};
-use crate::mcp::Error;
+use crate::tools::LocalToolsError;
 
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "logs", ".cursor"];
 const SKIP_EXTENSIONS: &[&str] = &[
@@ -39,7 +39,7 @@ impl LocalTools {
     /// # Errors
     ///
     /// Returns [`crate::mcp::Error`] if the directory cannot be resolved or is not a directory.
-    pub async fn new(root: &Path, policy: WorkspaceFsPolicy) -> Result<Self, Error> {
+    pub async fn new(root: &Path, policy: WorkspaceFsPolicy) -> Result<Self, LocalToolsError> {
         fs::create_dir_all(root)
             .await
             .map_err(|error| local_io("create_dir_all", root, error))?;
@@ -64,7 +64,7 @@ impl LocalTools {
     /// # Errors
     ///
     /// Returns [`crate::mcp::Error`] for invalid arguments, paths, or I/O failures.
-    pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, Error> {
+    pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, LocalToolsError> {
         match tool {
             "search_docs" => {
                 let args: SearchDocsArgs = decode_args(tool, arguments)?;
@@ -74,14 +74,17 @@ impl LocalTools {
                 let args: ReadFileArgs = decode_args(tool, arguments)?;
                 self.read_file(Path::new(&args.path), args.max_chars).await
             }
-            _ => Err(Error::UnknownTool {
-                server: "local_tools".to_string(),
+            _ => Err(LocalToolsError::UnknownTool {
                 tool: tool.to_string(),
             }),
         }
     }
 
-    async fn search_docs(&self, query: &str, max_results: Option<usize>) -> Result<Value, Error> {
+    async fn search_docs(
+        &self,
+        query: &str,
+        max_results: Option<usize>,
+    ) -> Result<Value, LocalToolsError> {
         let query = query.trim();
         if query.is_empty() {
             return Err(invalid_args(
@@ -103,14 +106,18 @@ impl LocalTools {
 
         task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
             .await
-            .map_err(|error| Error::LocalIo {
+            .map_err(|error| LocalToolsError::Io {
                 operation: "spawn_blocking".to_string(),
                 path: root_display,
                 source: std::io::Error::other(error.to_string()),
             })
     }
 
-    async fn read_file(&self, relative: &Path, max_chars: Option<usize>) -> Result<Value, Error> {
+    async fn read_file(
+        &self,
+        relative: &Path,
+        max_chars: Option<usize>,
+    ) -> Result<Value, LocalToolsError> {
         let relative_display = display_relative_input(relative);
         if relative_display.is_empty() {
             return Err(invalid_args(
@@ -167,7 +174,7 @@ impl LocalTools {
         }))
     }
 
-    async fn resolve_existing_file(&self, relative: &Path) -> Result<PathBuf, Error> {
+    async fn resolve_existing_file(&self, relative: &Path) -> Result<PathBuf, LocalToolsError> {
         relative_components(relative)
             .map_err(|reason| local_path(relative.display().to_string(), reason))?;
         let candidate = self.root.join(relative);
@@ -436,7 +443,11 @@ fn clamp_usize(value: Option<usize>, default: usize, min: usize, max: usize) -> 
     value.unwrap_or(default).clamp(min, max)
 }
 
-fn ensure_within_root(root: &Path, canonical: &Path, requested: &Path) -> Result<(), Error> {
+fn ensure_within_root(
+    root: &Path,
+    canonical: &Path,
+    requested: &Path,
+) -> Result<(), LocalToolsError> {
     if is_within_root(root, canonical) {
         Ok(())
     } else {
@@ -452,7 +463,7 @@ fn ensure_grant_for_canonical(
     policy: &WorkspaceFsPolicy,
     canonical: &Path,
     requested: &Path,
-) -> Result<(), Error> {
+) -> Result<(), LocalToolsError> {
     let relative = canonical.strip_prefix(root).map_err(|_| {
         local_path(
             requested.display().to_string(),
@@ -465,29 +476,30 @@ fn ensure_grant_for_canonical(
         .map_err(|reason| local_path(requested.display().to_string(), reason))
 }
 
-fn decode_args<T: for<'de> Deserialize<'de>>(tool: &str, value: Value) -> Result<T, Error> {
-    serde_json::from_value(value).map_err(|error| Error::InvalidToolArguments {
-        tool: format!("local_tools.{tool}"),
-        error: error.to_string(),
+fn decode_args<T: for<'de> Deserialize<'de>>(
+    tool: &str,
+    value: Value,
+) -> Result<T, LocalToolsError> {
+    serde_json::from_value(value).map_err(|error| LocalToolsError::InvalidArguments {
+        error: format!("local_tools.{tool}: {error}"),
     })
 }
 
-fn invalid_args(tool: &str, error: impl Into<String>) -> Error {
-    Error::InvalidToolArguments {
-        tool: tool.to_string(),
-        error: error.into(),
+fn invalid_args(tool: &str, error: impl Into<String>) -> LocalToolsError {
+    LocalToolsError::InvalidArguments {
+        error: format!("{tool}: {}", error.into()),
     }
 }
 
-fn local_path(path: String, error: impl Into<String>) -> Error {
-    Error::LocalPath {
+fn local_path(path: String, error: impl Into<String>) -> LocalToolsError {
+    LocalToolsError::PathDenied {
         path,
         error: error.into(),
     }
 }
 
-fn local_io(operation: &str, path: &Path, error: std::io::Error) -> Error {
-    Error::LocalIo {
+fn local_io(operation: &str, path: &Path, error: std::io::Error) -> LocalToolsError {
+    LocalToolsError::Io {
         operation: operation.to_string(),
         path: path.display().to_string(),
         source: error,
@@ -595,7 +607,7 @@ mod tests {
             .call("search_docs", json!({"query": "   "}))
             .await
             .expect_err("empty query");
-        assert!(matches!(error, Error::InvalidToolArguments { .. }));
+        assert!(matches!(error, LocalToolsError::InvalidArguments { .. }));
     }
 
     #[tokio::test]
@@ -631,7 +643,7 @@ mod tests {
             .call("read_file", json!({"path": "../outside.txt"}))
             .await
             .expect_err("traversal");
-        assert!(matches!(error, Error::LocalPath { .. }));
+        assert!(matches!(error, LocalToolsError::PathDenied { .. }));
     }
 
     #[tokio::test]
@@ -663,7 +675,7 @@ mod tests {
             .call("read_file", json!({"path": "secret/no.txt"}))
             .await
             .expect_err("denied");
-        assert!(matches!(err, Error::LocalPath { .. }));
+        assert!(matches!(err, LocalToolsError::PathDenied { .. }));
     }
 
     #[tokio::test]

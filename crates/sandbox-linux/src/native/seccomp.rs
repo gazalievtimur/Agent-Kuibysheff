@@ -25,8 +25,11 @@ fn bpf(code: u16, jt: u8, jf: u8, k: u32) -> sock_filter {
 }
 
 /// Installs a fail-closed denylist (x86_64). Unknown arches refuse to proceed.
-pub fn install_denylist() -> Result<(), SandboxLinuxError> {
-    let denied: &[i64] = &[
+///
+/// When `allow_children` is `false`, `fork`/`clone`/`vfork` are denied with `ENOSYS`,
+/// mirroring the Windows Job Object active-process limit of one.
+pub fn install_denylist(allow_children: bool) -> Result<(), SandboxLinuxError> {
+    let mut denied: Vec<i64> = vec![
         libc::SYS_mount,
         libc::SYS_umount2,
         libc::SYS_pivot_root,
@@ -56,6 +59,9 @@ pub fn install_denylist() -> Result<(), SandboxLinuxError> {
         libc::SYS_fspick,
         libc::SYS_mount_setattr,
     ];
+    if !allow_children {
+        denied.extend_from_slice(&[libc::SYS_fork, libc::SYS_vfork, libc::SYS_clone]);
+    }
 
     let mut filters: Vec<sock_filter> = Vec::with_capacity(8 + denied.len() * 2);
     filters.push(bpf(
@@ -68,10 +74,13 @@ pub fn install_denylist() -> Result<(), SandboxLinuxError> {
     filters.push(bpf(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS));
     filters.push(bpf(BPF_LD | BPF_W | BPF_ABS, 0, 0, SECCOMP_DATA_NR_OFFSET));
 
-    for sys in denied {
+    for sys in &denied {
         // equal → fall through to RET; not equal → skip RET
         filters.push(bpf(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, *sys as u32));
-        let action = if *sys == libc::SYS_clone3 {
+        let action = if *sys == libc::SYS_clone3
+            || (!allow_children
+                && (*sys == libc::SYS_fork || *sys == libc::SYS_vfork || *sys == libc::SYS_clone))
+        {
             SECCOMP_RET_ERRNO | (libc::ENOSYS as u32)
         } else {
             SECCOMP_RET_ERRNO | (libc::EPERM as u32)
@@ -93,6 +102,7 @@ pub fn install_denylist() -> Result<(), SandboxLinuxError> {
             std::ptr::from_mut(&mut prog),
         )
     };
+    drop(denied);
     drop(filters);
     if rc != 0 {
         return Err(errno_err(SandboxStage::Seccomp, "PR_SET_SECCOMP"));

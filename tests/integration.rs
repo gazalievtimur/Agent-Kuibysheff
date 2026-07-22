@@ -1,19 +1,24 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use agent_Kuibyshev::access::{EffectiveToolPolicy, QualifiedTool, ResolvedAccessPolicy};
+use agent_Kuibyshev::access::{
+    CanonicalRoot, EffectiveToolPolicy, HomeFsPolicy, ProgramAlias, QualifiedTool,
+    ResolvedAccessPolicy, ResolvedProgramPolicy, WorkspaceFsPolicy,
+};
 use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
 use agent_Kuibyshev::logging::Loggers;
-use agent_Kuibyshev::mcp::{Error as ToolError, ToolExecutor};
+use agent_Kuibyshev::mcp::ToolExecutor;
 use agent_Kuibyshev::output::StopReason;
 use agent_Kuibyshev::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
 use agent_Kuibyshev::tools::fs_home::HomeFs;
 use agent_Kuibyshev::tools::local_tools::LocalTools;
+use agent_Kuibyshev::tools::ToolError;
 use agent_Kuibyshev::tools::{CompositeToolExecutor, PolicyToolExecutor};
 
 struct FakeModel {
@@ -53,6 +58,79 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         input_files_context: String::new(),
         limits,
     }
+}
+
+async fn make_tools_with_runner(
+    dir: &Path,
+    home_policy: HomeFsPolicy,
+    runner: Arc<agent_Kuibyshev::sandbox::SandboxRunner>,
+) -> Arc<CompositeToolExecutor> {
+    let home = HomeFs::new(dir, home_policy, runner).await.expect("home");
+    let local_tools = LocalTools::new(dir, WorkspaceFsPolicy::legacy())
+        .await
+        .expect("local tools");
+    Arc::new(CompositeToolExecutor::new(
+        home,
+        local_tools,
+        Arc::new(FakeTools),
+    ))
+}
+
+async fn make_legacy_tools(dir: &Path) -> Arc<CompositeToolExecutor> {
+    make_tools_with_runner(
+        dir,
+        HomeFsPolicy::legacy(),
+        Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default()),
+    )
+    .await
+}
+
+fn policy_executor_for(
+    composite: Arc<CompositeToolExecutor>,
+    access: &ResolvedAccessPolicy,
+    tools: &[&str],
+) -> Arc<PolicyToolExecutor> {
+    let allowed: BTreeSet<QualifiedTool> = tools
+        .iter()
+        .map(|tool| QualifiedTool::parse(tool).expect("valid tool"))
+        .collect();
+    let policy = EffectiveToolPolicy::compile(access, &allowed, BTreeSet::new());
+    Arc::new(PolicyToolExecutor::new(composite, policy))
+}
+
+fn home_policy_with_program(alias: &str, exe: &Path) -> HomeFsPolicy {
+    let mut home_policy = HomeFsPolicy::legacy();
+    let executable = CanonicalRoot::canonicalize(exe).expect("canonicalize");
+    let mut programs = BTreeMap::new();
+    programs.insert(
+        ProgramAlias::parse(alias).unwrap(),
+        ResolvedProgramPolicy {
+            alias: ProgramAlias::parse(alias).unwrap(),
+            executable,
+            runtime_read_roots: Vec::new(),
+            inherit_env: Vec::new(),
+            allow_children: false,
+        },
+    );
+    home_policy.programs = programs;
+    home_policy
+}
+
+fn prepare_fixture_exe(dir: &Path) -> std::path::PathBuf {
+    let fixture = std::path::PathBuf::from(env!("CARGO_BIN_EXE_sandbox_e2e_fixture"));
+    #[cfg(windows)]
+    let local_exe = dir.join("sandbox_e2e_fixture.exe");
+    #[cfg(not(windows))]
+    let local_exe = dir.join("sandbox_e2e_fixture");
+    std::fs::copy(&fixture, &local_exe).expect("copy fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&local_exe).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&local_exe, perms).expect("chmod");
+    }
+    local_exe
 }
 
 #[tokio::test]
@@ -146,27 +224,9 @@ async fn model_can_write_an_artifact_inside_home() {
         ])),
     };
     let dir = tempfile::tempdir().expect("temp dir");
-    let home = HomeFs::new(
-        dir.path(),
-        agent_Kuibyshev::access::HomeFsPolicy::legacy(),
-        Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default()),
-    )
-    .await
-    .expect("home");
-    let local_tools = LocalTools::new(
-        dir.path(),
-        agent_Kuibyshev::access::WorkspaceFsPolicy::legacy(),
-    )
-    .await
-    .expect("local tools");
-    let composite = CompositeToolExecutor::new(home, local_tools, Arc::new(FakeTools));
-    let policy = EffectiveToolPolicy::compile(
-        &ResolvedAccessPolicy::legacy(),
-        &BTreeSet::from([QualifiedTool::parse("home.write").unwrap()]),
-        BTreeSet::new(),
-    );
-    let tools = PolicyToolExecutor::new(Arc::new(composite), policy);
-    let engine = AgentEngine::new(Arc::new(model), Arc::new(tools), Loggers::default());
+    let composite = make_legacy_tools(dir.path()).await;
+    let tools = policy_executor_for(composite, &ResolvedAccessPolicy::legacy(), &["home.write"]);
+    let engine = AgentEngine::new(Arc::new(model), tools, Loggers::default());
 
     let output = engine
         .run(request(
@@ -202,27 +262,9 @@ async fn denied_tool_is_returned_as_tool_result_error() {
         ])),
     };
     let dir = tempfile::tempdir().expect("temp dir");
-    let home = HomeFs::new(
-        dir.path(),
-        agent_Kuibyshev::access::HomeFsPolicy::legacy(),
-        Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default()),
-    )
-    .await
-    .expect("home");
-    let local_tools = LocalTools::new(
-        dir.path(),
-        agent_Kuibyshev::access::WorkspaceFsPolicy::legacy(),
-    )
-    .await
-    .expect("local tools");
-    let composite = CompositeToolExecutor::new(home, local_tools, Arc::new(FakeTools));
-    let policy = EffectiveToolPolicy::compile(
-        &ResolvedAccessPolicy::legacy(),
-        &BTreeSet::from([QualifiedTool::parse("home.read").unwrap()]),
-        BTreeSet::new(),
-    );
-    let tools = PolicyToolExecutor::new(Arc::new(composite), policy);
-    let engine = AgentEngine::new(Arc::new(model), Arc::new(tools), Loggers::default());
+    let composite = make_legacy_tools(dir.path()).await;
+    let tools = policy_executor_for(composite, &ResolvedAccessPolicy::legacy(), &["home.read"]);
+    let engine = AgentEngine::new(Arc::new(model), tools, Loggers::default());
 
     let output = engine
         .run(request(
@@ -249,41 +291,14 @@ async fn model_can_home_run_via_native_sandbox() {
         ToolsPolicyConfig,
     };
 
-    let runner = agent_Kuibyshev::sandbox::SandboxRunner::platform_default();
+    let runner = Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default());
     if runner.probe().is_err() {
         return;
     }
 
     let dir = tempfile::tempdir().expect("temp dir");
-    let fixture = std::path::PathBuf::from(env!("CARGO_BIN_EXE_sandbox_e2e_fixture"));
-    #[cfg(windows)]
-    let local_exe = dir.path().join("sandbox_e2e_fixture.exe");
-    #[cfg(not(windows))]
-    let local_exe = dir.path().join("sandbox_e2e_fixture");
-    std::fs::copy(&fixture, &local_exe).expect("copy fixture");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&local_exe).expect("meta").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&local_exe, perms).expect("chmod");
-    }
-
-    let mut home_policy = agent_Kuibyshev::access::HomeFsPolicy::legacy();
-    let executable =
-        agent_Kuibyshev::access::CanonicalRoot::canonicalize(&local_exe).expect("canonicalize");
-    let mut programs = std::collections::BTreeMap::new();
-    programs.insert(
-        agent_Kuibyshev::access::ProgramAlias::parse("fixture").unwrap(),
-        agent_Kuibyshev::access::ResolvedProgramPolicy {
-            alias: agent_Kuibyshev::access::ProgramAlias::parse("fixture").unwrap(),
-            executable,
-            runtime_read_roots: Vec::new(),
-            inherit_env: Vec::new(),
-            allow_children: false,
-        },
-    );
-    home_policy.programs = programs;
+    let local_exe = prepare_fixture_exe(dir.path());
+    let home_policy = home_policy_with_program("fixture", &local_exe);
 
     let model = FakeModel {
         responses: Mutex::new(VecDeque::from(vec![
@@ -299,16 +314,7 @@ async fn model_can_home_run_via_native_sandbox() {
         ])),
     };
 
-    let home = HomeFs::new(dir.path(), home_policy, Arc::new(runner))
-        .await
-        .expect("home");
-    let local_tools = LocalTools::new(
-        dir.path(),
-        agent_Kuibyshev::access::WorkspaceFsPolicy::legacy(),
-    )
-    .await
-    .expect("local tools");
-    let composite = CompositeToolExecutor::new(home, local_tools, Arc::new(FakeTools));
+    let composite = make_tools_with_runner(dir.path(), home_policy, runner).await;
 
     let access_cfg = AccessPolicyConfig {
         tools: ToolsPolicyConfig {
@@ -331,13 +337,8 @@ async fn model_can_home_run_via_native_sandbox() {
         },
     };
     let access = resolve_access_policy(Some(&access_cfg), dir.path()).expect("access policy");
-    let policy = EffectiveToolPolicy::compile(
-        &access,
-        &BTreeSet::from([QualifiedTool::parse("home.run").unwrap()]),
-        BTreeSet::new(),
-    );
-    let tools = PolicyToolExecutor::new(Arc::new(composite), policy);
-    let engine = AgentEngine::new(Arc::new(model), Arc::new(tools), Loggers::default());
+    let tools = policy_executor_for(composite, &access, &["home.run"]);
+    let engine = AgentEngine::new(Arc::new(model), tools, Loggers::default());
 
     let output = engine
         .run(request(

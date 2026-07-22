@@ -45,25 +45,75 @@ the side effect.
 | `access` omitted (legacy) | `home.list` / `home.read` / `home.write` and `local_tools.*` keep prior home/workspace semantics. `home.run` is **not** advertised. |
 | `access` present (strict) | Only listed built-ins, path grants, and program aliases are allowed. Everything else is denied. |
 
-Effective built-in tools:
+Effective tools are computed as follows:
 
 ```text
-builtins = access.tools.builtins ∩ skills.allowed_tools ∩ advertised built-ins
-mcp      = every server.tool discovered from configured mcp entries
-effective = builtins ∪ mcp
+KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file}
+
+effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
+effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
+effective_tools    = effective_builtins ∪ effective_mcp
 ```
 
 - Tool names must be qualified `server.tool` (bare names are rejected).
-- Declared MCP servers are trusted capabilities: their `command` / `env` (stdio)
-  or `url` / `headers` / OAuth (Streamable HTTP) and the tools from `tools/list`
-  are allowed without listing them in skills.
+- Built-ins are gated by the intersection of the config allowlist and the
+  skills allowlist. Both must grant the tool for it to be available.
+- MCP tools are gated by the skills allowlist. Every tool advertised by a
+  configured MCP server in `tools/list` is allowed only if it is also listed in
+  `skills.allowed_tools`. The operator must still review each configured MCP
+  server's command, environment, URL, headers, and OAuth settings before enabling
+  it.
+- `rules.md` and the `policy` string inside a `skills.dsl` block are prompt-only
+  guidance for the model. They are not enforced by the runtime policy engine.
 - There is no generic `network` config section. The agent process may call only
   the configured `provider.base_url` origin (no proxy, no cross-origin
   redirects). MCP stdio subprocesses and configured MCP HTTP endpoints may use
   the network. `home.run` payloads never get network access.
 
-See [`agent-config.example.yaml`](agent-config.example.yaml) for the schema and
-comments.
+Example config and skills:
+
+```yaml
+# agent-config.yaml
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+      - local_tools.search_docs
+      - local_tools.read_file
+  filesystem:
+    home:
+      read: ["."]
+      write: ["out/"]
+    workspace:
+      root: "."
+      read: ["."]
+  run:
+    programs:
+      - name: python
+        executable: /usr/bin/python3
+```
+
+```text
+# settings/skills.dsl
+skill "coding" {
+  policy: "Use home.* for workspace writes. Use local_tools.* for research. Use MCP tools when listed below."
+  allowed_tools: [
+    "home.list",
+    "home.read",
+    "home.write",
+    "home.run",
+    "local_tools.search_docs",
+    "local_tools.read_file",
+    "mcp_docs.search"
+  ]
+}
+```
+
+See [`agent-config.example.yaml`](agent-config.example.yaml) for the full schema
+and comments.
 
 ### Migration
 
@@ -75,6 +125,8 @@ comments.
 3. Update `skills.dsl` `allowed_tools` to qualified names that intersect the
    built-in allowlist.
 4. If you use `--files` under strict mode, declare `filesystem.input_roots`.
+5. If you use MCP servers, add each MCP tool name to `skills.dsl`
+   `allowed_tools` as well; otherwise it is denied at runtime.
 
 ## Home workspace
 

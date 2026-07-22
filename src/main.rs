@@ -120,11 +120,18 @@ async fn run() -> Result<RunOutput> {
         OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
     let tools = PolicyToolExecutor::new(
         Arc::new(CompositeToolExecutor::new(home, local_tools, Arc::new(mcp))),
-        effective,
+        effective.clone(),
+    );
+
+    let runtime_rules = agent_Kuibyshev::prompt::build_runtime_rules(
+        &effective,
+        &access_policy,
+        &cli.home,
+        &workspace_root,
     );
 
     let system_prompt = format!(
-        "{master}\n\n{rules_section}{skills}\n\nRuntime rules:\n- Stay within configured limits.\n- The home directory is `{home}`. All file writes must use home.write and paths relative to this directory.\n- Input files are read-only context and are not copied into home automatically.\n- Builtin tools: home.list {{\"path\":\".\"}}, home.read {{\"path\":\"relative/path\",\"max_chars\":50000}}, home.write {{\"path\":\"relative/path\",\"content\":\"...\"}}, home.run {{\"program\":\"python\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}}.\n- home.run executes argv (no shell) with cwd set to home; capture stdout/stderr/exit_code. The process runs inside the host OS sandbox (no generic network API).\n- Repository research tools: local_tools.search_docs {{\"query\":\"phrase\",\"max_results\":8}}, local_tools.read_file {{\"path\":\"relative/path\",\"max_chars\":6000}}. These read from the workspace root (`{workspace}`), not from home.\n- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.\n- Use MCP tools when needed and allowed.\n- When the goal is achieved, return done=true and fill `result`.\n- Return strict JSON and never use markdown.",
+        "{master}\n\n{rules_section}{skills}\n\n{runtime_rules}",
         master = settings.master_prompt.trim(),
         rules_section = if settings.rules.trim().is_empty() {
             String::new()
@@ -132,8 +139,7 @@ async fn run() -> Result<RunOutput> {
             format!("Rules:\n{}\n\n", settings.rules.trim())
         },
         skills = skill_prompt,
-        home = cli.home.display(),
-        workspace = workspace_root.display()
+        runtime_rules = runtime_rules
     );
 
     info!(

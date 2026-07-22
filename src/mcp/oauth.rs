@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -227,7 +226,7 @@ impl McpOAuth {
             form.push(("client_secret".to_string(), secret.clone()));
         }
         let tokens = self.exchange_token(&as_meta.token_endpoint, &form).await?;
-        self.persist_tokens(tokens)?;
+        self.persist_tokens(tokens).await?;
         self.tokens
             .as_ref()
             .map(|t| t.access_token.clone())
@@ -289,7 +288,7 @@ impl McpOAuth {
             url = %auth_url,
             "opening browser for MCP OAuth login"
         );
-        if let Err(err) = open_browser(auth_url.as_str()) {
+        if let Err(err) = open_browser(auth_url.as_str()).await {
             return Err(Error::OAuth {
                 server: self.server_name.clone(),
                 error: format!(
@@ -317,7 +316,7 @@ impl McpOAuth {
             form.push(("client_secret".to_string(), secret.clone()));
         }
         let tokens = self.exchange_token(&as_meta.token_endpoint, &form).await?;
-        self.persist_tokens(tokens)?;
+        self.persist_tokens(tokens).await?;
         self.tokens
             .as_ref()
             .map(|t| t.access_token.clone())
@@ -349,7 +348,7 @@ impl McpOAuth {
             ("resource".to_string(), resource.to_string()),
         ];
         let tokens = self.exchange_token(token_endpoint, &form).await?;
-        self.persist_tokens(tokens)?;
+        self.persist_tokens(tokens).await?;
         Ok(self.tokens.as_ref().unwrap().access_token.clone())
     }
 
@@ -632,12 +631,14 @@ impl McpOAuth {
         })
     }
 
-    fn persist_tokens(&mut self, tokens: TokenSet) -> Result<(), Error> {
+    async fn persist_tokens(&mut self, tokens: TokenSet) -> Result<(), Error> {
         if let Some(path) = self.token_store_path() {
-            save_token_store(&path, &tokens).map_err(|source| Error::OAuth {
-                server: self.server_name.clone(),
-                error: format!("failed to write token store `{}`: {source}", path.display()),
-            })?;
+            save_token_store(&path, &tokens)
+                .await
+                .map_err(|source| Error::OAuth {
+                    server: self.server_name.clone(),
+                    error: format!("failed to write token store `{}`: {source}", path.display()),
+                })?;
         }
         self.tokens = Some(tokens);
         Ok(())
@@ -942,37 +943,37 @@ fn load_token_store(path: &Path) -> Result<TokenSet, String> {
     serde_json::from_str(&data).map_err(|e| e.to_string())
 }
 
-fn save_token_store(path: &Path, tokens: &TokenSet) -> Result<(), std::io::Error> {
+async fn save_token_store(path: &Path, tokens: &TokenSet) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
     let data = serde_json::to_vec_pretty(tokens)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut file = fs::File::create(path)?;
-    file.write_all(&data)?;
+    tokio::fs::write(path, &data).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = tokio::fs::set_permissions(path, perms).await;
     }
     Ok(())
 }
 
-fn open_browser(url: &str) -> Result<(), String> {
+async fn open_browser(url: &str) -> Result<(), String> {
     let result = {
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("cmd")
+            tokio::process::Command::new("cmd")
                 .args(["/C", "start", "", url])
                 .spawn()
         }
         #[cfg(target_os = "macos")]
         {
-            std::process::Command::new("open").arg(url).spawn()
+            tokio::process::Command::new("open").arg(url).spawn()
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            std::process::Command::new("xdg-open").arg(url).spawn()
+            tokio::process::Command::new("xdg-open").arg(url).spawn()
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
         {

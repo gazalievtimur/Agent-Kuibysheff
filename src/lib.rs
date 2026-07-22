@@ -9,6 +9,7 @@ pub mod limits;
 pub mod logging;
 pub mod mcp;
 pub mod output;
+pub mod prompt;
 pub mod provider;
 pub mod sandbox;
 pub mod settings;

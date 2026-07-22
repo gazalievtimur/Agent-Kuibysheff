@@ -6,7 +6,7 @@ use reqwest::redirect::{Attempt, Policy};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
-use tracing::{debug, instrument, warn};
+use tracing::{instrument, warn};
 
 use crate::config::ProviderConfig;
 use crate::limits::TokenUsage;
@@ -56,15 +56,17 @@ impl TrustedProviderOrigin {
 
     /// Endpoint for chat completions on the trusted origin (same origin as `base_url`).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics only if appending `/chat/completions` to a previously validated absolute URL
-    /// somehow yields an invalid URL (should be unreachable).
-    #[must_use]
-    pub fn chat_completions_url(&self) -> Url {
+    /// Returns [`Error::InvalidBaseUrl`] if appending `/chat/completions` to the validated
+    /// origin somehow yields an invalid URL.
+    pub fn chat_completions_url(&self) -> Result<Url, Error> {
         let trimmed = self.base.as_str().trim_end_matches('/');
-        Url::parse(&format!("{trimmed}/chat/completions"))
-            .expect("trusted base_url plus /chat/completions must remain a valid URL")
+        Url::parse(&format!("{trimmed}/chat/completions")).map_err(|err| {
+            Error::InvalidBaseUrl(format!(
+                "failed to build chat completions URL from `{trimmed}`: {err}"
+            ))
+        })
     }
 
     /// Whether `url` shares scheme, host, and effective port with this origin.
@@ -104,7 +106,7 @@ impl OpenAiCompatClient {
             .resolve_api_key()
             .map_err(|_| Error::MissingApiKey(cfg.api_key_env.clone()))?;
         let origin = TrustedProviderOrigin::parse(&cfg.base_url)?;
-        let endpoint = origin.chat_completions_url();
+        let endpoint = origin.chat_completions_url()?;
         let redirect_origin = origin.clone();
 
         let client = Client::builder()
@@ -149,7 +151,8 @@ impl OpenAiCompatClient {
 impl ModelClient for OpenAiCompatClient {
     #[instrument(skip(self, messages), fields(model = %self.cfg.model, message_count = messages.len()))]
     async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, Error> {
-        for attempt in 0..=self.cfg.max_retries {
+        let mut attempt = 0;
+        loop {
             let body = ChatCompletionRequest {
                 model: &self.cfg.model,
                 messages,
@@ -168,10 +171,11 @@ impl ModelClient for OpenAiCompatClient {
             let response = match response {
                 Ok(v) => v,
                 Err(err) => {
-                    if attempt == self.cfg.max_retries {
+                    if attempt >= self.cfg.max_retries {
                         return Err(Error::Http(err));
                     }
                     sleep(self.backoff_with_jitter(attempt)).await;
+                    attempt += 1;
                     continue;
                 }
             };
@@ -188,6 +192,7 @@ impl ModelClient for OpenAiCompatClient {
                         "retrying provider request"
                     );
                     sleep(self.backoff_with_jitter(attempt)).await;
+                    attempt += 1;
                     continue;
                 }
                 return Err(Error::HttpStatus { status, body: text });
@@ -211,9 +216,6 @@ impl ModelClient for OpenAiCompatClient {
 
             return Ok(ModelResponse { content, usage });
         }
-
-        debug!("provider retry loop exhausted");
-        unreachable!("retry loop always returns")
     }
 }
 
@@ -373,5 +375,43 @@ mod tests {
             message.contains("redirect") || message.contains("error sending request"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn invalid_base_url_rejected_at_new() {
+        let mut cfg = test_config("https://example.com");
+        cfg.base_url = "not a valid url".to_string();
+        let err = match OpenAiCompatClient::new(cfg) {
+            Err(err) => err,
+            Ok(_) => panic!("expected invalid base_url error"),
+        };
+        assert!(matches!(err, Error::InvalidBaseUrl(_)));
+    }
+
+    #[tokio::test]
+    async fn retry_exhaustion_returns_http_status_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let mut cfg = test_config(&format!("{}/v1", server.uri()));
+        cfg.max_retries = 2;
+        cfg.retry_base_delay_ms = 1;
+        let client = OpenAiCompatClient::new(cfg).expect("client");
+        let err = client
+            .complete(&[ChatMessage::new(ChatRole::User, "hi")])
+            .await
+            .expect_err("should fail after retries");
+        assert!(matches!(
+            err,
+            Error::HttpStatus {
+                status,
+                ..
+            } if status == StatusCode::INTERNAL_SERVER_ERROR
+        ));
     }
 }

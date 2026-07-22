@@ -1,5 +1,8 @@
+pub mod error;
 pub mod fs_home;
 pub mod local_tools;
+
+pub use error::{HomeFsError, LocalToolsError, PolicyError, ToolError};
 
 use std::sync::Arc;
 
@@ -7,8 +10,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::access::EffectiveToolPolicy;
-use crate::mcp::{Error, ToolExecutor};
+use crate::access::{EffectiveToolPolicy, KNOWN_BUILTINS};
+use crate::mcp::ToolExecutor;
 
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
@@ -49,28 +52,30 @@ impl CompositeToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for CompositeToolExecutor {
-    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, ToolError> {
         match BuiltinServer::parse(server) {
-            Some(BuiltinServer::Home) => self.home.call(tool, arguments).await,
-            Some(BuiltinServer::LocalTools) => self.local_tools.call(tool, arguments).await,
+            Some(BuiltinServer::Home) => self
+                .home
+                .call(tool, arguments)
+                .await
+                .map_err(ToolError::from),
+            Some(BuiltinServer::LocalTools) => self
+                .local_tools
+                .call(tool, arguments)
+                .await
+                .map_err(ToolError::from),
             None => self.external.call_tool(server, tool, arguments).await,
         }
     }
 
     fn available_tools(&self) -> Vec<String> {
         let mut tools = self.external.available_tools();
-        tools.extend(
-            [
-                "home.list",
-                "home.read",
-                "home.write",
-                "home.run",
-                "local_tools.search_docs",
-                "local_tools.read_file",
-            ]
-            .into_iter()
-            .map(str::to_string),
-        );
+        tools.extend(KNOWN_BUILTINS.iter().map(|&name| name.to_string()));
         tools.sort();
         tools.dedup();
         tools
@@ -97,7 +102,12 @@ impl PolicyToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for PolicyToolExecutor {
-    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, ToolError> {
         let qualified = format!("{server}.{tool}");
         if !self.policy.allows_server_tool(server, tool) {
             warn!(
@@ -105,7 +115,9 @@ impl ToolExecutor for PolicyToolExecutor {
                 decision = "deny",
                 "tool call denied by access policy"
             );
-            return Err(Error::PolicyDenied { tool: qualified });
+            return Err(ToolError::Policy(PolicyError::ToolDenied {
+                tool: qualified,
+            }));
         }
         tracing::info!(
             capability = %qualified,
@@ -137,7 +149,7 @@ mod tests {
             server: &str,
             tool: &str,
             _arguments: Value,
-        ) -> Result<Value, Error> {
+        ) -> Result<Value, ToolError> {
             self.called
                 .lock()
                 .expect("lock")
@@ -157,8 +169,14 @@ mod tests {
     #[tokio::test]
     async fn policy_executor_hides_and_denies_disallowed_tools() {
         let access = ResolvedAccessPolicy::legacy();
-        let skills = BTreeSet::from([QualifiedTool::parse("home.read").unwrap()]);
-        let mcp = BTreeSet::from([QualifiedTool::parse("docs.search").unwrap()]);
+        let skills = BTreeSet::from([
+            QualifiedTool::parse("home.read").unwrap(),
+            QualifiedTool::parse("docs.search").unwrap(),
+        ]);
+        let mcp = BTreeSet::from([
+            QualifiedTool::parse("docs.search").unwrap(),
+            QualifiedTool::parse("docs.secret").unwrap(),
+        ]);
         let policy = EffectiveToolPolicy::compile(&access, &skills, mcp);
         let inner = Arc::new(RecordingTools {
             called: std::sync::Mutex::new(Vec::new()),
@@ -178,7 +196,20 @@ mod tests {
             .call_tool("home", "write", serde_json::json!({}))
             .await
             .expect_err("denied");
-        assert!(matches!(denied, Error::PolicyDenied { .. }));
+        assert!(matches!(
+            denied,
+            ToolError::Policy(PolicyError::ToolDenied { .. })
+        ));
+
+        let mcp_denied = executor
+            .call_tool("docs", "secret", serde_json::json!({}))
+            .await
+            .expect_err("mcp denied when not in skills");
+        assert!(matches!(
+            mcp_denied,
+            ToolError::Policy(PolicyError::ToolDenied { .. })
+        ));
+
         assert_eq!(
             inner.called.lock().expect("lock").as_slice(),
             ["home.read".to_string()]

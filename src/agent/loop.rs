@@ -17,7 +17,7 @@ pub enum AgentError {
     #[error("provider failure: {0}")]
     Provider(#[from] crate::provider::Error),
     #[error("tool failure: {0}")]
-    Tool(#[from] crate::mcp::Error),
+    Tool(#[from] crate::tools::ToolError),
     #[error("failed to decode model directive: {0}")]
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
@@ -60,11 +60,13 @@ impl AgentEngine {
     }
 
     pub async fn run(&self, request: AgentRunRequest) -> RunOutput {
-        match self.run_inner(request).await {
+        let result = self.run_inner(request).await;
+        self.loggers.shutdown().await;
+        match result {
             Ok(out) => out,
-            Err(err) => RunOutput {
+            Err((err, usage)) => RunOutput {
                 result: err.to_string(),
-                usage: UsageReport::default(),
+                usage,
                 stop_reason: StopReason::Error,
                 logs: self.loggers.report(),
             },
@@ -73,7 +75,10 @@ impl AgentEngine {
 
     #[instrument(skip(self, request), fields(prompt_len = request.prompt.len()))]
     #[allow(clippy::too_many_lines)]
-    async fn run_inner(&self, request: AgentRunRequest) -> Result<RunOutput, AgentError> {
+    async fn run_inner(
+        &self,
+        request: AgentRunRequest,
+    ) -> Result<RunOutput, (AgentError, UsageReport)> {
         let AgentRunRequest {
             prompt,
             system_prompt,
@@ -91,6 +96,7 @@ impl AgentEngine {
         let mut metrics = RunMetrics::new();
         let mut final_result = String::new();
         let mut stop_reason = StopReason::LimitReached;
+        let mut diag = RunDiagnostics::default();
 
         loop {
             match metrics.pre_step_check(&limits) {
@@ -102,12 +108,13 @@ impl AgentEngine {
                 }
             }
             metrics.begin_iteration();
+            let iteration = metrics.iterations();
 
             let completion = match self.model.complete(&messages).await {
                 Ok(completion) => completion,
                 Err(err) => {
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err(err.into());
+                    return Err((err.into(), build_usage_report(&metrics)));
                 }
             };
             metrics.add_tokens(completion.usage);
@@ -127,7 +134,7 @@ impl AgentEngine {
                     .write_event(
                         "ai_completion",
                         json!({
-                            "iteration": metrics.iterations(),
+                            "iteration": iteration,
                             "content": completion.content,
                             "usage": completion.usage,
                         }),
@@ -135,13 +142,43 @@ impl AgentEngine {
                     .await
                 {
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err(err.into());
+                    return Err((err.into(), build_usage_report(&metrics)));
                 }
             }
 
             let directive = match parse_directive(&completion.content) {
                 Ok(v) => v,
                 Err(err) => {
+                    diag.parse_failures = diag.parse_failures.saturating_add(1);
+                    let content_len = completion.content.len();
+                    let approx_json_objects = approx_json_object_count(&completion.content);
+                    let preview = content_preview(&completion.content, 200);
+                    warn!(
+                        iteration,
+                        error = %err,
+                        content_len,
+                        approx_json_objects,
+                        preview = %preview,
+                        "directive parse failed; tool calls from this turn were not executed"
+                    );
+                    if let Some(ai_log) = &self.loggers.ai {
+                        if let Err(log_err) = ai_log
+                            .write_event(
+                                "directive_parse_failed",
+                                json!({
+                                    "iteration": iteration,
+                                    "error": err.to_string(),
+                                    "content_len": content_len,
+                                    "approx_json_objects": approx_json_objects,
+                                    "preview": preview,
+                                }),
+                            )
+                            .await
+                        {
+                            self.loggers.persist_chat_history(&full_history, None).await;
+                            return Err((log_err.into(), build_usage_report(&metrics)));
+                        }
+                    }
                     push_message(
                         &mut messages,
                         &mut full_history,
@@ -154,7 +191,7 @@ impl AgentEngine {
                             ChatRole::User,
                             json!({
                                 "parse_error": err.to_string(),
-                                "hint": "Respond with strict JSON only. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
+                                "hint": "Respond with exactly one JSON object only. Previous turn was not executed. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
                             })
                             .to_string(),
                         ),
@@ -171,51 +208,86 @@ impl AgentEngine {
             );
 
             for tool_call in directive.tool_calls {
-                let qualified = match QualifiedTool::parse(&format!(
-                    "{}.{}",
-                    tool_call.server, tool_call.tool
-                )) {
-                    Ok(qualified) => qualified,
-                    Err(reason) => {
-                        warn!(
-                            server = %tool_call.server,
-                            tool = %tool_call.tool,
-                            error = %reason,
-                            "tool call name rejected; returning error to the model"
-                        );
-                        push_message(
-                            &mut messages,
-                            &mut full_history,
-                            ChatMessage::new(
-                                ChatRole::User,
+                let qualified =
+                    match QualifiedTool::parse(&format!("{}.{}", tool_call.server, tool_call.tool))
+                    {
+                        Ok(qualified) => qualified,
+                        Err(reason) => {
+                            warn!(
+                                iteration,
+                                server = %tool_call.server,
+                                tool = %tool_call.tool,
+                                error = %reason,
+                                "tool call name rejected; returning error to the model"
+                            );
+                            self.log_tool_event(
+                                "tool_call_failed",
                                 json!({
-                                    "tool_result": {
-                                        "server": tool_call.server,
-                                        "tool": tool_call.tool,
-                                        "error": reason
-                                    }
-                                })
-                                .to_string(),
-                            ),
-                        );
-                        prune_message_history(&mut messages);
-                        continue;
-                    }
-                };
+                                    "iteration": iteration,
+                                    "server": tool_call.server,
+                                    "tool": tool_call.tool,
+                                    "ok": false,
+                                    "error": reason,
+                                }),
+                            )
+                            .await;
+                            push_message(
+                                &mut messages,
+                                &mut full_history,
+                                ChatMessage::new(
+                                    ChatRole::User,
+                                    json!({
+                                        "tool_result": {
+                                            "server": tool_call.server,
+                                            "tool": tool_call.tool,
+                                            "error": reason
+                                        }
+                                    })
+                                    .to_string(),
+                                ),
+                            );
+                            prune_message_history(&mut messages);
+                            continue;
+                        }
+                    };
+                let server = qualified.server().to_string();
+                let tool = qualified.tool().to_string();
                 let qualified_tool = qualified.qualified();
+
+                self.log_tool_event(
+                    "tool_call_started",
+                    json!({
+                        "iteration": iteration,
+                        "server": server,
+                        "tool": tool,
+                    }),
+                )
+                .await;
 
                 let tool_response = match self
                     .tools
-                    .call_tool(&qualified.server, &qualified.tool, tool_call.arguments)
+                    .call_tool(qualified.server(), qualified.tool(), tool_call.arguments)
                     .await
                 {
                     Ok(value) => value,
                     Err(err) => {
                         warn!(
+                            iteration,
                             tool = %qualified_tool,
                             error = %err,
                             "tool call failed; returning error to the model"
                         );
+                        self.log_tool_event(
+                            "tool_call_failed",
+                            json!({
+                                "iteration": iteration,
+                                "server": server,
+                                "tool": tool,
+                                "ok": false,
+                                "error": err.to_string(),
+                            }),
+                        )
+                        .await;
                         push_message(
                             &mut messages,
                             &mut full_history,
@@ -223,8 +295,8 @@ impl AgentEngine {
                                 ChatRole::User,
                                 json!({
                                     "tool_result": {
-                                        "server": qualified.server,
-                                        "tool": qualified.tool,
+                                        "server": server,
+                                        "tool": tool,
                                         "error": err.to_string()
                                     }
                                 })
@@ -235,6 +307,25 @@ impl AgentEngine {
                         continue;
                     }
                 };
+
+                diag.tools_executed = diag.tools_executed.saturating_add(1);
+                if server == "home" && tool == "write" {
+                    diag.home_write_ok = true;
+                }
+                if server == "home" && tool == "run" {
+                    diag.home_run_ok = true;
+                }
+                self.log_tool_event(
+                    "tool_call_finished",
+                    json!({
+                        "iteration": iteration,
+                        "server": server,
+                        "tool": tool,
+                        "ok": true,
+                    }),
+                )
+                .await;
+
                 if metrics.duration_limit_hit(&limits) {
                     final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                     stop_reason = StopReason::LimitReached;
@@ -247,8 +338,8 @@ impl AgentEngine {
                         ChatRole::User,
                         json!({
                             "tool_result": {
-                                "server": qualified.server,
-                                "tool": qualified.tool,
+                                "server": server,
+                                "tool": tool,
                                 "result": tool_response
                             }
                         })
@@ -267,12 +358,24 @@ impl AgentEngine {
                     .result
                     .unwrap_or("Agent marked done without explicit result".to_string());
                 stop_reason = StopReason::GoalReached;
-                info!(iterations = metrics.iterations(), "agent goal reached");
+                if !diag.home_run_ok {
+                    warn!(
+                        iterations = iteration,
+                        parse_failures = diag.parse_failures,
+                        tools_executed = diag.tools_executed,
+                        home_write_ok = diag.home_write_ok,
+                        "goal_reached without successful home.run"
+                    );
+                }
+                info!(iterations = iteration, "agent goal reached");
                 break;
             }
 
             prune_message_history(&mut messages);
         }
+
+        self.emit_run_summary(&diag, &stop_reason, &final_result)
+            .await;
 
         let tokens = metrics.tokens();
         let output = RunOutput {
@@ -292,6 +395,63 @@ impl AgentEngine {
             .await;
         Ok(output)
     }
+
+    async fn log_tool_event(&self, event_type: &str, payload: Value) {
+        let sink = self.loggers.mcp.as_ref().or(self.loggers.ai.as_ref());
+        let Some(sink) = sink else {
+            return;
+        };
+        if let Err(err) = sink.write_event(event_type, payload).await {
+            warn!(error = %err, event_type, "failed to write tool lifecycle log event");
+        }
+    }
+
+    async fn emit_run_summary(
+        &self,
+        diag: &RunDiagnostics,
+        stop_reason: &StopReason,
+        final_result: &str,
+    ) {
+        let done_without_home_run = *stop_reason == StopReason::GoalReached && !diag.home_run_ok;
+        let stop_reason_name = stop_reason_name(stop_reason);
+        info!(
+            stop_reason = stop_reason_name,
+            parse_failures = diag.parse_failures,
+            tools_executed = diag.tools_executed,
+            home_write_ok = diag.home_write_ok,
+            home_run_ok = diag.home_run_ok,
+            done_without_home_run,
+            "agent run finished"
+        );
+        let Some(ai_log) = &self.loggers.ai else {
+            return;
+        };
+        if let Err(err) = ai_log
+            .write_event(
+                "run_summary",
+                json!({
+                    "stop_reason": stop_reason_name,
+                    "result_len": final_result.len(),
+                    "parse_failures": diag.parse_failures,
+                    "tools_executed": diag.tools_executed,
+                    "home_write_ok": diag.home_write_ok,
+                    "home_run_ok": diag.home_run_ok,
+                    "done_without_home_run": done_without_home_run,
+                }),
+            )
+            .await
+        {
+            warn!(error = %err, "failed to write run_summary log event");
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct RunDiagnostics {
+    parse_failures: u32,
+    tools_executed: u32,
+    home_write_ok: bool,
+    home_run_ok: bool,
 }
 
 fn push_message(
@@ -300,6 +460,7 @@ fn push_message(
     message: ChatMessage,
 ) {
     full_history.push(message.clone());
+    prune_message_history(full_history);
     messages.push(message);
 }
 
@@ -324,6 +485,17 @@ fn limit_name(limit: LimitExceeded) -> &'static str {
         LimitExceeded::Iterations => "max_iterations",
         LimitExceeded::Tokens => "max_tokens",
         LimitExceeded::Duration => "max_duration_sec",
+    }
+}
+
+fn build_usage_report(metrics: &RunMetrics) -> UsageReport {
+    let tokens = metrics.tokens();
+    UsageReport {
+        iterations: metrics.iterations(),
+        prompt_tokens: tokens.prompt_tokens,
+        completion_tokens: tokens.completion_tokens,
+        total_tokens: tokens.total_tokens,
+        elapsed_ms: metrics.elapsed_ms(),
     }
 }
 
@@ -396,9 +568,156 @@ fn parse_directive(raw: &str) -> Result<ModelDirective, serde_json::Error> {
     serde_json::from_str(stripped)
 }
 
+fn stop_reason_name(reason: &StopReason) -> &'static str {
+    match reason {
+        StopReason::GoalReached => "goal_reached",
+        StopReason::LimitReached => "limit_reached",
+        StopReason::Error => "error",
+    }
+}
+
+/// Rough count of top-level JSON objects in a model reply (detects multi-JSON turns).
+fn approx_json_object_count(content: &str) -> usize {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    let mut count = 0usize;
+    if trimmed.starts_with('{') {
+        count = count.saturating_add(1);
+    }
+    count = count.saturating_add(trimmed.matches("\n{").count());
+    count
+}
+
+fn content_preview(content: &str, max_chars: usize) -> String {
+    let trimmed = content.trim();
+    let mut preview: String = trimmed.chars().take(max_chars).collect();
+    if trimmed.chars().count() > max_chars {
+        preview.push('…');
+    }
+    preview
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use serde_json::Value;
+
     use super::*;
+    use crate::limits::TokenUsage;
+    use crate::logging::MemoryEventSink;
+    use crate::provider::ModelResponse;
+
+    struct FailingProvider {
+        calls: AtomicUsize,
+        usage: TokenUsage,
+    }
+
+    #[async_trait]
+    impl ModelClient for FailingProvider {
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> Result<ModelResponse, crate::provider::Error> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Ok(ModelResponse {
+                    content: r#"{"done":false,"thought":"x","tool_calls":[],"result":null}"#
+                        .to_string(),
+                    usage: self.usage,
+                })
+            } else {
+                Err(crate::provider::Error::EmptyChoices)
+            }
+        }
+    }
+
+    struct ScriptedProvider {
+        responses: Vec<String>,
+        calls: AtomicUsize,
+        usage: TokenUsage,
+    }
+
+    #[async_trait]
+    impl ModelClient for ScriptedProvider {
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> Result<ModelResponse, crate::provider::Error> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let content = self
+                .responses
+                .get(call)
+                .cloned()
+                .ok_or(crate::provider::Error::EmptyChoices)?;
+            Ok(ModelResponse {
+                content,
+                usage: self.usage,
+            })
+        }
+    }
+
+    struct NoopTools;
+
+    #[async_trait]
+    impl ToolExecutor for NoopTools {
+        async fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            _arguments: Value,
+        ) -> Result<Value, crate::tools::ToolError> {
+            Ok(Value::Null)
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    struct RecordingTools {
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for RecordingTools {
+        async fn call_tool(
+            &self,
+            server: &str,
+            tool: &str,
+            _arguments: Value,
+        ) -> Result<Value, crate::tools::ToolError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((server.to_string(), tool.to_string()));
+            Ok(json!({"ok": true, "stdout": "11"}))
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            vec!["home.write".to_string(), "home.run".to_string()]
+        }
+    }
+
+    fn test_usage() -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        }
+    }
+
+    fn test_limits() -> LimitsConfig {
+        LimitsConfig {
+            max_iterations: 10,
+            max_tokens: 1_000,
+            max_duration_sec: 100,
+        }
+    }
 
     #[test]
     fn user_message_contains_read_only_file_context() {
@@ -443,7 +762,28 @@ mod tests {
     }
 
     #[test]
-    fn push_message_keeps_full_history_when_messages_are_pruned() {
+    fn approx_json_object_count_detects_multi_json() {
+        let multi = concat!(
+            r#"{"done":false,"thought":"a","tool_calls":[],"result":null}"#,
+            "\n\n",
+            r#"{"done":true,"thought":"b","tool_calls":[],"result":"1"}"#,
+        );
+        assert_eq!(approx_json_object_count(multi), 2);
+        assert_eq!(
+            approx_json_object_count(r#"{"done":true,"tool_calls":[],"result":null}"#),
+            1
+        );
+        assert_eq!(approx_json_object_count(""), 0);
+    }
+
+    #[test]
+    fn content_preview_truncates() {
+        let preview = content_preview("abcdefghij", 4);
+        assert_eq!(preview, "abcd…");
+    }
+
+    #[test]
+    fn push_message_prunes_full_history_to_same_budget_as_messages() {
         let mut messages = vec![
             ChatMessage::new(ChatRole::System, "system"),
             ChatMessage::new(ChatRole::User, "goal"),
@@ -464,8 +804,44 @@ mod tests {
             prune_message_history(&mut messages);
         }
 
-        assert!(full_history.len() > messages.len());
+        assert_eq!(full_history.len(), messages.len());
+        assert!(full_history.len() <= HISTORY_PREFIX_LEN + MAX_TAIL_MESSAGES);
+        assert_eq!(full_history[0].content.as_ref(), "system");
+        assert_eq!(full_history[1].content.as_ref(), "goal");
         assert_eq!(full_history.last().unwrap().content.as_ref(), "user-39");
+    }
+
+    #[test]
+    fn full_history_respects_char_budget() {
+        let mut messages = vec![
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
+        ];
+        let mut full_history = messages.clone();
+
+        push_message(
+            &mut messages,
+            &mut full_history,
+            ChatMessage::new(ChatRole::Assistant, "a".repeat(80_000)),
+        );
+        push_message(
+            &mut messages,
+            &mut full_history,
+            ChatMessage::new(ChatRole::User, "b".repeat(80_000)),
+        );
+        push_message(
+            &mut messages,
+            &mut full_history,
+            ChatMessage::new(ChatRole::Assistant, "c".repeat(80_000)),
+        );
+
+        assert!(history_char_len(&full_history) <= MAX_HISTORY_CHARS);
+        assert_eq!(full_history[0].content.as_ref(), "system");
+        assert_eq!(full_history[1].content.as_ref(), "goal");
+        assert_eq!(
+            full_history.last().unwrap().content.as_ref(),
+            &"c".repeat(80_000)
+        );
     }
 
     #[test]
@@ -534,5 +910,142 @@ mod tests {
         assert!(messages
             .iter()
             .any(|message| message.content.chars().count() == 100_000));
+    }
+
+    #[tokio::test]
+    async fn error_path_preserves_partial_usage() {
+        let usage = TokenUsage {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+        };
+        let provider = Arc::new(FailingProvider {
+            calls: AtomicUsize::new(0),
+            usage,
+        });
+        let tools = Arc::new(NoopTools);
+        let engine = AgentEngine::new(provider, tools, Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system prompt".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::Error);
+        assert_eq!(output.usage.iterations, 2);
+        assert_eq!(output.usage.prompt_tokens, 10);
+        assert_eq!(output.usage.completion_tokens, 5);
+        assert_eq!(output.usage.total_tokens, 15);
+    }
+
+    #[tokio::test]
+    async fn multi_json_parse_failure_logs_and_done_without_tools() {
+        let multi = concat!(
+            r#"{"done":false,"thought":"fetch","tool_calls":[{"server":"aoc","tool":"aoc_get_task","arguments":{}}],"result":null}"#,
+            "\n\n",
+            r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"solution.py","content":"print(1)"}}],"result":null}"#,
+        );
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![
+                multi.to_string(),
+                r#"{"done":true,"thought":"guess","tool_calls":[],"result":"2164381"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let ai_sink = Arc::new(MemoryEventSink::new());
+        let mcp_sink = Arc::new(MemoryEventSink::new());
+        let loggers = Loggers::with_sinks(Some(ai_sink.clone()), Some(mcp_sink.clone()));
+        let engine = AgentEngine::new(provider, tools.clone(), loggers);
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "solve".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "2164381");
+        assert!(tools.calls.lock().unwrap().is_empty());
+
+        let ai_events = ai_sink.events();
+        assert!(
+            ai_events
+                .iter()
+                .any(|(name, _)| name == "directive_parse_failed"),
+            "expected directive_parse_failed in ai log: {ai_events:?}"
+        );
+        let summary = ai_events
+            .iter()
+            .find(|(name, _)| name == "run_summary")
+            .map(|(_, payload)| payload.clone())
+            .expect("run_summary");
+        assert_eq!(summary["parse_failures"], 1);
+        assert_eq!(summary["tools_executed"], 0);
+        assert_eq!(summary["home_run_ok"], false);
+        assert_eq!(summary["done_without_home_run"], true);
+        assert!(mcp_sink.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn successful_home_run_is_recorded_in_summary() {
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![
+                r#"{"done":false,"thought":"run","tool_calls":[{"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"]}}],"result":null}"#
+                    .to_string(),
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"11"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let ai_sink = Arc::new(MemoryEventSink::new());
+        let mcp_sink = Arc::new(MemoryEventSink::new());
+        let loggers = Loggers::with_sinks(Some(ai_sink.clone()), Some(mcp_sink.clone()));
+        let engine = AgentEngine::new(provider, tools.clone(), loggers);
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "solve".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "11");
+        assert_eq!(
+            tools.calls.lock().unwrap().as_slice(),
+            &[("home".to_string(), "run".to_string())]
+        );
+
+        let mcp_events = mcp_sink.events();
+        assert!(mcp_events
+            .iter()
+            .any(|(name, _)| name == "tool_call_started"));
+        assert!(mcp_events
+            .iter()
+            .any(|(name, _)| name == "tool_call_finished"));
+
+        let summary = ai_sink
+            .events()
+            .into_iter()
+            .find(|(name, _)| name == "run_summary")
+            .map(|(_, payload)| payload)
+            .expect("run_summary");
+        assert_eq!(summary["tools_executed"], 1);
+        assert_eq!(summary["home_run_ok"], true);
+        assert_eq!(summary["done_without_home_run"], false);
+        assert_eq!(summary["parse_failures"], 0);
     }
 }

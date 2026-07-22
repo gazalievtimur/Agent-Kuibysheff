@@ -261,7 +261,7 @@ EOF
 
   python3 "$AOC_LIB" seed-input "$TASK_PATH" "$HOME_DIR/input.txt"
 
-  PROMPT="Solve AoC task ${TASK_ID}. Required steps: 1) Fetch statement with aoc_get_task. 2) Call aoc_get_input (writes/confirm home/input.txt; do not paste the full input into thoughts). input.txt is already present under home. 3) Write solution.py that reads input.txt, then home.run with program=python. Debug until stdout shows the correct total distance. 4) Final response: done=true with result equal to only the final answer string. Do not guess. Return JSON only on every turn."
+  PROMPT="Solve AoC task ${TASK_ID}. Work one turn at a time: each reply must be exactly one JSON object (never multiple JSON objects). Do not pre-emit future turns. Steps across turns: 1) Fetch statement with aoc_get_task and call aoc_get_input (writes/confirm home/input.txt; do not paste the full input into thoughts). input.txt is already present under home. 2) Write solution.py that reads input.txt, then home.run with program=python. Debug until stdout shows the correct answer. 3) Final response: done=true with result equal to only the final answer string. Do not guess. Return JSON only on every turn."
 
   echo ""
   echo "=== $TASK_ID ==="

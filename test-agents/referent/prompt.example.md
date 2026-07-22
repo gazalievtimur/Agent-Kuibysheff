@@ -54,7 +54,8 @@ Return JSON only on every turn.
 ```text
 Solve AoC task 2024-01-1.
 
-Required steps:
+Work one turn at a time: each reply must be exactly one JSON object (never multiple).
+Do not pre-emit future turns. Steps across turns:
 1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.
 2. Write a Python solution under home with home.write.
 3. Run it with home.run (program=python). Debug using stdout/stderr until correct.
@@ -70,7 +71,7 @@ $env:AOC_BANK_DIR = (Resolve-Path .\local\aoc-bank).Path
 cargo run --release -- `
   --config .\test-agents\referent\agent-config.aoc.example.yaml `
   --settings-dir .\test-agents\referent `
-  --prompt "Solve AoC task 2024-01-1.`n`nRequired steps:`n1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.`n2. Write a Python solution under home with home.write.`n3. Run it with home.run (program=python). Debug using stdout/stderr until correct.`n4. Final response: done=true with result equal to only the final answer string.`n`nReturn JSON only on every turn." `
+  --prompt "Solve AoC task 2024-01-1.`n`nWork one turn at a time: each reply must be exactly one JSON object (never multiple). Do not pre-emit future turns.`nSteps across turns:`n1. Fetch the task statement with aoc_get_task and the input with aoc_get_input.`n2. Write a Python solution under home with home.write.`n3. Run it with home.run (program=python). Debug using stdout/stderr until correct.`n4. Final response: done=true with result equal to only the final answer string.`n`nReturn JSON only on every turn." `
   --home .\local\aoc-runs\manual\2024-01-1
 ```
 

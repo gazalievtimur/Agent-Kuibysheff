@@ -2,6 +2,16 @@
 resolver = "2"
 members = [".", "crates/sandbox-linux", "crates/sandbox-windows"]
 
+[workspace.dependencies]
+sandbox-linux = { path = "crates/sandbox-linux" }
+sandbox-windows = { path = "crates/sandbox-windows" }
+thiserror = "2"
+serde = "1"
+serde_json = "1"
+tempfile = "3"
+libc = "0.2"
+windows-sys = "0.59"
+
 [package]
 name = "agent_Kuibyshev"
 version = "0.1.0"
@@ -15,11 +25,11 @@ clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
 serde_yaml = "0.9"
 dotenvy = "0.15"
-thiserror = "2"
+thiserror = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync", "net"] }
 url = "2"
 sha2 = "0.10"
@@ -27,13 +37,13 @@ base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-sandbox-linux = { path = "crates/sandbox-linux" }
+sandbox-linux = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-sandbox-windows = { path = "crates/sandbox-windows" }
+sandbox-windows = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 wiremock = "0.6"
 
 [lints.rust]
@@ -49,6 +59,10 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+
+[[bin]]
+name = "agent_Kuibyshev"
+path = "src/main.rs"
 
 [[bin]]
 name = "sandbox_e2e_fixture"

@@ -10,6 +10,7 @@ use crate::cli::CliArgs;
 use crate::limits::LimitsConfig;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     #[error("failed to read config file `{path}`: {source}")]
     ReadFile {
@@ -328,7 +329,7 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
                 }
                 if raw.auth.is_some() || !raw.headers.is_empty() {
                     return Err(
-                        "mcp transport `stdio` must not set `url`/`headers`/`auth`".to_string(),
+                        "mcp transport `stdio` must not set `url`/`headers`/`auth`".to_string()
                     );
                 }
                 McpTransport::Stdio(McpStdioConfig {
@@ -345,7 +346,7 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
                 }
                 if has_command || !raw.args.is_empty() || !raw.env.is_empty() {
                     return Err(
-                        "mcp transport `http` must not set `command`/`args`/`env`".to_string(),
+                        "mcp transport `http` must not set `command`/`args`/`env`".to_string()
                     );
                 }
                 McpTransport::Http(McpHttpConfig {
@@ -666,7 +667,11 @@ mod tests {
     fn config_validation_rejects_empty_model() {
         let mut cfg = sample_config();
         cfg.provider.model.clear();
-        assert!(validate(&cfg).is_err());
+        let err = validate(&cfg).expect_err("empty model");
+        assert!(
+            err.to_string().contains("provider.model"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -773,7 +778,8 @@ limits:
   max_duration_sec: 1
 ";
 
-        assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
+        let err = serde_yaml::from_str::<AppConfig>(yaml).expect_err("legacy field");
+        assert!(err.to_string().contains("goal"), "unexpected error: {err}");
     }
 
     #[test]
@@ -847,7 +853,11 @@ access:
     allow: true
 ";
 
-        assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
+        let err = serde_yaml::from_str::<AppConfig>(yaml).expect_err("unknown field");
+        assert!(
+            err.to_string().contains("network"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1040,6 +1050,10 @@ mcp:
     command: mcp-server
     url: https://mcp.example.com/mcp
 ";
-        assert!(serde_yaml::from_str::<AppConfig>(yaml).is_err());
+        let err = serde_yaml::from_str::<AppConfig>(yaml).expect_err("command and url");
+        assert!(
+            err.to_string().contains("command") || err.to_string().contains("url"),
+            "unexpected error: {err}"
+        );
     }
 }
