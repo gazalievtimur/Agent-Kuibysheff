@@ -47,6 +47,14 @@ fn base_request(cwd: PathBuf, exe: PathBuf, argv: Vec<String>) -> SandboxLaunchR
     }
 }
 
+fn require_sandbox() -> Option<()> {
+    if LinuxSandbox::probe().is_err() {
+        eprintln!("skip: Linux sandbox unavailable");
+        return None;
+    }
+    Some(())
+}
+
 #[test]
 fn probe_succeeds_or_explains() {
     // On restricted hosts (Docker without userns) probe may fail closed.
@@ -64,9 +72,9 @@ fn probe_succeeds_or_explains() {
 
 #[test]
 fn echo_under_grants() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let dir = tempdir().unwrap();
     let script = fixture_script(dir.path(), "echo hello-linux-sandbox");
     let request = base_request(dir.path().to_path_buf(), script, Vec::new());
@@ -83,9 +91,9 @@ fn echo_under_grants() {
 
 #[test]
 fn deny_sibling_write() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let root = tempdir().unwrap();
     let allowed = root.path().join("allowed");
     let sibling = root.path().join("sibling");
@@ -114,9 +122,9 @@ fn deny_sibling_write() {
 
 #[test]
 fn timeout_kills_tree() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let dir = tempdir().unwrap();
     let script = fixture_script(dir.path(), "sleep 30");
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
@@ -129,9 +137,9 @@ fn timeout_kills_tree() {
 
 #[test]
 fn network_namespace_has_no_foreign_ifaces() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let dir = tempdir().unwrap();
     // Empty netns: /proc/net/dev should not mention host NICs.
     let script = fixture_script(
@@ -161,9 +169,9 @@ echo net-isolated
 
 #[test]
 fn argv_metacharacters_are_literal() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let dir = tempdir().unwrap();
     let script = fixture_script(dir.path(), r#"printf '%s\n' "$1""#);
     let request = base_request(
@@ -183,9 +191,9 @@ fn argv_metacharacters_are_literal() {
 
 #[test]
 fn truncates_large_stdout() {
-    if LinuxSandbox::probe().is_err() {
+    let Some(()) = require_sandbox() else {
         return;
-    }
+    };
     let dir = tempdir().unwrap();
     let script = fixture_script(
         dir.path(),
@@ -203,4 +211,43 @@ done
     assert_eq!(result.exit_code, Some(0), "stderr={}", result.stderr);
     assert!(result.stdout_truncated, "expected truncation flag");
     assert!(result.stdout.chars().count() <= 64);
+}
+
+#[test]
+fn deny_child_processes_when_allow_children_false() {
+    let Some(()) = require_sandbox() else {
+        return;
+    };
+    let dir = tempdir().unwrap();
+    let script = fixture_script(dir.path(), "sh -c '(echo child)& wait'");
+    let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
+    request.allow_children = false;
+    let result = LinuxSandbox::run(&request).expect("sandboxed child-denial run");
+    assert!(!result.timed_out, "timed out: stderr={}", result.stderr);
+    assert_ne!(
+        result.exit_code,
+        Some(0),
+        "child fork should be denied (stdout={} stderr={})",
+        result.stdout,
+        result.stderr
+    );
+    assert!(
+        !result.stdout.contains("child"),
+        "child output must not appear (stdout={})",
+        result.stdout
+    );
+}
+
+#[test]
+fn allow_child_processes_when_allow_children_true() {
+    let Some(()) = require_sandbox() else {
+        return;
+    };
+    let dir = tempdir().unwrap();
+    let script = fixture_script(dir.path(), "sh -c '(echo child)& wait'");
+    let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
+    request.allow_children = true;
+    let result = LinuxSandbox::run(&request).expect("sandboxed child-allow run");
+    assert_eq!(result.exit_code, Some(0), "stderr={}", result.stderr);
+    assert!(result.stdout.contains("child"), "stdout={}", result.stdout);
 }

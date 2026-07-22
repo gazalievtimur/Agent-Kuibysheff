@@ -50,6 +50,7 @@ pub struct SandboxOutput {
 
 /// Failures from sandbox setup, policy, I/O, or cleanup.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SandboxError {
     #[error("sandbox unavailable: {reason}")]
     Unavailable { reason: String },

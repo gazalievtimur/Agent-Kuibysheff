@@ -110,14 +110,15 @@ impl AclJournal {
             Ok(()) => Ok(()),
             // Some third-party install trees (e.g. C:\Python312) reject inheritable ACE
             // updates with ERROR_INVALID_PARAMETER; retry without inheritance.
-            Err(first) if inherit => match self.try_grant_dacl(&path_buf, package_sid, access, false)
-            {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    self.seen.remove(&path_buf);
-                    Err(first)
+            Err(first) if inherit => {
+                match self.try_grant_dacl(&path_buf, package_sid, access, false) {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        self.seen.remove(&path_buf);
+                        Err(first)
+                    }
                 }
-            },
+            }
             Err(err) => {
                 self.seen.remove(&path_buf);
                 Err(err)

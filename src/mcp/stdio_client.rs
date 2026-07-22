@@ -15,6 +15,7 @@ use crate::config::{McpServerConfig, McpStdioConfig, McpTransport};
 use crate::logging::SharedEventSink;
 use crate::mcp::http_client::McpHttpClient;
 use crate::mcp::{Error, ToolExecutor};
+use crate::tools::ToolError;
 
 pub struct McpRegistry {
     servers: HashMap<String, ServerHandle>,
@@ -201,19 +202,24 @@ impl McpClientHandle {
 #[async_trait]
 impl ToolExecutor for McpRegistry {
     #[instrument(skip(self, arguments), fields(server, tool))]
-    async fn call_tool(&self, server: &str, tool: &str, arguments: Value) -> Result<Value, Error> {
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, ToolError> {
         tracing::Span::current().record("server", server);
         tracing::Span::current().record("tool", tool);
 
         let handle = self
             .servers
             .get(server)
-            .ok_or_else(|| Error::UnknownServer(server.to_string()))?;
+            .ok_or_else(|| ToolError::Mcp(Error::UnknownServer(server.to_string())))?;
         if !handle.tools.contains(tool) {
-            return Err(Error::UnknownTool {
+            return Err(ToolError::Mcp(Error::UnknownTool {
                 server: server.to_string(),
                 tool: tool.to_string(),
-            });
+            }));
         }
 
         let arguments_for_log = self.logger.as_ref().map(|_| arguments.clone());
@@ -239,9 +245,11 @@ impl ToolExecutor for McpRegistry {
                 }),
             )
             .await
-            .map_err(|err| Error::Logging {
-                server: server.to_string(),
-                source: err,
+            .map_err(|err| {
+                ToolError::Mcp(Error::Logging {
+                    server: server.to_string(),
+                    source: err,
+                })
             })?;
         }
 

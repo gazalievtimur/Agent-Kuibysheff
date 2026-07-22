@@ -109,7 +109,7 @@ impl SkillsCatalog {
         let mut lines = vec![
             "Skills available to the agent:".to_string(),
             "Follow skill policies strictly when deciding tool usage.".to_string(),
-            "Hard tool enforcement uses qualified names only; MCP tools declared in config are trusted automatically.".to_string(),
+            "Hard tool enforcement uses qualified names only; both built-in and MCP tools must be listed in a skill allowed_tools block.".to_string(),
         ];
 
         for skill in &self.skills {

@@ -17,7 +17,7 @@ pub enum AgentError {
     #[error("provider failure: {0}")]
     Provider(#[from] crate::provider::Error),
     #[error("tool failure: {0}")]
-    Tool(#[from] crate::mcp::Error),
+    Tool(#[from] crate::tools::ToolError),
     #[error("failed to decode model directive: {0}")]
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
@@ -250,8 +250,8 @@ impl AgentEngine {
                             continue;
                         }
                     };
-                let server = qualified.server.clone();
-                let tool = qualified.tool.clone();
+                let server = qualified.server().to_string();
+                let tool = qualified.tool().to_string();
                 let qualified_tool = qualified.qualified();
 
                 self.log_tool_event(
@@ -266,7 +266,7 @@ impl AgentEngine {
 
                 let tool_response = match self
                     .tools
-                    .call_tool(&qualified.server, &qualified.tool, tool_call.arguments)
+                    .call_tool(qualified.server(), qualified.tool(), tool_call.arguments)
                     .await
                 {
                     Ok(value) => value,
@@ -670,7 +670,7 @@ mod tests {
             _server: &str,
             _tool: &str,
             _arguments: Value,
-        ) -> Result<Value, crate::mcp::Error> {
+        ) -> Result<Value, crate::tools::ToolError> {
             Ok(Value::Null)
         }
 
@@ -690,7 +690,7 @@ mod tests {
             server: &str,
             tool: &str,
             _arguments: Value,
-        ) -> Result<Value, crate::mcp::Error> {
+        ) -> Result<Value, crate::tools::ToolError> {
             self.calls
                 .lock()
                 .unwrap()

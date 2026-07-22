@@ -1,19 +1,27 @@
-﻿use std::collections::BTreeMap;
+use sandbox_windows::{SandboxLaunchRequest, WindowsSandbox};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use sandbox_windows::{SandboxLaunchRequest, WindowsSandbox};
 use tempfile::tempdir;
 
-#[test]
-fn python_under_runtime_root_runs() {
-    let dir = tempdir().unwrap();
-    std::fs::write(dir.path().join("solution.py"), "print(41+1)\n").unwrap();
-    let py = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local/aoc-sandbox-runtime/python");
+fn require_python_runtime() -> Option<(PathBuf, PathBuf)> {
+    let py =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local/aoc-sandbox-runtime/python");
     let exe = py.join("python.exe");
     if !exe.is_file() {
         eprintln!("skip: staged python missing at {}", exe.display());
-        return;
+        return None;
     }
+    Some((py, exe))
+}
+
+#[test]
+fn python_under_runtime_root_runs() {
+    let Some((py, exe)) = require_python_runtime() else {
+        return;
+    };
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("solution.py"), "print(41+1)\n").unwrap();
     WindowsSandbox::probe().expect("probe");
     let request = SandboxLaunchRequest {
         executable: exe,
@@ -29,6 +37,17 @@ fn python_under_runtime_root_runs() {
     };
     let result = WindowsSandbox::run(&request).expect("run");
     assert!(!result.timed_out, "stderr={}", result.stderr);
-    assert_eq!(result.exit_code, Some(0), "stderr={} stdout={}", result.stderr, result.stdout);
-    assert!(result.stdout.contains("42"), "stdout={} stderr={}", result.stdout, result.stderr);
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "stderr={} stdout={}",
+        result.stderr,
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("42"),
+        "stdout={} stderr={}",
+        result.stdout,
+        result.stderr
+    );
 }

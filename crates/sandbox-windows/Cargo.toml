@@ -8,10 +8,10 @@ license = "MIT"
 publish = false
 
 [dependencies]
-thiserror = "2"
+thiserror = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
     "Win32_Security",
@@ -27,7 +27,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [[bin]]
 name = "sandbox_fixture"

@@ -53,7 +53,6 @@ fn pid1_try(
 
     setup_rootfs(&request, &scratch)?;
     drop_capabilities()?;
-    install_denylist()?;
 
     // Fork payload so PID1 can reap.
     // SAFETY: single-threaded helper child; fork is safe here.
@@ -107,6 +106,17 @@ fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
     if let Ok(cwd) = c_path(&request.cwd) {
         // SAFETY: chdir to policy cwd inside the sandbox root.
         let _ = unsafe { libc::chdir(cwd.as_ptr()) };
+    }
+
+    // Install the seccomp filter in the payload process. When children are not allowed,
+    // this denies fork/clone/vfork with ENOSYS.
+    if let Err(err) = install_denylist(request.allow_children) {
+        let msg = format!("sandbox payload seccomp failed: {err}\n");
+        // SAFETY: best-effort stderr write before exit.
+        unsafe {
+            let _ = libc::write(2, msg.as_ptr().cast(), msg.len());
+            libc::_exit(71);
+        }
     }
 
     let mut argv_c: Vec<CString> = Vec::new();
