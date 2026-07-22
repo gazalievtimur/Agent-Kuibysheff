@@ -95,7 +95,7 @@ function Get-YamlScalar {
 
 $baseConfigText = Get-Content -LiteralPath $Config -Raw -Encoding UTF8
 $providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://polza.ai/api/v1"
-$providerModel = Get-YamlScalar $baseConfigText "model" "openai/gpt-5.6-luna-pro"
+$providerModel = Get-YamlScalar $baseConfigText "model" "deepseek/deepseek-v4-flash"
 $providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "POLZA_API_KEY"
 $providerApiKey = Get-YamlProviderApiKey $baseConfigText
 $providerTimeoutMs = Get-YamlScalar $baseConfigText "timeout_ms" "180000"
@@ -322,7 +322,7 @@ access:
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText((Join-Path $homeDir "input.txt"), $seedInput, $utf8NoBom)
 
-        $prompt = "Solve AoC task $($task.Id). Required steps: 1) Fetch statement with aoc_get_task. 2) Call aoc_get_input (writes/confirm home/input.txt; do not paste the full input into thoughts). input.txt is already present under home. 3) Write solution.py that reads input.txt, then home.run with program=python. Debug until stdout shows the correct total distance. 4) Final response: done=true with result equal to only the final answer string. Do not guess. Return JSON only on every turn."
+        $prompt = "Solve AoC task $($task.Id). Work one turn at a time: each reply must be exactly one JSON object (never multiple JSON objects). Do not pre-emit future turns. Steps across turns: 1) Fetch statement with aoc_get_task and call aoc_get_input (writes/confirm home/input.txt; do not paste the full input into thoughts). input.txt is already present under home. 2) Write solution.py that reads input.txt, then home.run with program=python. Debug until stdout shows the correct answer. 3) Final response: done=true with result equal to only the final answer string. Do not guess. Return JSON only on every turn."
 
         Write-Host ""
         Write-Host "=== $($task.Id) ==="

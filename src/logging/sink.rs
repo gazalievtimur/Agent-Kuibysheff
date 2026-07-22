@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -29,15 +29,18 @@ pub trait EventSink: Send + Sync {
 
     /// Returns the logical destination for reporting.
     fn destination(&self) -> SinkDestination;
+
+    /// Flushes any buffered records and releases background resources.
+    async fn shutdown(&self) -> Result<(), LoggingError>;
 }
 
 pub type SharedEventSink = Arc<dyn EventSink>;
 
 /// Append-only JSONL file sink.
-#[derive(Clone)]
 pub struct FileJsonlSink {
     path: PathBuf,
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl FileJsonlSink {
@@ -67,7 +70,7 @@ impl FileJsonlSink {
 
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
         let log_path = path.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut file = file;
             while let Some(row) = rx.recv().await {
                 if let Err(err) = file.write_all(&row).await {
@@ -80,12 +83,61 @@ impl FileJsonlSink {
             }
         });
 
-        Ok(Self { path, tx })
+        Ok(Self {
+            path,
+            tx: Mutex::new(Some(tx)),
+            handle: Mutex::new(Some(handle)),
+        })
     }
 
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Closes the channel and waits for the background writer to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoggingError::TaskJoin`] if the background writer panics.
+    pub async fn flush(self) -> Result<(), LoggingError> {
+        self.shutdown().await
+    }
+
+    /// Closes the channel and waits for the background writer to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoggingError::ChannelClosed`] if the sink has already been shut down.
+    /// Returns [`LoggingError::TaskJoin`] if the background writer panics.
+    pub async fn shutdown(&self) -> Result<(), LoggingError> {
+        let tx = self.tx.lock().unwrap().take();
+        drop(tx);
+        let handle = self.handle.lock().unwrap().take();
+        let Some(handle) = handle else {
+            return Err(LoggingError::ChannelClosed);
+        };
+        handle
+            .await
+            .map_err(|err| LoggingError::TaskJoin(err.to_string()))
+    }
+}
+
+impl Drop for FileJsonlSink {
+    fn drop(&mut self) {
+        let tx = self.tx.lock().unwrap().take();
+        drop(tx);
+        let handle = self.handle.lock().unwrap().take();
+        if let Some(handle) = handle {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                // Drain the writer from a temporary thread to avoid blocking the runtime thread
+                // in current-thread schedulers or during runtime shutdown.
+                let _ = std::thread::spawn(move || {
+                    let _ = runtime.block_on(tokio::time::timeout(Duration::from_secs(5), handle));
+                })
+                .join();
+            }
+        }
     }
 }
 
@@ -103,14 +155,19 @@ impl EventSink for FileJsonlSink {
         });
         let mut row = serde_json::to_vec(&record)?;
         row.push(b'\n');
-        self.tx
-            .send(row)
-            .await
-            .map_err(|_| LoggingError::ChannelClosed)
+        let tx = self.tx.lock().unwrap().clone();
+        let Some(tx) = tx else {
+            return Err(LoggingError::ChannelClosed);
+        };
+        tx.send(row).await.map_err(|_| LoggingError::ChannelClosed)
     }
 
     fn destination(&self) -> SinkDestination {
         SinkDestination::File(self.path.clone())
+    }
+
+    async fn shutdown(&self) -> Result<(), LoggingError> {
+        FileJsonlSink::shutdown(self).await
     }
 }
 
@@ -140,6 +197,48 @@ impl EventSink for DbEventSink {
 
     fn destination(&self) -> SinkDestination {
         SinkDestination::Database
+    }
+
+    async fn shutdown(&self) -> Result<(), LoggingError> {
+        Ok(())
+    }
+}
+
+/// In-memory sink for tests and diagnostics capture.
+#[derive(Default)]
+pub struct MemoryEventSink {
+    events: Mutex<Vec<(String, Value)>>,
+}
+
+impl MemoryEventSink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns a snapshot of recorded `(event_type, payload)` pairs.
+    #[must_use]
+    pub fn events(&self) -> Vec<(String, Value)> {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl EventSink for MemoryEventSink {
+    async fn write_event(&self, event_type: &str, payload: Value) -> Result<(), LoggingError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push((event_type.to_string(), payload));
+        Ok(())
+    }
+
+    fn destination(&self) -> SinkDestination {
+        SinkDestination::Database
+    }
+
+    async fn shutdown(&self) -> Result<(), LoggingError> {
+        Ok(())
     }
 }
 
@@ -185,7 +284,7 @@ mod tests {
     use super::*;
     use crate::config::LoggingConfig;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn file_sink_writes_jsonl_record() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("events.jsonl");
@@ -195,15 +294,14 @@ mod tests {
             .await
             .expect("write");
 
-        // Allow background writer to flush.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        sink.flush().await.expect("flush");
 
         let contents = std::fs::read_to_string(path).expect("read");
         assert!(contents.contains("\"event\":\"test_event\""));
         assert!(contents.contains("\"ok\":true"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn create_event_sink_uses_configured_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = LoggingConfig {
@@ -220,6 +318,41 @@ mod tests {
         match sink.destination() {
             SinkDestination::File(path) => assert_eq!(path, dir.path().join("ai_usage.jsonl")),
             SinkDestination::Database => panic!("expected file sink"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_flushes_buffered_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("events.jsonl");
+        let sink = FileJsonlSink::new(path.clone()).await.expect("sink");
+
+        for i in 0..10 {
+            sink.write_event("batch_event", serde_json::json!({"i": i}))
+                .await
+                .expect("write");
+        }
+
+        // Drop without explicit flush; Drop should drain the channel and wait for the writer.
+        drop(sink);
+
+        let contents = std::fs::read_to_string(path).expect("read");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(
+            lines.len(),
+            10,
+            "expected 10 JSONL records, got {}",
+            lines.len()
+        );
+        for (i, line) in lines.iter().enumerate() {
+            assert!(
+                line.contains("batch_event"),
+                "record {i} missing event type"
+            );
+            assert!(
+                line.contains(&format!("\"i\":{i}")),
+                "record {i} missing payload"
+            );
         }
     }
 }
