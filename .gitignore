@@ -16,6 +16,10 @@ agent-config.local.yaml
 /local/aoc-runs/
 /local/aoc-sandbox-runtime/
 
+# 1C workflow run homes (not committed)
+/workflows/1c-dev/runs/*
+!/workflows/1c-dev/runs/.gitkeep
+
 # Local code-index cache (not source)
 src/.code-index/
 

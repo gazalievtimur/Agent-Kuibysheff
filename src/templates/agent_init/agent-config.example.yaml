@@ -1,0 +1,43 @@
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 60000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp: []
+# Add MCP servers with a future `add-mcp` command, or edit this list by hand:
+# mcp:
+#   - name: example
+#     transport: stdio
+#     command: "npx"
+#     args: ["-y", "mcp-server"]
+#     timeout_ms: 20000
+
+limits:
+  max_iterations: 10
+  max_tokens: 15000
+  max_duration_sec: 120
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: false
+  sink:
+    type: file
+
+# Optional fail-closed capability policy.
+# Omit `access` for legacy filesystem mode.
+# When present, everything not listed is denied.
+#
+# access:
+#   tools:
+#     builtins:
+#       - home.list
+#       - home.read
+#       - home.write
+#   filesystem:
+#     home:
+#       read: ["in", "out"]
+#       write: ["out"]

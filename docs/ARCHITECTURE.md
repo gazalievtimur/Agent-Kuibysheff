@@ -41,7 +41,7 @@ A run is bootstrapped from CLI arguments, config files, and settings. The result
 ```mermaid
 flowchart TD
     subgraph inputs [Inputs]
-        CLI[CliArgs]
+        CLI[Cli Commands]
         CFG[Config YAML/JSON]
         SET[settings_dir]
         FILES[--files]
@@ -79,8 +79,9 @@ flowchart TD
 
 ### Bootstrap and orchestration
 
-- `src/main.rs` — entry point. Loads dotenv, parses CLI, starts Tokio, and wires all layers. It also calls `sandbox_linux::try_run_helper()` before Tokio starts so the Linux namespace helper runs single-threaded.
-- `src/cli.rs` — `clap` derive struct for CLI arguments. Required: `--config`, `--settings-dir`, `--prompt`, `--home`. Optional: `--files`, limit overrides, `--save-chat-history`.
+- `src/main.rs` — entry point. Loads dotenv, parses CLI subcommands, and for `run` starts Tokio and wires all layers. It also calls `sandbox_linux::try_run_helper()` before Tokio starts so the Linux namespace helper runs single-threaded. Management commands (`init`, …) print human text and exit codes; only `run` emits `RunOutput` JSON.
+- `src/cli/` — `clap` subcommands: `run` (`RunArgs`: `--config`, `--settings-dir`, `--prompt`, `--home`, optional `--files`, limit overrides, `--save-chat-history`) and `init` (`InitArgs`).
+- `src/commands/` — management command implementations (scaffold, future convert / add-mcp / add-access). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
 - `src/config.rs` — loads and validates YAML/JSON runtime config (`provider`, `mcp`, `limits`, `logging`, optional `access`). Applies CLI overrides and resolves paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.

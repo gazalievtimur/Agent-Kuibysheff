@@ -45,7 +45,7 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config .\agent-config.local-demo.yaml `
   --settings-dir .\settings `
   --prompt "Summarize the attached README in 5-8 bullet points.`n`nRequired steps:`n1. First response: done=false, one home.write call creating out/summary.md`n2. Second response: done=false, one home.write call creating out/manifest.json`n3. Third response: done=true with a short result`n`nReturn JSON only on every turn." `

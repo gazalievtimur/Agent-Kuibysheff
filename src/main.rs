@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use agent_Kuibyshev::access::{
@@ -5,7 +6,8 @@ use agent_Kuibyshev::access::{
     WorkspaceFsPolicy,
 };
 use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
-use agent_Kuibyshev::cli::CliArgs;
+use agent_Kuibyshev::cli::{Cli, Commands, RunArgs};
+use agent_Kuibyshev::commands;
 use agent_Kuibyshev::config::{apply_cli_overrides, load_config, validate};
 use agent_Kuibyshev::context::build_input_files_context;
 use agent_Kuibyshev::logging::{init_tracing, resolve_base_dir, Loggers};
@@ -22,36 +24,62 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tracing::{error, info};
 
-fn main() {
+fn main() -> ExitCode {
     // Must run before Tokio so the Linux sandbox helper stays single-threaded.
     sandbox_linux::try_run_helper();
 
     agent_Kuibyshev::config::load_dotenv();
 
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            err.print().ok();
+            return ExitCode::from(err.exit_code().clamp(0, 255) as u8);
+        }
+    };
+
+    match cli.command {
+        Commands::Run(args) => run_worker(args),
+        Commands::Init(args) => match commands::init::run(&args) {
+            Ok(result) => {
+                commands::init::print_success(&result);
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+fn run_worker(args: RunArgs) -> ExitCode {
     let output = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("tokio runtime")
-        .block_on(run())
+        .block_on(run(args))
     {
         Ok(out) => out,
         Err(err) => RunOutput::error(format!("{err:#}")),
     };
 
     match serde_json::to_string_pretty(&output) {
-        Ok(payload) => println!("{payload}"),
+        Ok(payload) => {
+            println!("{payload}");
+            ExitCode::SUCCESS
+        }
         Err(err) => {
             error!(error = %err, "failed to serialize RunOutput as JSON");
             println!(
                 "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
             );
+            ExitCode::FAILURE
         }
     }
 }
 
-async fn run() -> Result<RunOutput> {
-    let cli = CliArgs::parse();
-
+async fn run(cli: RunArgs) -> Result<RunOutput> {
     let config_path = cli.config.clone();
     let (mut cfg, access_policy) = tokio::task::spawn_blocking(move || load_config(&config_path))
         .await

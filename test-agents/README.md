@@ -7,6 +7,18 @@
 CLI остаётся stateless worker: агент пишет артефакты в `--home`, оркестратор решает,
 как их применять.
 
+## Новый агент
+
+Чтобы положить профиль в этот каталог:
+
+```powershell
+cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent
+# или с запросом provider/limits:
+cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent -i
+```
+
+По умолчанию `init` создаёт `./<agent-id>/` в текущей директории.
+
 ## Структура агента
 
 ```text
@@ -28,7 +40,7 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config .\test-agents\referent\agent-config.example.yaml `
   --settings-dir .\test-agents\referent `
   --prompt "Собери первичную информацию по задаче PROJ-123" `
@@ -64,6 +76,12 @@ cp -R ./local/aoc-bank.example ./local/aoc-bank
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
 | [searxng](./searxng/) | Web search через Streamable HTTP MCP `mcp-searxng` → локальный SearXNG |
+| [1c-intake](./1c-intake/) | Этап 1 воркфлоу 1С: Jira/Confluence → brief |
+| [1c-analyst](./1c-analyst/) | Этап 2: brief + CF (+ SearXNG) → план |
+| [1c-coder](./1c-coder/) | Этап 3: план → `out/src` |
+| [1c-implementer](./1c-implementer/) | Этап 4: упаковка CFE `out/cfe` |
+
+Оркестратор 1С: [workflows/1c-dev/README.md](../workflows/1c-dev/README.md), `scripts/1c-dev-run.ps1`.
 
 ## SearXNG web search
 
@@ -78,7 +96,7 @@ docker run -d --name mcp-searxng -p 3000:3000 `
   isokoliuk/mcp-searxng:latest
 
 New-Item -ItemType Directory -Force -Path .\demo-home\searxng | Out-Null
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config .\test-agents\searxng\agent-config.example.yaml `
   --settings-dir .\test-agents\searxng `
   --prompt "Find what SearXNG is and write a short brief to out/search_brief.md" `

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::access::{resolve_access_policy, validate_access_config, ResolvedAccessPolicy};
-use crate::cli::CliArgs;
+use crate::cli::RunArgs;
 use crate::limits::LimitsConfig;
 
 #[derive(Debug, Error)]
@@ -504,7 +504,7 @@ pub fn config_parent_dir(path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
-pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &CliArgs) {
+pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &RunArgs) {
     if let Some(max_iterations) = cli.max_iterations {
         cfg.limits.max_iterations = max_iterations;
     }

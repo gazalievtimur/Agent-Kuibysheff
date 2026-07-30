@@ -1,0 +1,58 @@
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 180000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp:
+  - name: "sntx_sem"
+    command: "python"
+    args: ["-m", "sntx_sem.mcp_server"]
+    env:
+      SNTX_SEM_CONFIG: "C:/Git/1c-sntx-sem/config.yaml"
+    timeout_ms: 60000
+
+  - name: "code-index"
+    command: "c:/mcp/code-index/bsl-indexer.exe"
+    args: ["serve", "--path", "C:/ПервыйБИТ/Первый.Гит/Union K7/k7/src/cf"]
+    timeout_ms: 60000
+
+limits:
+  max_iterations: 50
+  max_tokens: 150000
+  max_duration_sec: 1800
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: false
+  sink:
+    type: file
+    path: "./logs/1c-coder"
+
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+      - local_tools.search_docs
+      - local_tools.read_file
+  filesystem:
+    home:
+      read: ["."]
+      write: ["out/", "notes/"]
+    workspace:
+      root: "C:/ПервыйБИТ/Первый.Гит/Union K7/k7/src/cf"
+      read: ["."]
+    input_roots:
+      - "."
+  run:
+    programs:
+      - name: rg
+        executable: rg
+      - name: git
+        executable: git

@@ -280,6 +280,7 @@ EOF
   START_NS="$(date +%s%N)"
   set +e
   "$AGENT_BIN" \
+    run \
     --config "$RUN_CONFIG_PATH" \
     --settings-dir "$SETTINGS_DIR" \
     --prompt "$PROMPT" \
