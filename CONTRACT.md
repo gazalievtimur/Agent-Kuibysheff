@@ -4,6 +4,11 @@ This repository provides a stateless CLI worker. Repository discovery, run
 coordination, review, and application of generated changes belong to an
 external orchestrator.
 
+Multi-stage product workflows may chain several `run` invocations (different
+`--settings-dir` / `--config` / `--home` per stage) and hand off `out/`
+artifacts between them. An example is the 1C conveyor under
+[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`).
+
 ## Invocation
 
 ```text

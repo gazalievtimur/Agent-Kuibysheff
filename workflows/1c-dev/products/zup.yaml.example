@@ -1,0 +1,30 @@
+# Copy to zup.yaml and adjust paths for your ZUP workspace.
+# Apply mode differs from K7: extension often lives under CF dump Extensions/.
+
+id: zup
+displayName: "ЗУП"
+issueKeyRegex: '^[A-Z][A-Z0-9]+-\d+$'
+workspaceRoot: "C:/ПервыйБИТ/Первый.Гит/ЗУП"
+productRoot: "C:/ПервыйБИТ/Первый.Гит/ЗУП/zup3.1"
+cfSrc: "src/cf"
+cfeSrc: "src/cf/Extensions"
+stagingReleaseBranch: ""
+stagingDbPath: "C:/1C/Bases/ZUP_Local"
+taskDirPattern: "{workspaceRoot}/{issueKey}"
+extensionNamePattern: "{issueKey}"
+mcp:
+  codeIndexPath: "{productRoot}/src/cf"
+  sntxSemConfig: "C:/Git/1c-sntx-sem/config.yaml"
+  searxngUrl: "http://127.0.0.1:3000/mcp"
+  codeIndexCommand: "c:/mcp/code-index/bsl-indexer.exe"
+apply:
+  # For ZUP, copy out/cfe into productRoot/cfeSrc/<extensionName>/
+  # instead of K7 task _work/src + cfe-task-extension BuildCfe.
+  mode: extension_in_cf_dump
+  buildScript: ""
+
+# Notes vs K7:
+# - No Release_XXX staging CFE convention by default.
+# - Prefer writing into an existing extension under src/cf/Extensions/...
+# - Intake MCP (Atlassian) is the same; analyst/coder skills are shared.
+# - Implementer packaging rules and apply-out must be adapted per extension layout.

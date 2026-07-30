@@ -21,6 +21,10 @@ target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface an
 external orchestrator must implement, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for a high-level architectural overview.
 
+For a multi-stage **1C development conveyor** (Jira/Confluence intake → analysis
+→ coder → CFE packaging), see [workflows/1c-dev/README.md](workflows/1c-dev/README.md)
+and `scripts/1c-dev-run.ps1`.
+
 ## Inputs
 
 Worker (`run`):

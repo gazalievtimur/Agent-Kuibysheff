@@ -76,6 +76,12 @@ cp -R ./local/aoc-bank.example ./local/aoc-bank
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
 | [searxng](./searxng/) | Web search через Streamable HTTP MCP `mcp-searxng` → локальный SearXNG |
+| [1c-intake](./1c-intake/) | Этап 1 воркфлоу 1С: Jira/Confluence → brief |
+| [1c-analyst](./1c-analyst/) | Этап 2: brief + CF (+ SearXNG) → план |
+| [1c-coder](./1c-coder/) | Этап 3: план → `out/src` |
+| [1c-implementer](./1c-implementer/) | Этап 4: упаковка CFE `out/cfe` |
+
+Оркестратор 1С: [workflows/1c-dev/README.md](../workflows/1c-dev/README.md), `scripts/1c-dev-run.ps1`.
 
 ## SearXNG web search
 
