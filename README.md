@@ -138,6 +138,10 @@ cargo run --bin agent_Kuibyshev -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
+Model context-window pruning is configured under `provider.history` (defaults
+`max_tail_messages: 30`, `max_chars: 200000`). Raise these for long-context
+models; they are independent of `limits.max_tokens` (the run stop budget).
+
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
 (including the optional `access` policy),
 [`settings/`](settings/) for the settings layout,
@@ -258,7 +262,7 @@ By default the agent writes detailed logs under `~/.agent-kuibyshev/logs`:
 | `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
 | `ai_usage.jsonl` | Structured AI completion events (when `enable_ai_log: true`) |
 | `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
-| `chat_history.json` | Full unpruned chat transcript (when `enable_chat_history: true` or `--save-chat-history`) |
+| `chat_history.json` | Chat transcript pruned to the same `provider.history` budgets as the model window (when `enable_chat_history: true` or `--save-chat-history`) |
 
 Override the base directory with any of:
 

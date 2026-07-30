@@ -293,6 +293,7 @@ mod tests {
             timeout_ms: 5_000,
             max_retries: 0,
             retry_base_delay_ms: 1,
+            history: crate::config::ProviderHistoryConfig::default(),
         }
     }
 

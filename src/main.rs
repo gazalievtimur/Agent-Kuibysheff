@@ -183,6 +183,7 @@ async fn run(cli: RunArgs) -> Result<RunOutput> {
             system_prompt,
             input_files_context,
             limits: cfg.limits,
+            history: cfg.provider.history.clone(),
         })
         .await)
 }

@@ -218,6 +218,10 @@ pub fn render_agent_config(answers: &ConfigAnswers) -> String {
   timeout_ms: 60000
   max_retries: 3
   retry_base_delay_ms: 500
+  # Context-window pruning for this model (independent of limits.max_tokens).
+  history:
+    max_tail_messages: 30
+    max_chars: 200000
 
 mcp: []
 # Add MCP servers with a future `add-mcp` command, or edit this list by hand.
@@ -323,9 +327,7 @@ fn prepare_target_dir(target_dir: &Path, force: bool) -> Result<(), InitError> {
                 .next()
                 .is_none();
             if !is_empty && !force {
-                return Err(InitError::TargetNotEmpty(
-                    target_dir.display().to_string(),
-                ));
+                return Err(InitError::TargetNotEmpty(target_dir.display().to_string()));
             }
             Ok(())
         }
@@ -336,12 +338,11 @@ fn prepare_target_dir(target_dir: &Path, force: bool) -> Result<(), InitError> {
                 "path exists and is not a directory",
             ),
         }),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(target_dir).map_err(|source| InitError::CreateDir {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => fs::create_dir_all(target_dir)
+            .map_err(|source| InitError::CreateDir {
                 path: target_dir.display().to_string(),
                 source,
-            })
-        }
+            }),
         Err(source) => Err(InitError::CreateDir {
             path: target_dir.display().to_string(),
             source,

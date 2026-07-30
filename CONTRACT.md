@@ -23,8 +23,8 @@ agent_Kuibyshev run \
   [--max-duration-sec N]
 ```
 
-- `--config` contains provider, MCP, limits, logging, and optional `access`
-  policy configuration.
+- `--config` contains provider (including optional `provider.history` context
+  pruning), MCP, limits, logging, and optional `access` policy configuration.
 - `--settings-dir` contains `master_prompt.md`, `skills.dsl`, and optional
   `rules.md`.
 - `--prompt` is the task for one run.
@@ -34,6 +34,14 @@ agent_Kuibyshev run \
   under `access.filesystem.input_roots`.
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
+
+`limits.*` stop the run (iterations / cumulative token budget / wall clock).
+`provider.history` controls how much chat context is sent to the model on each
+step: after a fixed prefix (system prompt + initial user message), only the
+newest `max_tail_messages` turns are kept, and the whole window is capped at
+`max_chars` UTF-8 characters. Defaults are `30` / `200000`. These knobs belong
+with the model because larger context windows need a larger working history;
+they are independent of `limits.max_tokens`.
 
 The `run` process prints exactly one JSON `RunOutput` document to stdout. A
 run-level failure is represented by `stop_reason: "error"` and an error message
