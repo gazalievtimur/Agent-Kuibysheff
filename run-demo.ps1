@@ -31,7 +31,7 @@ try {
     }
 
     Write-Host "Running agent_Kuibyshev with home: $HomePath"
-    cargo run -- `
+    cargo run --bin agent_Kuibyshev -- run `
         --config $ConfigPath `
         --settings-dir $SettingsDir `
         --prompt $Prompt `

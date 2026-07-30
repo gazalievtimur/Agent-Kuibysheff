@@ -23,13 +23,26 @@ for a high-level architectural overview.
 
 ## Inputs
 
+Worker (`run`):
+
 ```text
---config <FILE>          provider / MCP / limits / logging
---settings-dir <DIR>     master_prompt.md / skills.dsl / optional rules.md
---prompt <TEXT>          task for this run
---home <DIR>             sandboxed writable workspace
---files <PATH>...        optional UTF-8 read-only context files
+agent_Kuibyshev run \
+  --config <FILE> \
+  --settings-dir <DIR> \
+  --prompt <TEXT> \
+  --home <DIR> \
+  [--files <PATH>...]
 ```
+
+Scaffold a new agent profile:
+
+```text
+agent_Kuibyshev help
+agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+```
+
+Creates `./<agent-id>/` (or `--path`) with settings files and
+`agent-config.example.yaml`. `--interactive` prompts for provider and limits.
 
 ## Releases
 
@@ -91,7 +104,7 @@ Copy-Item .env.example .env
 
 # Option C: explicit environment variable
 $env:POLZA_API_KEY = "your_api_key"
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config ./agent-config.local-demo.yaml `
   --settings-dir ./settings `
   --prompt "Summarize the attached README into out/summary.md" `
@@ -117,7 +130,7 @@ This run uses:
 Runtime limit overrides remain available:
 
 ```powershell
-cargo run -- <required arguments> `
+cargo run --bin agent_Kuibyshev -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
@@ -256,7 +269,7 @@ for a later implementation.
 Enable full chat history from the CLI:
 
 ```powershell
-cargo run -- ... --save-chat-history
+cargo run --bin agent_Kuibyshev -- run ... --save-chat-history
 ```
 
 Example:

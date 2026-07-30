@@ -7,7 +7,7 @@ external orchestrator.
 ## Invocation
 
 ```text
-agent_Kuibyshev \
+agent_Kuibyshev run \
   --config <FILE> \
   --settings-dir <DIR> \
   --prompt <TEXT> \
@@ -30,11 +30,29 @@ agent_Kuibyshev \
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
 
-The process prints exactly one JSON `RunOutput` document to stdout. A run-level
-failure is represented by `stop_reason: "error"` and an error message in
-`result`. Policy denials and sandbox unavailability are returned as tool-result
-errors (for example `PolicyDenied`, `SandboxUnavailable`) without performing
-the side effect.
+The `run` process prints exactly one JSON `RunOutput` document to stdout. A
+run-level failure is represented by `stop_reason: "error"` and an error message
+in `result`. Policy denials and sandbox unavailability are returned as
+tool-result errors (for example `PolicyDenied`, `SandboxUnavailable`) without
+performing the side effect.
+
+### Management commands
+
+Commands other than `run` (for example `init`) print human-readable text and
+use process exit codes. They do **not** emit `RunOutput` JSON.
+
+```text
+agent_Kuibyshev help
+agent_Kuibyshev help init
+agent_Kuibyshev --help
+
+agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+```
+
+`init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
+`rules.md`) plus `agent-config.example.yaml`. Default path: `./<agent-id>/`.
+With `--interactive`, the CLI prompts for `provider` (`base_url`, `model`,
+`api_key_env`) and `limits`, then writes those values into the starter config.
 
 ## Access policy (fail-closed)
 

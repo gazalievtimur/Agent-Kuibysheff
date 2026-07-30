@@ -360,6 +360,7 @@ access:
                     throw "Release binary missing: $agentExe (run cargo build --release first)"
                 }
                 $allOutput = & $agentExe `
+                    run `
                     --config $effectiveConfig `
                     --settings-dir $SettingsDir `
                     --prompt $prompt `

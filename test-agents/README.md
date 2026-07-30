@@ -7,6 +7,18 @@
 CLI остаётся stateless worker: агент пишет артефакты в `--home`, оркестратор решает,
 как их применять.
 
+## Новый агент
+
+Чтобы положить профиль в этот каталог:
+
+```powershell
+cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent
+# или с запросом provider/limits:
+cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent -i
+```
+
+По умолчанию `init` создаёт `./<agent-id>/` в текущей директории.
+
 ## Структура агента
 
 ```text
@@ -28,7 +40,7 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config .\test-agents\referent\agent-config.example.yaml `
   --settings-dir .\test-agents\referent `
   --prompt "Собери первичную информацию по задаче PROJ-123" `
@@ -78,7 +90,7 @@ docker run -d --name mcp-searxng -p 3000:3000 `
   isokoliuk/mcp-searxng:latest
 
 New-Item -ItemType Directory -Force -Path .\demo-home\searxng | Out-Null
-cargo run -- `
+cargo run --bin agent_Kuibyshev -- run `
   --config .\test-agents\searxng\agent-config.example.yaml `
   --settings-dir .\test-agents\searxng `
   --prompt "Find what SearXNG is and write a short brief to out/search_brief.md" `
