@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Validate stage artifacts for K7 1C workflow.
+  Validate stage artifacts for 1c-dev workflow.
 #>
 param(
     [Parameter(Mandatory = $true)][ValidateSet("1", "2", "3", "4")][string]$Stage,

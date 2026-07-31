@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Prepare stage home/in and product.json for K7 workflow stages.
+  Prepare stage home/in and product.json for 1c-dev workflow stages.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$StageHome,
@@ -41,6 +41,7 @@ function Expand-ProductPath {
 }
 
 $yaml = Get-Content -LiteralPath $ProductYamlPath -Raw -Encoding UTF8
+$productId = Get-YamlScalar $yaml "id" "demo"
 $workspaceRoot = Get-YamlScalar $yaml "workspaceRoot"
 $productRoot = Get-YamlScalar $yaml "productRoot"
 $cfSrc = Get-YamlScalar $yaml "cfSrc" "src/cf"
@@ -48,7 +49,7 @@ $cfeSrc = Get-YamlScalar $yaml "cfeSrc" "src/cfe"
 $baseline = Get-YamlScalar $yaml "stagingReleaseBranch"
 $stagingDb = Get-YamlScalar $yaml "stagingDbPath"
 $taskDirPattern = Get-YamlScalar $yaml "taskDirPattern" "{workspaceRoot}/{issueKey}"
-$extPattern = Get-YamlScalar $yaml "extensionNamePattern" "K7_{number}"
+$extPattern = Get-YamlScalar $yaml "extensionNamePattern" "Ext_{number}"
 
 $number = ""
 if ($IssueKey -match "-(\d+)$") { $number = $Matches[1] }
@@ -68,7 +69,7 @@ $outDir = Join-Path $StageHome "out"
 New-Item -ItemType Directory -Force -Path $inDir, $outDir, (Join-Path $StageHome "notes") | Out-Null
 
 $productJson = [ordered]@{
-    id                    = "k7"
+    id                    = $productId
     issueKey              = $IssueKey
     workspaceRoot         = $workspaceRoot
     productRoot           = $productRoot

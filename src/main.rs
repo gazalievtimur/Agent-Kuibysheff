@@ -68,12 +68,18 @@ fn main() -> ExitCode {
 }
 
 fn run_worker(args: RunArgs) -> ExitCode {
-    let output = match tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime")
-        .block_on(run(args))
     {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: failed to start tokio runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let output = match runtime.block_on(run(args)) {
         Ok(out) => out,
         Err(err) => RunOutput::error(format!("{err:#}")),
     };

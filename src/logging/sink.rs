@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -13,6 +13,10 @@ use crate::config::{LogSinkConfig, LoggingConfig};
 
 use super::paths::resolve_base_dir;
 use super::LoggingError;
+
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Where structured event records are persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,9 +115,9 @@ impl FileJsonlSink {
     /// Returns [`LoggingError::ChannelClosed`] if the sink has already been shut down.
     /// Returns [`LoggingError::TaskJoin`] if the background writer panics.
     pub async fn shutdown(&self) -> Result<(), LoggingError> {
-        let tx = self.tx.lock().unwrap().take();
+        let tx = lock_mutex(&self.tx).take();
         drop(tx);
-        let handle = self.handle.lock().unwrap().take();
+        let handle = lock_mutex(&self.handle).take();
         let Some(handle) = handle else {
             return Err(LoggingError::ChannelClosed);
         };
@@ -125,17 +129,40 @@ impl FileJsonlSink {
 
 impl Drop for FileJsonlSink {
     fn drop(&mut self) {
-        let tx = self.tx.lock().unwrap().take();
+        let tx = lock_mutex(&self.tx).take();
         drop(tx);
-        let handle = self.handle.lock().unwrap().take();
+        let handle = lock_mutex(&self.handle).take();
         if let Some(handle) = handle {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 // Drain the writer from a temporary thread to avoid blocking the runtime thread
                 // in current-thread schedulers or during runtime shutdown.
-                let _ = std::thread::spawn(move || {
-                    let _ = runtime.block_on(tokio::time::timeout(Duration::from_secs(5), handle));
+                let path = self.path.clone();
+                match std::thread::spawn(move || {
+                    runtime.block_on(tokio::time::timeout(Duration::from_secs(5), handle))
                 })
-                .join();
+                .join()
+                {
+                    Ok(Ok(Ok(()))) => {}
+                    Ok(Ok(Err(err))) => {
+                        warn!(
+                            path = %path.display(),
+                            error = %err,
+                            "log sink writer panicked during drop"
+                        );
+                    }
+                    Ok(Err(_)) => {
+                        warn!(
+                            path = %path.display(),
+                            "log sink writer drain timed out during drop"
+                        );
+                    }
+                    Err(_) => {
+                        warn!(
+                            path = %path.display(),
+                            "log sink drain thread panicked during drop"
+                        );
+                    }
+                }
             }
         }
     }
@@ -155,7 +182,7 @@ impl EventSink for FileJsonlSink {
         });
         let mut row = serde_json::to_vec(&record)?;
         row.push(b'\n');
-        let tx = self.tx.lock().unwrap().clone();
+        let tx = lock_mutex(&self.tx).clone();
         let Some(tx) = tx else {
             return Err(LoggingError::ChannelClosed);
         };
@@ -219,17 +246,14 @@ impl MemoryEventSink {
     /// Returns a snapshot of recorded `(event_type, payload)` pairs.
     #[must_use]
     pub fn events(&self) -> Vec<(String, Value)> {
-        self.events.lock().unwrap().clone()
+        lock_mutex(&self.events).clone()
     }
 }
 
 #[async_trait]
 impl EventSink for MemoryEventSink {
     async fn write_event(&self, event_type: &str, payload: Value) -> Result<(), LoggingError> {
-        self.events
-            .lock()
-            .unwrap()
-            .push((event_type.to_string(), payload));
+        lock_mutex(&self.events).push((event_type.to_string(), payload));
         Ok(())
     }
 

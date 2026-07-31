@@ -1,0 +1,22 @@
+# Copy to demo.yaml (or your-product.yaml) and adjust paths.
+# Do not commit machine-specific product YAML with real paths/secrets.
+
+id: demo
+displayName: "Demo 1C product"
+issueKeyRegex: '^[A-Z][A-Z0-9]+-\d+$'
+workspaceRoot: "D:/work/my-1c-workspace"
+productRoot: "D:/work/my-1c-workspace/product"
+cfSrc: "src/cf"
+cfeSrc: "src/cfe"
+stagingReleaseBranch: "release/baseline"
+stagingDbPath: "D:/1C/Bases/Staging"
+taskDirPattern: "{workspaceRoot}/{issueKey}"
+extensionNamePattern: "Ext_{number}"
+mcp:
+  codeIndexPath: "{productRoot}/src/cf"
+  sntxSemConfig: "D:/tools/1c-sntx-sem/config.yaml"
+  searxngUrl: "http://127.0.0.1:3000/mcp"
+  codeIndexCommand: "D:/tools/code-index/bsl-indexer.exe"
+apply:
+  mode: cfe_task_workdir
+  buildScript: "{workspaceRoot}/.workflow/skills/cfe-task-extension/scripts/cfe-task-extension.ps1"

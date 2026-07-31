@@ -20,7 +20,7 @@ mcp:
 
   - name: "code-index"
     command: "c:/mcp/code-index/bsl-indexer.exe"
-    args: ["serve", "--path", "C:/ПервыйБИТ/Первый.Гит/Union K7/k7/src/cf"]
+    args: ["serve", "--path", "D:/work/my-1c-product/src/cf"]
     timeout_ms: 60000
 
   - name: "searxng"
@@ -55,7 +55,7 @@ access:
       read: ["."]
       write: ["out/", "notes/"]
     workspace:
-      root: "C:/ПервыйБИТ/Первый.Гит/Union K7/k7/src/cf"
+      root: "D:/work/my-1c-product/src/cf"
       read: ["."]
     input_roots:
       - "."

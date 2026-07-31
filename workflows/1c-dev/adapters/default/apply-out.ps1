@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Copy stage4 out/cfe into K7 task workdir; optionally BuildCfe.
+  Copy stage4 out/cfe into product task workdir; optionally BuildCfe.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$CfeOutDir,

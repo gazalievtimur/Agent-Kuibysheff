@@ -20,6 +20,10 @@ agent-config.local.yaml
 /workflows/1c-dev/runs/*
 !/workflows/1c-dev/runs/.gitkeep
 
+# Local product adapter paths (keep *.yaml.example in git)
+/workflows/1c-dev/products/*.yaml
+!/workflows/1c-dev/products/*.yaml.example
+
 # Local code-index cache (not source)
 src/.code-index/
 
