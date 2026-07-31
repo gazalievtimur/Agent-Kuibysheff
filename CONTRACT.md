@@ -51,21 +51,39 @@ performing the side effect.
 
 ### Management commands
 
-Commands other than `run` (for example `init`) print human-readable text and
-use process exit codes. They do **not** emit `RunOutput` JSON.
+Commands other than `run` (for example `init`, `check`) print human-readable
+text and use process exit codes. They do **not** emit `RunOutput` JSON.
 
 ```text
 agent_Kuibyshev help
 agent_Kuibyshev help init
+agent_Kuibyshev help check
 agent_Kuibyshev --help
 
 agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+
+agent_Kuibyshev check --config <FILE> \
+  [--settings-dir <DIR>] \
+  [--skip-provider] [--skip-mcp] [--skip-sandbox]
 ```
 
 `init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
 `rules.md`) plus `agent-config.example.yaml`. Default path: `./<agent-id>/`.
 With `--interactive`, the CLI prompts for `provider` (`base_url`, `model`,
 `api_key_env`) and `limits`, then writes those values into the starter config.
+
+`check` probes resources from the runtime config (and optionally the settings
+directory) without running the agent loop. It reports pass/fail for:
+
+- config load and schema validation (including resolved `access` host paths)
+- provider API key resolution and HTTP reachability (`GET {base_url}/models`)
+- each configured MCP server (connect + `tools/list`)
+- `access.run` program executables and required `inherit_env` variables
+- OS sandbox availability when programs are configured
+- logging base directory resolution
+- settings files and `skills.dsl` parse (when `--settings-dir` is set)
+
+Exit code `0` only when every probe is `ok` or intentionally `skip`.
 
 ## Access policy (fail-closed)
 

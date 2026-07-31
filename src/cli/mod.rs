@@ -1,11 +1,13 @@
 //! CLI argument parsing with clap subcommands.
 
+mod check;
 mod init;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+pub use check::CheckArgs;
 pub use init::InitArgs;
 
 /// Top-level CLI.
@@ -27,6 +29,8 @@ pub enum Commands {
     Run(RunArgs),
     /// Create a new agent settings directory and starter config.
     Init(InitArgs),
+    /// Check availability of resources configured for an agent.
+    Check(CheckArgs),
     // later: Convert, AddMcp, AddAccess, ...
 }
 
@@ -141,11 +145,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_check_subcommand() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "check",
+            "--config",
+            "config.yaml",
+            "--settings-dir",
+            "settings",
+            "--skip-provider",
+            "--skip-mcp",
+            "--skip-sandbox",
+        ])
+        .expect("parse check");
+
+        let Commands::Check(args) = cli.command else {
+            panic!("expected Check");
+        };
+        assert_eq!(args.config, PathBuf::from("config.yaml"));
+        assert_eq!(args.settings_dir, Some(PathBuf::from("settings")));
+        assert!(args.skip_provider);
+        assert!(args.skip_mcp);
+        assert!(args.skip_sandbox);
+    }
+
+    #[test]
     fn root_help_lists_commands() {
         let err = Cli::try_parse_from(["agent", "--help"]).expect_err("help is an error exit");
         let rendered = err.to_string();
         assert!(rendered.contains("run"), "{rendered}");
         assert!(rendered.contains("init"), "{rendered}");
+        assert!(rendered.contains("check"), "{rendered}");
         assert!(rendered.contains("help"), "{rendered}");
     }
 

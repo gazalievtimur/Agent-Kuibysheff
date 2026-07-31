@@ -48,6 +48,16 @@ agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
 Creates `./<agent-id>/` (or `--path`) with settings files and
 `agent-config.example.yaml`. `--interactive` prompts for provider and limits.
 
+Check that configured resources are reachable before a run:
+
+```text
+agent_Kuibyshev check --config <FILE> [--settings-dir <DIR>]
+```
+
+Probes the provider API key/HTTP endpoint, each MCP server, access paths and
+programs, logging dir, optional settings files, and the OS sandbox when
+`home.run` programs are configured. Exit code is non-zero if any probe fails.
+
 ## Releases
 
 Prebuilt binaries for Windows and Linux are published on
