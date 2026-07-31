@@ -165,6 +165,39 @@ pub struct ProgramPolicyConfig {
     pub allow_children: bool,
 }
 
+/// Working chat-window budgets for the configured model (not run stop limits).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProviderHistoryConfig {
+    /// Max messages kept after the fixed prefix (system + initial user).
+    #[serde(default = "ProviderHistoryConfig::default_max_tail_messages")]
+    pub max_tail_messages: usize,
+    /// Max total UTF-8 characters across the pruned window (prefix + tail).
+    #[serde(default = "ProviderHistoryConfig::default_max_chars")]
+    pub max_chars: usize,
+}
+
+impl Default for ProviderHistoryConfig {
+    fn default() -> Self {
+        Self {
+            max_tail_messages: Self::default_max_tail_messages(),
+            max_chars: Self::default_max_chars(),
+        }
+    }
+}
+
+impl ProviderHistoryConfig {
+    #[must_use]
+    pub const fn default_max_tail_messages() -> usize {
+        30
+    }
+
+    #[must_use]
+    pub const fn default_max_chars() -> usize {
+        200_000
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
     pub base_url: String,
@@ -179,6 +212,9 @@ pub struct ProviderConfig {
     pub max_retries: u32,
     #[serde(default = "ProviderConfig::default_retry_base_delay_ms")]
     pub retry_base_delay_ms: u64,
+    /// Context-window pruning for this model. Independent of `limits.max_tokens`.
+    #[serde(default)]
+    pub history: ProviderHistoryConfig,
 }
 
 impl ProviderConfig {
@@ -545,6 +581,16 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
             "`provider.timeout_ms` must be > 0".to_string(),
         ));
     }
+    if cfg.provider.history.max_tail_messages == 0 {
+        return Err(ConfigError::Validation(
+            "`provider.history.max_tail_messages` must be > 0".to_string(),
+        ));
+    }
+    if cfg.provider.history.max_chars == 0 {
+        return Err(ConfigError::Validation(
+            "`provider.history.max_chars` must be > 0".to_string(),
+        ));
+    }
     if cfg.limits.max_iterations == 0 {
         return Err(ConfigError::Validation(
             "`limits.max_iterations` must be > 0".to_string(),
@@ -637,6 +683,7 @@ mod tests {
                 timeout_ms: 1000,
                 max_retries: 2,
                 retry_base_delay_ms: 100,
+                history: ProviderHistoryConfig::default(),
             },
             mcp: vec![McpServerConfig {
                 name: "local".to_string(),
@@ -672,6 +719,42 @@ mod tests {
             err.to_string().contains("provider.model"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn config_validation_rejects_zero_history_budgets() {
+        let mut cfg = sample_config();
+        cfg.provider.history.max_tail_messages = 0;
+        let err = validate(&cfg).expect_err("zero max_tail_messages");
+        assert!(
+            err.to_string()
+                .contains("provider.history.max_tail_messages"),
+            "unexpected error: {err}"
+        );
+
+        let mut cfg = sample_config();
+        cfg.provider.history.max_chars = 0;
+        let err = validate(&cfg).expect_err("zero max_chars");
+        assert!(
+            err.to_string().contains("provider.history.max_chars"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn provider_history_defaults_when_section_omitted() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        assert_eq!(cfg.provider.history, ProviderHistoryConfig::default());
     }
 
     #[test]

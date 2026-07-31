@@ -50,6 +50,20 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Commands::Check(args) => match commands::check::run(&args) {
+            Ok(report) => {
+                commands::check::print_report(&report);
+                if report.all_passed() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
+            }
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
@@ -183,6 +197,7 @@ async fn run(cli: RunArgs) -> Result<RunOutput> {
             system_prompt,
             input_files_context,
             limits: cfg.limits,
+            history: cfg.provider.history.clone(),
         })
         .await)
 }

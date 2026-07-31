@@ -61,10 +61,23 @@ impl TrustedProviderOrigin {
     /// Returns [`Error::InvalidBaseUrl`] if appending `/chat/completions` to the validated
     /// origin somehow yields an invalid URL.
     pub fn chat_completions_url(&self) -> Result<Url, Error> {
+        self.join_path("chat/completions")
+    }
+
+    /// Endpoint for listing models on the trusted origin (same origin as `base_url`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidBaseUrl`] if appending `/models` yields an invalid URL.
+    pub fn models_url(&self) -> Result<Url, Error> {
+        self.join_path("models")
+    }
+
+    fn join_path(&self, suffix: &str) -> Result<Url, Error> {
         let trimmed = self.base.as_str().trim_end_matches('/');
-        Url::parse(&format!("{trimmed}/chat/completions")).map_err(|err| {
+        Url::parse(&format!("{trimmed}/{suffix}")).map_err(|err| {
             Error::InvalidBaseUrl(format!(
-                "failed to build chat completions URL from `{trimmed}`: {err}"
+                "failed to build `{suffix}` URL from `{trimmed}`: {err}"
             ))
         })
     }
@@ -136,6 +149,43 @@ impl OpenAiCompatClient {
     #[must_use]
     pub fn origin(&self) -> &TrustedProviderOrigin {
         &self.origin
+    }
+
+    /// Probes provider reachability and auth without spending chat tokens.
+    ///
+    /// Sends `GET {base_url}/models` with the configured API key. A successful
+    /// response or a non-auth HTTP error that proves the host answered counts as
+    /// reachable. Missing/invalid credentials (`401`/`403`) and transport
+    /// failures are reported as errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::provider::Error`] when the request cannot be built, the
+    /// host is unreachable, or authentication is rejected.
+    pub async fn probe(&self) -> Result<String, Error> {
+        let models_url = self.origin.models_url()?;
+        let response = self
+            .client
+            .get(models_url.as_str())
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status.is_success() {
+            return Ok(format!("GET /models → {status}"));
+        }
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            let snippet = truncate_body(&body, 200);
+            return Err(Error::HttpStatus {
+                status,
+                body: snippet,
+            });
+        }
+        // Host answered; /models may be unimplemented on some OpenAI-compatible APIs.
+        Ok(format!(
+            "host reachable (GET /models → {status}; chat endpoint may still work)"
+        ))
     }
 
     fn backoff_with_jitter(&self, attempt: u32) -> Duration {
@@ -219,6 +269,15 @@ impl ModelClient for OpenAiCompatClient {
     }
 }
 
+fn truncate_body(body: &str, max_chars: usize) -> String {
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let truncated: String = trimmed.chars().take(max_chars).collect();
+    format!("{truncated}…")
+}
+
 fn extract_content(content: MessageContent) -> String {
     match content {
         MessageContent::Text(text) => text,
@@ -293,6 +352,7 @@ mod tests {
             timeout_ms: 5_000,
             max_retries: 0,
             retry_base_delay_ms: 1,
+            history: crate::config::ProviderHistoryConfig::default(),
         }
     }
 
@@ -375,6 +435,59 @@ mod tests {
             message.contains("redirect") || message.contains("error sending request"),
             "unexpected error: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn probe_accepts_successful_models_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "test-model"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client =
+            OpenAiCompatClient::new(test_config(&format!("{}/v1", server.uri()))).expect("client");
+        let detail = client.probe().await.expect("probe");
+        assert!(detail.contains("200"), "{detail}");
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("bad key"))
+            .mount(&server)
+            .await;
+
+        let client =
+            OpenAiCompatClient::new(test_config(&format!("{}/v1", server.uri()))).expect("client");
+        let err = client.probe().await.expect_err("unauthorized");
+        assert!(matches!(
+            err,
+            Error::HttpStatus {
+                status: StatusCode::UNAUTHORIZED,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn probe_treats_missing_models_endpoint_as_reachable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+            .mount(&server)
+            .await;
+
+        let client =
+            OpenAiCompatClient::new(test_config(&format!("{}/v1", server.uri()))).expect("client");
+        let detail = client.probe().await.expect("probe");
+        assert!(detail.contains("reachable"), "{detail}");
     }
 
     #[test]

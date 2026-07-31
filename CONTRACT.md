@@ -23,8 +23,8 @@ agent_Kuibyshev run \
   [--max-duration-sec N]
 ```
 
-- `--config` contains provider, MCP, limits, logging, and optional `access`
-  policy configuration.
+- `--config` contains provider (including optional `provider.history` context
+  pruning), MCP, limits, logging, and optional `access` policy configuration.
 - `--settings-dir` contains `master_prompt.md`, `skills.dsl`, and optional
   `rules.md`.
 - `--prompt` is the task for one run.
@@ -35,6 +35,14 @@ agent_Kuibyshev run \
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
 
+`limits.*` stop the run (iterations / cumulative token budget / wall clock).
+`provider.history` controls how much chat context is sent to the model on each
+step: after a fixed prefix (system prompt + initial user message), only the
+newest `max_tail_messages` turns are kept, and the whole window is capped at
+`max_chars` UTF-8 characters. Defaults are `30` / `200000`. These knobs belong
+with the model because larger context windows need a larger working history;
+they are independent of `limits.max_tokens`.
+
 The `run` process prints exactly one JSON `RunOutput` document to stdout. A
 run-level failure is represented by `stop_reason: "error"` and an error message
 in `result`. Policy denials and sandbox unavailability are returned as
@@ -43,21 +51,39 @@ performing the side effect.
 
 ### Management commands
 
-Commands other than `run` (for example `init`) print human-readable text and
-use process exit codes. They do **not** emit `RunOutput` JSON.
+Commands other than `run` (for example `init`, `check`) print human-readable
+text and use process exit codes. They do **not** emit `RunOutput` JSON.
 
 ```text
 agent_Kuibyshev help
 agent_Kuibyshev help init
+agent_Kuibyshev help check
 agent_Kuibyshev --help
 
 agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+
+agent_Kuibyshev check --config <FILE> \
+  [--settings-dir <DIR>] \
+  [--skip-provider] [--skip-mcp] [--skip-sandbox]
 ```
 
 `init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
 `rules.md`) plus `agent-config.example.yaml`. Default path: `./<agent-id>/`.
 With `--interactive`, the CLI prompts for `provider` (`base_url`, `model`,
 `api_key_env`) and `limits`, then writes those values into the starter config.
+
+`check` probes resources from the runtime config (and optionally the settings
+directory) without running the agent loop. It reports pass/fail for:
+
+- config load and schema validation (including resolved `access` host paths)
+- provider API key resolution and HTTP reachability (`GET {base_url}/models`)
+- each configured MCP server (connect + `tools/list`)
+- `access.run` program executables and required `inherit_env` variables
+- OS sandbox availability when programs are configured
+- logging base directory resolution
+- settings files and `skills.dsl` parse (when `--settings-dir` is set)
+
+Exit code `0` only when every probe is `ok` or intentionally `skip`.
 
 ## Access policy (fail-closed)
 

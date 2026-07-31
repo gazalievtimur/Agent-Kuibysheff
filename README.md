@@ -48,6 +48,16 @@ agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
 Creates `./<agent-id>/` (or `--path`) with settings files and
 `agent-config.example.yaml`. `--interactive` prompts for provider and limits.
 
+Check that configured resources are reachable before a run:
+
+```text
+agent_Kuibyshev check --config <FILE> [--settings-dir <DIR>]
+```
+
+Probes the provider API key/HTTP endpoint, each MCP server, access paths and
+programs, logging dir, optional settings files, and the OS sandbox when
+`home.run` programs are configured. Exit code is non-zero if any probe fails.
+
 ## Releases
 
 Prebuilt binaries for Windows and Linux are published on
@@ -137,6 +147,10 @@ Runtime limit overrides remain available:
 cargo run --bin agent_Kuibyshev -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
+
+Model context-window pruning is configured under `provider.history` (defaults
+`max_tail_messages: 30`, `max_chars: 200000`). Raise these for long-context
+models; they are independent of `limits.max_tokens` (the run stop budget).
 
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
 (including the optional `access` policy),
@@ -258,7 +272,7 @@ By default the agent writes detailed logs under `~/.agent-kuibyshev/logs`:
 | `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
 | `ai_usage.jsonl` | Structured AI completion events (when `enable_ai_log: true`) |
 | `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
-| `chat_history.json` | Full unpruned chat transcript (when `enable_chat_history: true` or `--save-chat-history`) |
+| `chat_history.json` | Chat transcript pruned to the same `provider.history` budgets as the model window (when `enable_chat_history: true` or `--save-chat-history`) |
 
 Override the base directory with any of:
 

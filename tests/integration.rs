@@ -57,6 +57,7 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         system_prompt: "system".to_string(),
         input_files_context: String::new(),
         limits,
+        history: agent_Kuibyshev::config::ProviderHistoryConfig::default(),
     }
 }
 
