@@ -19,7 +19,7 @@ REPO_ROOT=""
 
 usage() {
   cat <<'EOF'
-Usage: 1c-dev-run.sh --product k7 [--issue-key K7-123 | --task-file path.md]
+Usage: 1c-dev-run.sh --product demo [--issue-key PROJ-123 | --task-file path.md]
   [--stage all|1|2|3|4] [--from-stage N] [--approve-plan] [--require-tz]
   [--require-searx] [--build-cfe] [--agent-bin PATH] [--run-id ID] [--force]
 

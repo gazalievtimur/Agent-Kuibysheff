@@ -46,7 +46,7 @@ missing | partial | ok
 ```json
 {
   "origin": "jira_intake",
-  "issue_key": "K7-123",
+  "issue_key": "PROJ-123",
   "skipped_intake": false,
   "jira": [],
   "confluence": [],

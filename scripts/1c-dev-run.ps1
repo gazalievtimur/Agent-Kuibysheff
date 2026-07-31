@@ -1,59 +1,98 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Orchestrate the 1C Kuibyshev workflow: intake -> analyst -> coder -> implementer.
+  Оркестратор воркфлоу 1С на Agent Kuibyshev: intake -> analyst -> coder -> implementer.
 
 .DESCRIPTION
-  Chains agent_Kuibyshev runs with home handoff, optional -TaskFile (skip intake),
-  human gate before coder, and optional CFE apply/build for product adapters.
+  Последовательно запускает агентов, передаёт артефакты через home,
+  опционально пропускает intake при -TaskFile, останавливается на gate
+  перед кодером, при флагах копирует/собирает CFE через адаптер продукта.
 #>
 param(
+    # Идентификатор продукта (файл products/<Product>.yaml), например demo
     [Parameter(Mandatory = $true)]
     [string] $Product,
 
+    # Ключ задачи Jira (PROJ-123). Обязателен, если нет -TaskFile; нужен для apply/BuildCfe
     [string] $IssueKey = "",
 
+    # Путь к файлу задачи оператора; если задан — этап intake пропускается
     [Alias("TaskFile")]
     [string] $TaskFilePath = "",
 
+    # Какие этапы запускать: all | 1 | 2 | 3 | 4 (алиас -Stage)
     [ValidateSet("all", "1", "2", "3", "4")]
     [Alias("Stage")]
     [string] $WorkflowStage = "all",
 
+    # С какого этапа продолжить (resume): 1..4; пусто = по -Stage / логике skip intake
     [string] $FromStage = "",
 
+    # Путь к бинарнику agent_Kuibyshev, либо "cargo" для сборки на лету
     [string] $AgentBin = "",
+
+    # Корень каталогов прогонов (по умолчанию workflows/1c-dev/runs)
     [string] $RunsRoot = "",
+
+    # Идентификатор прогона; если пусто — генерируется из IssueKey/TaskFile + timestamp
     [string] $RunId = "",
+
+    # Корень репозитория Agent Kuibyshev; пусто = родитель каталога scripts/
     [string] $RepoRoot = "",
+
+    # Общий YAML-конфиг агента вместо agent-config.example.yaml профиля этапа
     [string] $ConfigOverride = "",
 
+    # Закрыть human gate: утвердить план и разрешить этап coder
     [switch] $ApprovePlan,
+
+    # Требовать наличие ТЗ / секции requirements в brief (строго)
     [switch] $RequireTz,
+
+    # Жёстко требовать доступность SearXNG MCP на этапе analyst
     [switch] $RequireSearx,
+
+    # После implementer вызвать сборку CFE (BuildCfe) через адаптер продукта
     [switch] $BuildCfe,
-    # Named DoApplyOut so it does not collide with path vars ($applyOut) — PS is case-insensitive.
+
+    # Скопировать out/cfe в каталог задачи продукта (имя DoApplyOut — без коллизии с путями)
     [Alias("ApplyOut")]
     [switch] $DoApplyOut,
+
+    # Перезапустить уже успешно завершённые этапы (алиас -Force)
     [Alias("Force")]
     [switch] $ForceRerun
 )
 
-# Back-compat aliases
+# --- Совместимые имена параметров ---
+# $TaskFile — абсолютный/исходный путь к файлу задачи (из -TaskFile / -TaskFilePath)
 $TaskFile = $TaskFilePath
+# $Stage — запрошенный диапазон этапов (из -Stage / -WorkflowStage)
 $Stage = $WorkflowStage
-
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Resolve-RepoPath {
-    param([string]$Root, [string]$Relative)
+    param(
+        # Корень, относительно которого строится путь
+        [string]$Root,
+        # Относительный путь внутри корня
+        [string]$Relative
+    )
     return [System.IO.Path]::GetFullPath((Join-Path $Root $Relative))
 }
 
 function Get-YamlScalar {
-    param([string]$Text, [string]$Key, [string]$Default = "")
+    param(
+        # Текст YAML-файла
+        [string]$Text,
+        # Имя ключа верхнего уровня / любое вхождение ключа
+        [string]$Key,
+        # Значение по умолчанию, если ключ не найден
+        [string]$Default = ""
+    )
+    # $match — результат regex-поиска значения ключа
     $match = [regex]::Match($Text, "(?m)^\s*$([regex]::Escape($Key)):\s*`"([^`"]*)`"")
     if (-not $match.Success) {
         $match = [regex]::Match($Text, "(?m)^\s*$([regex]::Escape($Key)):\s*'([^']*)'")
@@ -68,7 +107,13 @@ function Get-YamlScalar {
 }
 
 function Expand-Template {
-    param([string]$Template, [hashtable]$Vars)
+    param(
+        # Текст шаблона с плейсхолдерами {{KEY}} или {KEY}
+        [string]$Template,
+        # Словарь подстановок (имя -> значение)
+        [hashtable]$Vars
+    )
+    # $result — шаблон после последовательных замен
     $result = $Template
     foreach ($key in $Vars.Keys) {
         $result = $result.Replace("{{$key}}", [string]$Vars[$key])
@@ -78,42 +123,68 @@ function Expand-Template {
 }
 
 function Copy-DirContents {
-    param([string]$Src, [string]$Dst)
+    param(
+        # Исходный каталог
+        [string]$Src,
+        # Каталог назначения
+        [string]$Dst
+    )
     if (-not (Test-Path -LiteralPath $Src)) { return }
     New-Item -ItemType Directory -Force -Path $Dst | Out-Null
     Copy-Item -Path (Join-Path $Src "*") -Destination $Dst -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 function Test-StageDone {
-    param([string]$MarkerPath)
+    param(
+        # Путь к маркеру stageN.done.json
+        [string]$MarkerPath
+    )
     return (Test-Path -LiteralPath $MarkerPath -PathType Leaf)
 }
 
 function Write-StageMarker {
-    param([string]$Path, [string]$StopReason)
+    param(
+        # Куда записать маркер завершения этапа
+        [string]$Path,
+        # stop_reason из RunOutput агента
+        [string]$StopReason
+    )
+    # $obj — содержимое маркера этапа
     $obj = [ordered]@{ stop_reason = $StopReason; finished_at = (Get-Date).ToString("o") }
     ($obj | ConvertTo-Json) | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function Invoke-AgentRun {
     param(
+        # Исполняемый файл агента
         [string]$Bin,
+        # Путь к runtime-конфигу (--config)
         [string]$Config,
+        # Каталог settings профиля (--settings-dir)
         [string]$SettingsDir,
+        # Полный текст промпта этапа
         [string]$Prompt,
+        # Корень home агента (--home)
         [string]$HomeDir,
+        # Доп. файлы для --files
         [string[]]$Files,
+        # Куда сохранить stdout (RunOutput JSON)
         [string]$StdoutPath,
+        # Куда сохранить stderr
         [string]$StderrPath
     )
 
-    # Persist full prompt to avoid CLI encoding/length issues; pass a short pointer.
+    # Полный промпт пишем в файл (избегаем проблем кодировки/длины CLI)
+    # $promptFile — путь к stage_prompt.md внутри home/in
     $promptFile = Join-Path $HomeDir "in\stage_prompt.md"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $promptFile) | Out-Null
     Set-Content -LiteralPath $promptFile -Value $Prompt -Encoding UTF8
+    # $shortPrompt — короткий указатель для --prompt
     $shortPrompt = "Execute the stage instructions in the attached file stage_prompt.md (also under in/). Return JSON only on every turn."
 
+    # $allFiles — prompt-файл + входные артефакты этапа
     $allFiles = @($promptFile) + @($Files | Where-Object { $_ })
+    # $argList — аргументы командной строки агента
     $argList = @(
         "run",
         "--config", $Config,
@@ -127,15 +198,19 @@ function Invoke-AgentRun {
         }
     }
 
+    # $argPreview — строка для лога (без длинного промпта)
     $argPreview = ($argList | ForEach-Object {
             if ($_ -eq $shortPrompt) { "<short-prompt>" } else { $_ }
         }) -join " "
     Write-Host ">> $Bin $argPreview"
 
+    # $stdout — собранный stdout процесса агента
     $stdout = ""
+    # $oldEap — сохранённый ErrorActionPreference на время вызова
     $oldEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
+        # $stdoutLines — сырой вывод бинарника (строка или массив строк)
         $stdoutLines = & $Bin @argList 2> $StderrPath
         if ($null -eq $stdoutLines) { $stdoutLines = @() }
         if ($stdoutLines -is [array]) { $stdout = ($stdoutLines | ForEach-Object { "$_" }) -join "`n" }
@@ -143,17 +218,21 @@ function Invoke-AgentRun {
     } finally {
         $ErrorActionPreference = $oldEap
     }
+    # $exit — код выхода процесса агента
     $exit = $LASTEXITCODE
     Set-Content -LiteralPath $StdoutPath -Value $stdout -Encoding UTF8
 
+    # $stopReason — причина остановки цикла агента (goal_reached / limit_reached / error)
     $stopReason = "error"
+    # $resultText — поле result из RunOutput
     $resultText = ""
     try {
-        # Prefer last JSON object in stdout (ignore noise)
+        # $jsonText — фрагмент stdout с JSON RunOutput
         $jsonText = $stdout.Trim()
         if ($jsonText -match '(?s)\{.*"stop_reason".*\}\s*$') {
             $jsonText = $Matches[0]
         }
+        # $parsed — десериализованный RunOutput
         $parsed = $jsonText | ConvertFrom-Json
         if ($parsed.stop_reason) { $stopReason = [string]$parsed.stop_reason }
         if ($null -ne $parsed.result) { $resultText = [string]$parsed.result }
@@ -170,12 +249,16 @@ function Invoke-AgentRun {
 }
 
 function Test-HttpReachable {
-    param([string]$Url)
+    param(
+        # URL MCP/HTTP для проверки доступности
+        [string]$Url
+    )
     try {
+        # $resp — ответ пробного GET (тело не важно)
         $resp = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
         return $true
     } catch {
-        # MCP endpoint may reject GET; connection refused vs other errors
+        # MCP может отклонять GET; «connection refused» считаем недоступностью
         if ($_.Exception.Message -match "refus|unreachable|Unable to connect|timed out") {
             return $false
         }
@@ -183,26 +266,34 @@ function Test-HttpReachable {
     }
 }
 
+# --- Инициализация путей репозитория и окружения ---
+
 if (-not $RepoRoot) {
     $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 } else {
     $RepoRoot = Resolve-Path $RepoRoot
 }
 
+# $dotenv — путь к helper-скрипту загрузки .env
 $dotenv = Join-Path $PSScriptRoot "import-dotenv.ps1"
 if (Test-Path -LiteralPath $dotenv) {
     . $dotenv
     Import-DotEnv (Join-Path $RepoRoot ".env")
 }
 
+# $workflowRoot — корень пакета воркфлоу workflows/1c-dev
 $workflowRoot = Resolve-RepoPath $RepoRoot "workflows/1c-dev"
+# $productPath — YAML адаптера продукта (demo.yaml и т.п.)
 $productPath = Resolve-RepoPath $RepoRoot "workflows/1c-dev/products/$Product.yaml"
 if (-not (Test-Path -LiteralPath $productPath -PathType Leaf)) {
     throw "Product config not found: $productPath (copy zup.yaml.example if needed)"
 }
+# $productYaml — сырое содержимое product YAML
 $productYaml = Get-Content -LiteralPath $productPath -Raw -Encoding UTF8
+# $searxUrl — URL SearXNG MCP для этапа analyst
 $searxUrl = Get-YamlScalar $productYaml "searxngUrl" "http://127.0.0.1:3000/mcp"
 
+# $skipIntake — true, если brief берётся из файла, а не из Jira
 $skipIntake = -not [string]::IsNullOrWhiteSpace($TaskFile)
 if ($skipIntake) {
     $TaskFile = [System.IO.Path]::GetFullPath($TaskFile)
@@ -227,27 +318,38 @@ if (-not $RunsRoot) {
 }
 
 if (-not $RunId) {
+    # $stamp — метка времени для уникального RunId
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     if ($IssueKey) {
         $RunId = "${IssueKey}_$stamp"
     } else {
+        # $stem — имя файла задачи без расширения
         $stem = [System.IO.Path]::GetFileNameWithoutExtension($TaskFile)
         $RunId = "${stem}_$stamp"
     }
 }
 
+# $runDir — каталог текущего прогона runs/<RunId>
 $runDir = Join-Path $RunsRoot $RunId
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+# $artifacts — сводные артефакты всех этапов
 $artifacts = Join-Path $runDir "artifacts"
+# $briefDir — brief после intake / нормализации TaskFile
 $briefDir = Join-Path $artifacts "brief"
+# $planDir — план analyst (prd, tasks, cfe-scope, …)
 $planDir = Join-Path $artifacts "plan"
+# $codeDir — исходники coder (out/src, reports)
 $codeDir = Join-Path $artifacts "code"
+# $cfeDir — упакованное расширение implementer (out/cfe)
 $cfeDir = Join-Path $artifacts "cfe"
+# $logsDir — stdout/stderr прогонов агентов
 $logsDir = Join-Path $runDir "logs"
 New-Item -ItemType Directory -Force -Path $briefDir, $planDir, $codeDir, $cfeDir, $logsDir | Out-Null
 
 if (-not $AgentBin) {
+    # $release — release-сборка агента
     $release = Join-Path $RepoRoot "target\release\agent_Kuibyshev.exe"
+    # $debugBin — debug-сборка агента (не $debug: конфликт с -Debug)
     $debugBin = Join-Path $RepoRoot "target\debug\agent_Kuibyshev.exe"
     if (Test-Path -LiteralPath $release) {
         $AgentBin = $release
@@ -258,6 +360,7 @@ if (-not $AgentBin) {
     }
 }
 
+# $agentProfiles — настройки каждого этапа: Id, Settings, Config, Prompt
 $agentProfiles = @{
     "1" = @{ Id = "1c-intake"; Settings = "test-agents/1c-intake"; Config = "test-agents/1c-intake/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage1.intake.md" }
     "2" = @{ Id = "1c-analyst"; Settings = "test-agents/1c-analyst"; Config = "test-agents/1c-analyst/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage2.analysis.md" }
@@ -265,26 +368,28 @@ $agentProfiles = @{
     "4" = @{ Id = "1c-implementer"; Settings = "test-agents/1c-implementer"; Config = "test-agents/1c-implementer/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage4.implement.md" }
 }
 
-$pathPrepareHome = (Join-Path $workflowRoot "adapters\k7\prepare-home.ps1")
-$pathValidate = (Join-Path $workflowRoot "adapters\k7\validate.ps1")
-$pathApplyOut = (Join-Path $workflowRoot "adapters\k7\apply-out.ps1")
-if ($Product -ne "k7") {
-    $altPrep = Join-Path $workflowRoot "adapters\$Product\prepare-home.ps1"
-    if (Test-Path -LiteralPath $altPrep) { $pathPrepareHome = $altPrep }
-    $altVal = Join-Path $workflowRoot "adapters\$Product\validate.ps1"
-    if (Test-Path -LiteralPath $altVal) { $pathValidate = $altVal }
-    $altApply = Join-Path $workflowRoot "adapters\$Product\apply-out.ps1"
-    if (Test-Path -LiteralPath $altApply) { $pathApplyOut = $altApply }
-}
+# Адаптеры: сначала adapters/<Product>/, иначе общий adapters/default/
+$pathPrepareHome = Join-Path $workflowRoot "adapters\default\prepare-home.ps1"
+$pathValidate = Join-Path $workflowRoot "adapters\default\validate.ps1"
+$pathApplyOut = Join-Path $workflowRoot "adapters\default\apply-out.ps1"
+$altPrep = Join-Path $workflowRoot "adapters\$Product\prepare-home.ps1"
+if (Test-Path -LiteralPath $altPrep) { $pathPrepareHome = $altPrep }
+$altVal = Join-Path $workflowRoot "adapters\$Product\validate.ps1"
+if (Test-Path -LiteralPath $altVal) { $pathValidate = $altVal }
+$altApply = Join-Path $workflowRoot "adapters\$Product\apply-out.ps1"
+if (Test-Path -LiteralPath $altApply) { $pathApplyOut = $altApply }
 
+# $startStage — первый этап к выполнению (1..4)
 $startStage = 1
 if (-not [string]::IsNullOrWhiteSpace($FromStage)) { $startStage = [int]$FromStage }
 elseif ($Stage -ne "all") { $startStage = [int]$Stage }
 elseif ($skipIntake) { $startStage = 2 }
 
+# $endStage — последний этап к выполнению (1..4)
 $endStage = 4
 if ($Stage -ne "all") { $endStage = [int]$Stage }
 
+# $report — итоговый JSON-отчёт прогона
 $report = [ordered]@{
     runId          = $RunId
     product        = $Product
@@ -298,17 +403,28 @@ $report = [ordered]@{
 
 
 function Normalize-TaskFileBrief {
-    param([string]$SrcFile, [string]$DestDir)
+    param(
+        # Исходный файл задачи от оператора
+        [string]$SrcFile,
+        # Каталог artifacts/brief
+        [string]$DestDir
+    )
     New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+    # $raw — содержимое файла задачи
     $raw = Get-Content -LiteralPath $SrcFile -Raw -Encoding UTF8
+    # $destBrief — целевой task_brief.md
     $destBrief = Join-Path $DestDir "task_brief.md"
+    # $looksLikeBrief — файл уже похож на brief по заголовкам
     $looksLikeBrief = $raw -match "(?im)^#\s*Task brief" -or $raw -match "(?im)^##\s*Requirements"
     if ($looksLikeBrief) {
         Copy-Item -LiteralPath $SrcFile -Destination $destBrief -Force
     } else {
+        # $srcCopy — копия исходника как task_source.md
         $srcCopy = Join-Path $DestDir "task_source.md"
         Copy-Item -LiteralPath $SrcFile -Destination $srcCopy -Force
+        # $title — заголовок brief из имени файла
         $title = [System.IO.Path]::GetFileNameWithoutExtension($SrcFile)
+        # $wrapper — обёртка brief вокруг произвольного файла задачи
         $wrapper = @"
 # Task brief: $title
 
@@ -341,6 +457,7 @@ partial
         Set-Content -LiteralPath $destBrief -Value $wrapper -Encoding UTF8
     }
 
+    # $sources — machine-readable список источников brief
     $sources = [ordered]@{
         origin         = "task_file"
         path           = ($SrcFile -replace '\\', '/')
@@ -348,6 +465,7 @@ partial
     }
     ($sources | ConvertTo-Json) | Set-Content -LiteralPath (Join-Path $DestDir "sources.json") -Encoding UTF8
 
+    # $manifest — манифест этапа с apply_mode=none
     $manifest = [ordered]@{
         schema_version = 1
         summary        = "intake skipped: task file provided"
@@ -358,7 +476,7 @@ partial
     ($manifest | ConvertTo-Json) | Set-Content -LiteralPath (Join-Path $DestDir "manifest.json") -Encoding UTF8
 }
 
-# Brief bootstrap when skipping intake
+# Нормализация TaskFile в artifacts/brief при пропуске intake
 if ($skipIntake -and $startStage -le 2 -and $endStage -ge 2) {
     if ($ForceRerun -or -not (Test-Path -LiteralPath (Join-Path $briefDir "task_brief.md"))) {
         Normalize-TaskFileBrief -SrcFile $TaskFile -DestDir $briefDir
@@ -367,9 +485,13 @@ if ($skipIntake -and $startStage -le 2 -and $endStage -ge 2) {
 }
 
 function Should-RunStage {
-    param([int]$N)
+    param(
+        # Номер этапа 1..4
+        [int]$N
+    )
     if ($N -lt $startStage -or $N -gt $endStage) { return $false }
     if ($skipIntake -and $N -eq 1) { return $false }
+    # $marker — файл stageN.done.json (этап уже успешен)
     $marker = Join-Path $runDir ("stage{0}.done.json" -f $N)
     if ((Test-StageDone $marker) -and -not $ForceRerun) {
         Write-Host "Stage $N already done (use -Force to redo)"
@@ -379,14 +501,33 @@ function Should-RunStage {
 }
 
 function Run-Stage {
-    param([int]$N)
+    param(
+        # Номер этапа 1..4
+        [int]$N
+    )
 
+    # $profile — запись из $agentProfiles для этапа N
     $profile = $agentProfiles["$N"]
+    # $settingsDir — каталог master_prompt / skills / rules
     $settingsDir = Resolve-RepoPath $RepoRoot $profile.Settings
-    $configPath = if ($ConfigOverride) { $ConfigOverride } else { Resolve-RepoPath $RepoRoot $profile.Config }
+    # $configPath — runtime YAML: -ConfigOverride, иначе agent-config.local.yaml, иначе example
+    if ($ConfigOverride) {
+        $configPath = $ConfigOverride
+    } else {
+        $localConfig = Join-Path $settingsDir "agent-config.local.yaml"
+        $exampleConfig = Resolve-RepoPath $RepoRoot $profile.Config
+        if (Test-Path -LiteralPath $localConfig -PathType Leaf) {
+            $configPath = $localConfig
+        } else {
+            $configPath = $exampleConfig
+        }
+    }
+    # $promptTpl — шаблон промпта этапа с плейсхолдерами
     $promptTpl = Get-Content -LiteralPath (Resolve-RepoPath $RepoRoot $profile.Prompt) -Raw -Encoding UTF8
+    # $prompt — промпт после подстановки ISSUE_KEY / PRODUCT
     $prompt = Expand-Template $promptTpl @{ ISSUE_KEY = $IssueKey; PRODUCT = $Product }
 
+    # $stageHome — изолированный home этапа stageN/home
     $stageHome = Join-Path $runDir ("stage{0}\home" -f $N)
     New-Item -ItemType Directory -Force -Path $stageHome | Out-Null
 
@@ -409,6 +550,7 @@ function Run-Stage {
         }
     }
 
+    # $files — список путей для --files (контекст модели)
     $files = @()
     switch ($N) {
         1 { }
@@ -428,15 +570,21 @@ function Run-Stage {
         }
     }
 
+    # $stdoutPath / $stderrPath — логи вывода агента этапа
     $stdoutPath = Join-Path $logsDir ("stage{0}.stdout.json" -f $N)
     $stderrPath = Join-Path $logsDir ("stage{0}.stderr.txt" -f $N)
 
+    # $runResult — итог вызова агента (ExitCode, StopReason, …)
     if ($AgentBin -eq "cargo") {
+        # $promptFile — полный промпт на диске для cargo-пути
         $promptFile = Join-Path $stageHome "in\stage_prompt.md"
         New-Item -ItemType Directory -Force -Path (Join-Path $stageHome "in") | Out-Null
         Set-Content -LiteralPath $promptFile -Value $prompt -Encoding UTF8
+        # $shortPrompt — короткий --prompt при запуске через cargo
         $shortPrompt = "Execute the stage instructions in the attached file stage_prompt.md (also under in/). Return JSON only on every turn."
+        # $allFiles — файлы для --files
         $allFiles = @($promptFile) + @($files | Where-Object { $_ })
+        # $argList — argv для `cargo run --bin agent_Kuibyshev -- run …`
         $argList = @(
             "run", "--bin", "agent_Kuibyshev", "--",
             "run",
@@ -452,9 +600,11 @@ function Run-Stage {
         }
         Write-Host ">> cargo run --bin agent_Kuibyshev -- run ..."
         Push-Location $RepoRoot
+        # $oldEap — сохранённый ErrorActionPreference
         $oldEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
+            # $stdoutLines / $stdout — вывод cargo/агента
             $stdoutLines = & cargo @argList 2> $stderrPath
             $stdout = if ($null -eq $stdoutLines) { "" } elseif ($stdoutLines -is [array]) { ($stdoutLines | ForEach-Object { "$_" }) -join "`n" } else { [string]$stdoutLines }
         } finally {
@@ -462,8 +612,10 @@ function Run-Stage {
             Pop-Location
         }
         Set-Content -LiteralPath $stdoutPath -Value $stdout -Encoding UTF8
+        # $stopReason — разобранный stop_reason или error
         $stopReason = "error"
         try {
+            # $parsed — RunOutput JSON
             $parsed = ($stdout.Trim() | ConvertFrom-Json)
             if ($parsed.stop_reason) { $stopReason = [string]$parsed.stop_reason }
         } catch { }
@@ -473,7 +625,9 @@ function Run-Stage {
             -Prompt $prompt -HomeDir $stageHome -Files $files -StdoutPath $stdoutPath -StderrPath $stderrPath
     }
 
+    # $outDir — home/out текущего этапа
     $outDir = Join-Path $stageHome "out"
+    # $valArgs — аргументы для validate.ps1
     $valArgs = @{ Stage = "$N"; OutDir = $outDir }
     if ($RequireTz -and $N -eq 1) { $valArgs.RequireTz = $true }
     & $pathValidate @valArgs
@@ -498,7 +652,7 @@ function Run-Stage {
     }
 }
 
-# Stage 1
+# --- Этап 1: intake ---
 if (Should-RunStage 1) {
     Run-Stage 1
     if ($RequireTz) {
@@ -506,7 +660,7 @@ if (Should-RunStage 1) {
     }
 }
 
-# Stage 2
+# --- Этап 2: analyst ---
 if (Should-RunStage 2) {
     if (-not (Test-Path -LiteralPath (Join-Path $briefDir "task_brief.md"))) {
         throw "Missing brief at $briefDir (run stage 1 or pass -TaskFile)"
@@ -516,6 +670,7 @@ if (Should-RunStage 2) {
     }
     Run-Stage 2
 
+    # $wf — текст workflow-state.md после плана
     $wf = @"
 # Состояние конвейера задачи
 
@@ -529,9 +684,11 @@ if (Should-RunStage 2) {
     Set-Content -LiteralPath (Join-Path $planDir "workflow-state.md") -Value $wf -Encoding UTF8
 }
 
-# Gate before coder
+# --- Gate перед coder ---
+# $willRunCoder — в запрошенном диапазоне есть этап 3 (нужно утверждение плана)
 $willRunCoder = ($startStage -le 3 -and $endStage -ge 3)
 if ($willRunCoder) {
+    # $approvedPath — файл-маркер утверждения плана
     $approvedPath = Join-Path $planDir "APPROVED"
     if ($ApprovePlan) {
         Set-Content -LiteralPath $approvedPath -Value ("approved_at={0}" -f (Get-Date).ToString("o")) -Encoding UTF8
@@ -550,6 +707,7 @@ if ($willRunCoder) {
     }
 }
 
+# --- Этап 3: coder ---
 if (Should-RunStage 3) {
     foreach ($req in @("tasks.md", "architecture.md", "cfe-scope.md")) {
         if (-not (Test-Path -LiteralPath (Join-Path $planDir $req))) {
@@ -559,12 +717,14 @@ if (Should-RunStage 3) {
     Run-Stage 3
 }
 
+# --- Этап 4: implementer (+ optional apply) ---
 if (Should-RunStage 4) {
     Run-Stage 4
     if ($BuildCfe -or $DoApplyOut) {
         if ([string]::IsNullOrWhiteSpace($IssueKey)) {
             throw "-BuildCfe/-ApplyOut requires -IssueKey for task directory naming"
         }
+        # $applyArgs — параметры для apply-out.ps1
         $applyArgs = @{
             CfeOutDir        = $cfeDir
             ProductYamlPath  = $productPath
@@ -581,4 +741,3 @@ $report.finished_at = (Get-Date).ToString("o")
 ($report | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $runDir "report.json") -Encoding UTF8
 Write-Host "Done. report: $(Join-Path $runDir 'report.json')"
 exit 0
-

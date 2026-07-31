@@ -1,0 +1,58 @@
+# Runtime config for Referent Advent of Code solve runs.
+# Requires: Node.js for mcp-aoc-tasks.js; Python on PATH for home.run solutions.
+#
+# Set AOC_BANK_DIR to the local task bank (default: ./local/aoc-bank).
+#
+# scripts/aoc-eval.ps1 regenerates a per-run config that always injects a
+# fail-closed `access` section (python executable resolved from PATH + OS sandbox).
+# Keep this file aligned for manual `cargo run` experiments.
+
+provider:
+  base_url: "https://polza.ai/api/v1"
+  model: "deepseek/deepseek-v4-flash"
+  api_key_env: "POLZA_API_KEY"
+  timeout_ms: 180000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp:
+  - name: "aoc"
+    command: "node"
+    args:
+      - "./mcp-aoc-tasks.js"
+    timeout_ms: 30000
+
+limits:
+  max_iterations: 40
+  max_tokens: 500000
+  max_duration_sec: 900
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  output_dir: "./logs"
+
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+  filesystem:
+    home:
+      read: [".", "in", "out"]
+      write: [".", "out"]
+  run:
+    # Manual runs: point at a user-writable Python tree. `scripts/aoc-eval.ps1`
+    # stages `local/aoc-sandbox-runtime/python` and injects absolute paths.
+    programs:
+      - name: python
+        executable: "C:/Python312/python.exe"
+        runtime_read_roots: ["C:/Python312"]
+        inherit_env: ["SYSTEMROOT", "SystemRoot"]
+        allow_children: false
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000
