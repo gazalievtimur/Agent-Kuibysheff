@@ -141,9 +141,7 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
         )));
     }
 
-    if let Err(err) = map_result {
-        return Err(err);
-    }
+    map_result?;
 
     if !libc::WIFEXITED(status) {
         return Err(SandboxLinuxError::unavailable(

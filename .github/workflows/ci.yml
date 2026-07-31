@@ -105,6 +105,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Miri tests
+        # rust-toolchain.toml pins stable; Miri is nightly-only — force +nightly.
         run: |
-          cargo miri setup
-          cargo miri test -p sandbox-linux
+          cargo +nightly miri setup
+          cargo +nightly miri test -p sandbox-linux
