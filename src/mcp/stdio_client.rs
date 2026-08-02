@@ -15,8 +15,8 @@ use tracing::{debug, instrument, warn};
 use crate::config::{McpServerConfig, McpStdioConfig, McpTransport};
 use crate::logging::SharedEventSink;
 use crate::mcp::http_client::McpHttpClient;
-use crate::mcp::{Error, ToolExecutor};
-use crate::tools::ToolError;
+use crate::mcp::Error;
+use crate::tool_api::{ToolError, ToolExecutor};
 
 /// Maximum NDJSON frame size (JSON payload + trailing newline), matching SSE buffer default.
 const MAX_STDIO_FRAME_BYTES: usize = 1024 * 1024;
@@ -323,9 +323,9 @@ impl ToolExecutor for McpRegistry {
         let handle = self
             .servers
             .get(server)
-            .ok_or_else(|| ToolError::Mcp(Error::UnknownServer(server.to_string())))?;
+            .ok_or_else(|| ToolError::from(Error::UnknownServer(server.to_string())))?;
         if !handle.tools.contains(tool) {
-            return Err(ToolError::Mcp(Error::UnknownTool {
+            return Err(ToolError::from(Error::UnknownTool {
                 server: server.to_string(),
                 tool: tool.to_string(),
             }));
@@ -728,7 +728,7 @@ mod tests {
         use std::sync::Arc;
 
         use crate::logging::FailingEventSink;
-        use crate::mcp::ToolExecutor;
+        use crate::tool_api::ToolExecutor;
 
         let logger: SharedEventSink = Arc::new(FailingEventSink::new());
         let expected = json!({"content":[{"type":"text","text":"side-effect-done"}]});

@@ -2,7 +2,7 @@ pub mod error;
 pub mod fs_home;
 pub mod local_tools;
 
-pub use error::{HomeFsError, LocalToolsError, PolicyError, ToolError};
+pub use error::{ExternalToolError, HomeFsError, LocalToolsError, PolicyError, ToolError};
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::access::{EffectiveToolPolicy, KNOWN_BUILTINS};
-use crate::mcp::ToolExecutor;
+use crate::tool_api::ToolExecutor;
 
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;

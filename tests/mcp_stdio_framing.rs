@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use agent_Kuibyshev::config::{McpServerConfig, McpStdioConfig, McpTransport};
 use agent_Kuibyshev::mcp::stdio_client::McpRegistry;
-use agent_Kuibyshev::mcp::{Error, ToolExecutor};
+use agent_Kuibyshev::mcp::Error;
+use agent_Kuibyshev::tool_api::ToolExecutor;
 use tokio::time::sleep;
 
 fn fixture_bin() -> String {

@@ -11,11 +11,11 @@ use crate::cli::CheckArgs;
 use crate::config::{load_config, AppConfig, ConfigError, McpTransport};
 use crate::logging::resolve_base_dir;
 use crate::mcp::stdio_client::McpRegistry;
-use crate::mcp::ToolExecutor;
 use crate::provider::openai_compat::OpenAiCompatClient;
 use crate::sandbox::SandboxRunner;
 use crate::settings::{load_settings, SettingsError};
 use crate::skills::dsl::SkillsCatalog;
+use crate::tool_api::ToolExecutor;
 
 /// Fatal errors that prevent producing a check report.
 #[derive(Debug, Error)]
