@@ -126,7 +126,9 @@ fn timeout_kills_tree() {
         return;
     };
     let dir = tempdir().unwrap();
-    let script = fixture_script(dir.path(), "sleep 30");
+    // Busy-loop with shell builtins only — `sleep` would need fork, which is
+    // denied when `allow_children` is false (the secure default under test).
+    let script = fixture_script(dir.path(), "while true; do :; done");
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     request.deadline = Duration::from_millis(800);
     let started = std::time::Instant::now();
@@ -142,10 +144,16 @@ fn network_namespace_has_no_foreign_ifaces() {
     };
     let dir = tempdir().unwrap();
     // Empty netns: /proc/net/dev should not mention host NICs.
+    // Read via shell redirection (no `cat`) so the check works with
+    // `allow_children: false`.
     let script = fixture_script(
         dir.path(),
         r#"
-dev=$(cat /proc/net/dev)
+dev=
+while IFS= read -r line; do
+  dev="$dev
+$line"
+done < /proc/net/dev
 case "$dev" in
   *eth*|*wlan*|*enp*|*ens*|*wlp*)
     printf '%s\n' "$dev"
