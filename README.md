@@ -357,8 +357,11 @@ skill "name" {
 ```
 
 The union of skill `allowed_tools` intersects with `access.tools.builtins` for
-built-ins. Declared MCP tools are trusted automatically and are not filtered by
-skills. Tool names must be qualified `server.tool` (bare names are rejected).
+built-ins, and with discovered MCP tools for MCP. Both classes must appear in
+`skills.allowed_tools` to be advertised or callable. Skill `policy` strings are
+prompt-only; the runtime enforces only qualified `allowed_tools` names. Tool
+names must be qualified `server.tool` (bare names are rejected). See
+[CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
 
 ## Reliability notes
 

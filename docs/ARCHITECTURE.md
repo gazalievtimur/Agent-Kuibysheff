@@ -204,6 +204,7 @@ On Linux, the helper re-execs the current binary before Tokio is initialized, se
 
 ## Access policy and tool allowlist
 
+Canonical formula: [`CONTRACT.md` Access policy](../CONTRACT.md#access-policy-fail-closed).
 The runtime uses a layered policy:
 
 1. `access::config::AccessPolicyConfig` from YAML is validated and resolved into `ResolvedAccessPolicy` (no `config` ↔ `access` type cycle).
@@ -212,14 +213,25 @@ The runtime uses a layered policy:
 4. `EffectiveToolPolicy::compile` builds the final allowlist:
 
    ```text
+   KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file}
+
    effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
-   effective_mcp      = all discovered MCP tools (currently trusted, no skills intersection)
+   effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
    effective_tools    = effective_builtins ∪ effective_mcp
    ```
+
+   - Built-ins require both the config allowlist and the skills allowlist.
+   - MCP tools require a skills allowlist entry; discovery alone is not enough.
+   - Skill `policy` strings and `rules.md` are prompt-only guidance; they are not
+     enforced by `EffectiveToolPolicy`.
 
 5. `PolicyToolExecutor` gates every call and advertises only `effective_tools` to the model.
 
 Path grants (`home`, `workspace`, `input_roots`) are also fail-closed in strict mode: a relative path must match an allowed prefix by component. Legacy mode preserves pre-strict behavior for backwards compatibility.
+
+MCP process trust (stdio framing, child shutdown, audit vs side effect) is separate
+from this allowlist; see [architecture-review](architecture-review/README.md)
+P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-architecture-docs.md).
 
 ## Configuration and lifecycle
 
