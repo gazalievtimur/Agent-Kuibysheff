@@ -15,6 +15,8 @@ use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::tools::registry;
+
 pub use config::{
     AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, ProgramPolicyConfig,
     RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
@@ -32,27 +34,17 @@ pub enum AccessError {
 }
 
 /// Built-in tools advertised by the agent (qualified `server.tool` names).
-pub const KNOWN_BUILTINS: &[&str] = &[
-    "home.list",
-    "home.read",
-    "home.write",
-    "home.run",
-    "local_tools.search_docs",
-    "local_tools.read_file",
-];
+///
+/// Source of truth: [`crate::tools::registry::BUILTINS`].
+pub fn known_builtins() -> impl Iterator<Item = &'static str> {
+    registry::known_builtin_names()
+}
 
 /// Built-ins available in legacy mode (`access` omitted). `home.run` requires an explicit
 /// sandbox profile under `access.run`.
-pub const LEGACY_BUILTINS: &[&str] = &[
-    "home.list",
-    "home.read",
-    "home.write",
-    "local_tools.search_docs",
-    "local_tools.read_file",
-];
-
-/// MCP server names reserved for built-in tool namespaces.
-pub const RESERVED_MCP_NAMES: &[&str] = &["home", "local_tools"];
+pub fn legacy_builtins() -> impl Iterator<Item = &'static str> {
+    registry::legacy_builtin_names()
+}
 
 /// Environment keys that must never be inherited into sandboxed `home.run` processes.
 const FORBIDDEN_INHERIT_ENV: &[&str] = &[
@@ -383,7 +375,7 @@ impl ResolvedAccessPolicy {
     pub fn legacy() -> Self {
         Self {
             mode: AccessMode::Legacy,
-            allowed_builtins: parse_known_builtins(LEGACY_BUILTINS),
+            allowed_builtins: parse_known_builtins(legacy_builtins()),
             home_read: Vec::new(),
             home_write: Vec::new(),
             workspace: None,
@@ -406,7 +398,7 @@ pub struct EffectiveToolPolicy {
 impl EffectiveToolPolicy {
     /// Compiles the runtime tool allowlist.
     ///
-    /// Built-ins: `KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools`.
+    /// Built-ins: registry known set ∩ `access.tools.builtins` ∩ `skills.allowed_tools`.
     /// MCP tools: `discovered_mcp_tools ∩ skills.allowed_tools`.
     #[must_use]
     pub fn compile(
@@ -414,7 +406,7 @@ impl EffectiveToolPolicy {
         skills_allowed: &BTreeSet<QualifiedTool>,
         mcp_tools: impl IntoIterator<Item = QualifiedTool>,
     ) -> Self {
-        let known = parse_known_builtins(KNOWN_BUILTINS);
+        let known = parse_known_builtins(known_builtins());
         let mut tools = BTreeSet::new();
         for tool in &known {
             if access.allows_builtin(tool) && skills_allowed.contains(tool) {
@@ -537,7 +529,7 @@ pub fn validate_access_config(
 ) -> Result<(), AccessError> {
     for name in mcp_names {
         let name = name.as_ref();
-        if RESERVED_MCP_NAMES.contains(&name) {
+        if registry::is_builtin_server(name) {
             return Err(AccessError::Validation(format!(
                 "mcp server name `{name}` is reserved for built-in tools"
             )));
@@ -582,7 +574,7 @@ fn validate_builtins_list(builtins: &[String]) -> Result<(), AccessError> {
             AccessError::Validation(format!("access.tools.builtins: {reason}"))
         })?;
         let qualified = tool.qualified();
-        if !KNOWN_BUILTINS.contains(&qualified.as_str()) {
+        if !registry::is_known_builtin(&qualified) {
             return Err(AccessError::Validation(format!(
                 "unknown built-in tool `{qualified}` in `access.tools.builtins`"
             )));
@@ -799,9 +791,9 @@ fn resolve_against_config_dir(config_dir: &Path, path: &Path) -> PathBuf {
     }
 }
 
-fn parse_known_builtins(names: &[&str]) -> BTreeSet<QualifiedTool> {
+fn parse_known_builtins(names: impl IntoIterator<Item = &'static str>) -> BTreeSet<QualifiedTool> {
     names
-        .iter()
+        .into_iter()
         .map(|name| {
             QualifiedTool::parse(name).unwrap_or_else(|reason| {
                 unreachable!("known builtin `{name}` must parse: {reason}")
@@ -1038,9 +1030,9 @@ mod tests {
 
     #[test]
     fn legacy_builtins_are_subset_of_known() {
-        for name in LEGACY_BUILTINS {
+        for name in legacy_builtins() {
             assert!(
-                KNOWN_BUILTINS.contains(name),
+                registry::is_known_builtin(name),
                 "legacy builtin `{name}` must be known"
             );
             assert!(
@@ -1052,8 +1044,8 @@ mod tests {
 
     #[test]
     fn known_builtins_minus_legacy_is_only_home_run() {
-        let known: std::collections::HashSet<_> = KNOWN_BUILTINS.iter().copied().collect();
-        let legacy: std::collections::HashSet<_> = LEGACY_BUILTINS.iter().copied().collect();
+        let known: std::collections::HashSet<_> = known_builtins().collect();
+        let legacy: std::collections::HashSet<_> = legacy_builtins().collect();
         let diff: Vec<_> = known.difference(&legacy).copied().collect();
         assert_eq!(diff, vec!["home.run"]);
     }
@@ -1061,12 +1053,17 @@ mod tests {
     #[test]
     fn known_builtins_are_unique_and_qualified() {
         let mut seen = std::collections::HashSet::new();
-        for name in KNOWN_BUILTINS {
-            assert!(seen.insert(*name), "duplicate builtin `{name}`");
+        for name in known_builtins() {
+            assert!(seen.insert(name), "duplicate builtin `{name}`");
             assert!(
                 QualifiedTool::parse(name).is_ok(),
                 "builtin `{name}` must be a valid qualified tool"
             );
         }
+        assert_eq!(
+            known_builtins().count(),
+            registry::BUILTINS.len(),
+            "access known set must match tool registry"
+        );
     }
 }

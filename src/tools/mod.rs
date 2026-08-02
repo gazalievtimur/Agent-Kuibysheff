@@ -1,8 +1,10 @@
 pub mod error;
 pub mod fs_home;
 pub mod local_tools;
+pub mod registry;
 
 pub use error::{ExternalToolError, HomeFsError, LocalToolsError, PolicyError, ToolError};
+pub use registry::{BuiltinHandlerId, BuiltinPrompt, ToolDescriptor, BUILTINS};
 
 use std::sync::Arc;
 
@@ -10,28 +12,12 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::access::{EffectiveToolPolicy, KNOWN_BUILTINS};
+use crate::access::EffectiveToolPolicy;
 use crate::tool_api::ToolExecutor;
 
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
-
-/// Built-in tool servers routed by [`CompositeToolExecutor`] before MCP fallthrough.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BuiltinServer {
-    Home,
-    LocalTools,
-}
-
-impl BuiltinServer {
-    fn parse(server: &str) -> Option<Self> {
-        match server {
-            "home" => Some(Self::Home),
-            "local_tools" => Some(Self::LocalTools),
-            _ => None,
-        }
-    }
-}
+use self::registry::known_builtin_names;
 
 pub struct CompositeToolExecutor {
     home: HomeFs,
@@ -58,13 +44,13 @@ impl ToolExecutor for CompositeToolExecutor {
         tool: &str,
         arguments: Value,
     ) -> Result<Value, ToolError> {
-        match BuiltinServer::parse(server) {
-            Some(BuiltinServer::Home) => self
+        match registry::handler_for_server(server) {
+            Some(BuiltinHandlerId::Home) => self
                 .home
                 .call(tool, arguments)
                 .await
                 .map_err(ToolError::from),
-            Some(BuiltinServer::LocalTools) => self
+            Some(BuiltinHandlerId::LocalTools) => self
                 .local_tools
                 .call(tool, arguments)
                 .await
@@ -75,7 +61,7 @@ impl ToolExecutor for CompositeToolExecutor {
 
     fn available_tools(&self) -> Vec<String> {
         let mut tools = self.external.available_tools();
-        tools.extend(KNOWN_BUILTINS.iter().map(|&name| name.to_string()));
+        tools.extend(known_builtin_names().map(str::to_string));
         tools.sort();
         tools.dedup();
         tools
@@ -135,8 +121,28 @@ impl ToolExecutor for PolicyToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::access::{EffectiveToolPolicy, QualifiedTool, ResolvedAccessPolicy};
+    use crate::access::{known_builtins, EffectiveToolPolicy, QualifiedTool, ResolvedAccessPolicy};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn registry_names_match_access_known_and_composite_availability() {
+        let registry: Vec<_> = known_builtin_names().collect();
+        let access_known: Vec<_> = known_builtins().collect();
+        assert_eq!(registry, access_known);
+
+        // Policy-known set used at compile time is exactly the registry.
+        let access = ResolvedAccessPolicy::legacy();
+        let skills: BTreeSet<_> = registry
+            .iter()
+            .filter_map(|name| QualifiedTool::parse(name).ok())
+            .collect();
+        let policy = EffectiveToolPolicy::compile(&access, &skills, []);
+        let advertised: BTreeSet<_> = policy.advertised().into_iter().collect();
+        let legacy_expected: BTreeSet<_> = registry::legacy_builtin_names()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(advertised, legacy_expected);
+    }
 
     struct RecordingTools {
         called: std::sync::Mutex<Vec<String>>,
