@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -279,6 +280,71 @@ impl EventSink for MemoryEventSink {
 
     async fn shutdown(&self) -> Result<(), LoggingError> {
         Ok(())
+    }
+}
+
+/// Test/mock sink that always fails writes (used to assert soft audit handling).
+#[derive(Debug, Default)]
+pub struct FailingEventSink;
+
+impl FailingEventSink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl EventSink for FailingEventSink {
+    async fn write_event(&self, _event_type: &str, _payload: Value) -> Result<(), LoggingError> {
+        Err(LoggingError::UnsupportedSink(
+            "failing sink: audit write forced to fail".to_string(),
+        ))
+    }
+
+    fn destination(&self) -> SinkDestination {
+        SinkDestination::Database
+    }
+
+    async fn shutdown(&self) -> Result<(), LoggingError> {
+        Ok(())
+    }
+}
+
+/// Wraps an inner sink and records whether any `write_event` failed.
+pub struct TrackingEventSink {
+    inner: SharedEventSink,
+    write_failed: Arc<AtomicBool>,
+}
+
+impl TrackingEventSink {
+    #[must_use]
+    pub fn wrap(inner: SharedEventSink, write_failed: Arc<AtomicBool>) -> SharedEventSink {
+        Arc::new(Self {
+            inner,
+            write_failed,
+        })
+    }
+}
+
+#[async_trait]
+impl EventSink for TrackingEventSink {
+    async fn write_event(&self, event_type: &str, payload: Value) -> Result<(), LoggingError> {
+        match self.inner.write_event(event_type, payload).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.write_failed.store(true, Ordering::Relaxed);
+                Err(err)
+            }
+        }
+    }
+
+    fn destination(&self) -> SinkDestination {
+        self.inner.destination()
+    }
+
+    async fn shutdown(&self) -> Result<(), LoggingError> {
+        self.inner.shutdown().await
     }
 }
 

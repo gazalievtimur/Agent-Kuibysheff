@@ -1,3 +1,7 @@
+//! Windows AppContainer Python smoke tests (compiled only on Windows hosts).
+
+#![cfg(windows)]
+
 use sandbox_windows::{SandboxLaunchRequest, WindowsSandbox};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
