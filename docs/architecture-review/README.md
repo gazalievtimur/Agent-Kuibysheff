@@ -6,7 +6,7 @@
 | ID | Sev | Файл | Тема | Status |
 |----|-----|------|------|--------|
 | 01 | P0 | [01-mcp-stdio-ndjson-framing.md](01-mcp-stdio-ndjson-framing.md) | MCP stdio: NDJSON вместо Content-Length | done |
-| 02 | P0 | [02-mcp-stdio-child-shutdown.md](02-mcp-stdio-child-shutdown.md) | Явный shutdown stdio child | open |
+| 02 | P0 | [02-mcp-stdio-child-shutdown.md](02-mcp-stdio-child-shutdown.md) | Явный shutdown stdio child | done |
 | 03 | P0 | [03-audit-log-vs-tool-side-effect.md](03-audit-log-vs-tool-side-effect.md) | Audit-log не маскирует side effect | open |
 | 04 | P1 | [04-break-mcp-tools-cycle.md](04-break-mcp-tools-cycle.md) | Разорвать цикл mcp ↔ tools | open |
 | 05 | P1 | [05-break-config-access-cycle.md](05-break-config-access-cycle.md) | Разорвать цикл config ↔ access | open |

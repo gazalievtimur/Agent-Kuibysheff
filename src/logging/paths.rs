@@ -94,19 +94,21 @@ mod tests {
 
     #[test]
     fn resolve_base_dir_prefers_output_dir_over_sink_path() {
+        let legacy = tempfile::tempdir().expect("legacy tempdir");
+        let sink = tempfile::tempdir().expect("sink tempdir");
         let config = LoggingConfig {
             enable_ai_log: true,
             enable_mcp_log: false,
             enable_chat_history: false,
-            output_dir: Some(PathBuf::from("/legacy/logs")),
+            output_dir: Some(legacy.path().to_path_buf()),
             sink: LogSinkConfig::File {
-                path: Some(PathBuf::from("/sink/logs")),
+                path: Some(sink.path().to_path_buf()),
             },
         };
 
         assert_eq!(
             resolve_base_dir(&config).expect("resolve"),
-            PathBuf::from("/legacy/logs")
+            legacy.path().to_path_buf()
         );
     }
 

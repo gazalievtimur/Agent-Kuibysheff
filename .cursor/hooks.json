@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/pre-commit-gate.js",
+        "matcher": "git(?:\\.exe)?\\s+commit",
+        "failClosed": true,
+        "timeout": 600
+      }
+    ]
+  }
+}

@@ -44,18 +44,21 @@ impl AsRawFd for OwnedFd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::Write;
-    use std::os::fd::IntoRawFd;
 
     #[test]
     fn owned_fd_closes_on_drop() {
-        let mut file = tempfile::tempfile().expect("tempfile");
-        writeln!(file, "x").expect("write");
-        let raw = file.into_raw_fd();
-        // SAFETY: `raw` is uniquely owned after `into_raw_fd`.
-        let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+        let mut fds = [-1, -1];
+        // SAFETY: `fds` is a valid two-slot buffer for pipe2.
+        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        assert_eq!(rc, 0, "pipe2 failed");
+
+        // SAFETY: unique ownership of the read end after pipe2.
+        let owned = unsafe { OwnedFd::from_raw_fd(fds[0]) };
         assert!(owned.as_raw_fd() >= 0);
         drop(owned);
+
+        // SAFETY: unique ownership of the write end.
+        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        drop(write);
     }
 }

@@ -30,10 +30,10 @@ echo "Checking formatting..."
 cargo fmt --all -- --check
 
 echo "Running clippy..."
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 
 echo "Running tests..."
-cargo test
+cargo test --workspace
 
 if [[ "$SKIP_AOC" -eq 1 ]]; then
   echo "Skipping AoC agent regression (--skip-aoc)."
