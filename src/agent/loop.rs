@@ -9,16 +9,16 @@ use crate::access::QualifiedTool;
 use crate::config::ProviderHistoryConfig;
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
-use crate::mcp::ToolExecutor;
 use crate::output::{RunOutput, StopReason, UsageReport};
 use crate::provider::{ChatMessage, ChatRole, ModelClient};
+use crate::tool_api::ToolExecutor;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
     #[error("provider failure: {0}")]
     Provider(#[from] crate::provider::Error),
     #[error("tool failure: {0}")]
-    Tool(#[from] crate::tools::ToolError),
+    Tool(#[from] crate::tool_api::ToolError),
     #[error("failed to decode model directive: {0}")]
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
@@ -686,7 +686,7 @@ mod tests {
             _server: &str,
             _tool: &str,
             _arguments: Value,
-        ) -> Result<Value, crate::tools::ToolError> {
+        ) -> Result<Value, crate::tool_api::ToolError> {
             Ok(Value::Null)
         }
 
@@ -706,7 +706,7 @@ mod tests {
             server: &str,
             tool: &str,
             _arguments: Value,
-        ) -> Result<Value, crate::tools::ToolError> {
+        ) -> Result<Value, crate::tool_api::ToolError> {
             self.calls
                 .lock()
                 .unwrap()

@@ -1,8 +1,11 @@
 //! Access policy compilation and fail-closed runtime types.
 //!
-//! Raw YAML maps to [`crate::config::AccessPolicyConfig`]. After startup resolution the
+//! Raw YAML maps to [`config::AccessPolicyConfig`]. After startup resolution the
 //! run uses only [`ResolvedAccessPolicy`] — never raw string paths without normalization.
+//!
+//! This module owns both raw DTOs and resolve so it does not depend on [`crate::config`].
 
+pub mod config;
 pub mod paths;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,14 +13,23 @@ use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::config::{
-    AccessPolicyConfig, ConfigError, FilesystemPolicyConfig, ProgramPolicyConfig, RunPolicyConfig,
-    ToolsPolicyConfig,
-};
+use thiserror::Error;
 
+pub use config::{
+    AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, ProgramPolicyConfig,
+    RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
+};
 pub use paths::{
     workspace_root_for_run, HomeFsPolicy, InputFilesPolicy, PathGrantScope, WorkspaceFsPolicy,
 };
+
+/// Errors while validating or resolving an access policy section.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AccessError {
+    #[error("{0}")]
+    Validation(String),
+}
 
 /// Built-in tools advertised by the agent (qualified `server.tool` names).
 pub const KNOWN_BUILTINS: &[&str] = &[
@@ -220,10 +232,10 @@ impl CanonicalRoot {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::Validation`] when the path cannot be canonicalized.
-    pub fn canonicalize(path: &Path) -> Result<Self, ConfigError> {
+    /// Returns [`AccessError::Validation`] when the path cannot be canonicalized.
+    pub fn canonicalize(path: &Path) -> Result<Self, AccessError> {
         let canonical = fs::canonicalize(path).map_err(|source| {
-            ConfigError::Validation(format!(
+            AccessError::Validation(format!(
                 "failed to canonicalize `{}`: {source}",
                 path.display()
             ))
@@ -456,18 +468,36 @@ pub fn parse_tool_list(
     Ok(tools)
 }
 
+/// Borrowed inputs for compiling a raw access policy into [`ResolvedAccessPolicy`].
+#[derive(Debug, Clone, Copy)]
+pub struct AccessResolveInput<'a> {
+    pub access: Option<&'a AccessPolicyConfig>,
+    pub config_dir: &'a Path,
+}
+
+impl TryFrom<AccessResolveInput<'_>> for ResolvedAccessPolicy {
+    type Error = AccessError;
+
+    fn try_from(input: AccessResolveInput<'_>) -> Result<Self, Self::Error> {
+        resolve_access_policy(input.access, input.config_dir)
+    }
+}
+
 /// Resolves optional raw access config into an immutable policy.
 ///
 /// Host paths (`workspace.root`, `input_roots`, executables, runtime roots) are resolved
 /// relative to `config_dir` and canonicalized. Home grants stay relative prefixes.
 ///
+/// Prefer [`ResolvedAccessPolicy::try_from`] with [`AccessResolveInput`] at call sites that
+/// already hold borrowed DTOs.
+///
 /// # Errors
 ///
-/// Returns [`ConfigError::Validation`] for invalid grants, missing host roots, or bad programs.
+/// Returns [`AccessError::Validation`] for invalid grants, missing host roots, or bad programs.
 pub fn resolve_access_policy(
     access: Option<&AccessPolicyConfig>,
     config_dir: &Path,
-) -> Result<ResolvedAccessPolicy, ConfigError> {
+) -> Result<ResolvedAccessPolicy, AccessError> {
     let Some(access) = access else {
         return Ok(ResolvedAccessPolicy::legacy());
     };
@@ -499,16 +529,16 @@ pub fn resolve_access_policy(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Validation`] for duplicate aliases, unknown builtins, forbidden env,
+/// Returns [`AccessError::Validation`] for duplicate aliases, unknown builtins, forbidden env,
 /// reserved MCP names, or zero limits.
 pub fn validate_access_config(
     access: Option<&AccessPolicyConfig>,
     mcp_names: impl IntoIterator<Item = impl AsRef<str>>,
-) -> Result<(), ConfigError> {
+) -> Result<(), AccessError> {
     for name in mcp_names {
         let name = name.as_ref();
         if RESERVED_MCP_NAMES.contains(&name) {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "mcp server name `{name}` is reserved for built-in tools"
             )));
         }
@@ -524,7 +554,7 @@ pub fn validate_access_config(
 
     if let Some(workspace) = &access.filesystem.workspace {
         if workspace.root.as_os_str().is_empty() {
-            return Err(ConfigError::Validation(
+            return Err(AccessError::Validation(
                 "`access.filesystem.workspace.root` must not be empty".to_string(),
             ));
         }
@@ -533,7 +563,7 @@ pub fn validate_access_config(
 
     for root in &access.filesystem.input_roots {
         if root.as_os_str().is_empty() {
-            return Err(ConfigError::Validation(
+            return Err(AccessError::Validation(
                 "`access.filesystem.input_roots` entries must not be empty".to_string(),
             ));
         }
@@ -545,20 +575,20 @@ pub fn validate_access_config(
     Ok(())
 }
 
-fn validate_builtins_list(builtins: &[String]) -> Result<(), ConfigError> {
+fn validate_builtins_list(builtins: &[String]) -> Result<(), AccessError> {
     let mut seen = BTreeSet::new();
     for raw in builtins {
         let tool = QualifiedTool::parse(raw).map_err(|reason| {
-            ConfigError::Validation(format!("access.tools.builtins: {reason}"))
+            AccessError::Validation(format!("access.tools.builtins: {reason}"))
         })?;
         let qualified = tool.qualified();
         if !KNOWN_BUILTINS.contains(&qualified.as_str()) {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "unknown built-in tool `{qualified}` in `access.tools.builtins`"
             )));
         }
         if !seen.insert(qualified.clone()) {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "duplicate built-in tool `{qualified}` in `access.tools.builtins`"
             )));
         }
@@ -566,58 +596,58 @@ fn validate_builtins_list(builtins: &[String]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn validate_relative_grant_list(grants: &[String], field: &str) -> Result<(), ConfigError> {
+fn validate_relative_grant_list(grants: &[String], field: &str) -> Result<(), AccessError> {
     for raw in grants {
         RelativeGrant::parse(raw)
-            .map_err(|reason| ConfigError::Validation(format!("`access.{field}`: {reason}")))?;
+            .map_err(|reason| AccessError::Validation(format!("`access.{field}`: {reason}")))?;
     }
     Ok(())
 }
 
-fn validate_run_limits(run: &RunPolicyConfig) -> Result<(), ConfigError> {
+fn validate_run_limits(run: &RunPolicyConfig) -> Result<(), AccessError> {
     if run.max_args == 0 {
-        return Err(ConfigError::Validation(
+        return Err(AccessError::Validation(
             "`access.run.max_args` must be > 0".to_string(),
         ));
     }
     if run.max_arg_chars == 0 {
-        return Err(ConfigError::Validation(
+        return Err(AccessError::Validation(
             "`access.run.max_arg_chars` must be > 0".to_string(),
         ));
     }
     if run.max_output_chars == 0 {
-        return Err(ConfigError::Validation(
+        return Err(AccessError::Validation(
             "`access.run.max_output_chars` must be > 0".to_string(),
         ));
     }
     if run.max_timeout_ms == 0 {
-        return Err(ConfigError::Validation(
+        return Err(AccessError::Validation(
             "`access.run.max_timeout_ms` must be > 0".to_string(),
         ));
     }
     Ok(())
 }
 
-fn validate_program_aliases(programs: &[ProgramPolicyConfig]) -> Result<(), ConfigError> {
+fn validate_program_aliases(programs: &[ProgramPolicyConfig]) -> Result<(), AccessError> {
     let mut aliases = BTreeSet::new();
     for program in programs {
         let alias = ProgramAlias::parse(&program.name).map_err(|reason| {
-            ConfigError::Validation(format!("`access.run.programs[].name`: {reason}"))
+            AccessError::Validation(format!("`access.run.programs[].name`: {reason}"))
         })?;
         if !aliases.insert(alias.as_str().to_string()) {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "duplicate program alias `{alias}` in `access.run.programs`"
             )));
         }
         if program.executable.as_os_str().is_empty() {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "`access.run.programs[{alias}].executable` must not be empty"
             )));
         }
         for key in &program.inherit_env {
             let normalized = key.trim();
             if normalized.is_empty() {
-                return Err(ConfigError::Validation(format!(
+                return Err(AccessError::Validation(format!(
                     "`access.run.programs[{alias}].inherit_env` entries must not be empty"
                 )));
             }
@@ -625,7 +655,7 @@ fn validate_program_aliases(programs: &[ProgramPolicyConfig]) -> Result<(), Conf
                 .iter()
                 .any(|forbidden| normalized.eq_ignore_ascii_case(forbidden))
             {
-                return Err(ConfigError::Validation(format!(
+                return Err(AccessError::Validation(format!(
                     "`access.run.programs[{alias}].inherit_env` must not include `{normalized}`"
                 )));
             }
@@ -634,12 +664,12 @@ fn validate_program_aliases(programs: &[ProgramPolicyConfig]) -> Result<(), Conf
     Ok(())
 }
 
-fn resolve_builtins(tools: &ToolsPolicyConfig) -> Result<BTreeSet<QualifiedTool>, ConfigError> {
+fn resolve_builtins(tools: &ToolsPolicyConfig) -> Result<BTreeSet<QualifiedTool>, AccessError> {
     validate_builtins_list(&tools.builtins)?;
     let mut set = BTreeSet::new();
     for raw in &tools.builtins {
         set.insert(QualifiedTool::parse(raw).map_err(|reason| {
-            ConfigError::Validation(format!("access.tools.builtins: {reason}"))
+            AccessError::Validation(format!("access.tools.builtins: {reason}"))
         })?);
     }
     Ok(set)
@@ -648,12 +678,12 @@ fn resolve_builtins(tools: &ToolsPolicyConfig) -> Result<BTreeSet<QualifiedTool>
 fn resolve_relative_grants(
     grants: &[String],
     field: &str,
-) -> Result<Vec<RelativeGrant>, ConfigError> {
+) -> Result<Vec<RelativeGrant>, AccessError> {
     grants
         .iter()
         .map(|raw| {
             RelativeGrant::parse(raw)
-                .map_err(|reason| ConfigError::Validation(format!("`access.{field}`: {reason}")))
+                .map_err(|reason| AccessError::Validation(format!("`access.{field}`: {reason}")))
         })
         .collect()
 }
@@ -661,7 +691,7 @@ fn resolve_relative_grants(
 fn resolve_workspace(
     filesystem: &FilesystemPolicyConfig,
     config_dir: &Path,
-) -> Result<Option<ResolvedWorkspacePolicy>, ConfigError> {
+) -> Result<Option<ResolvedWorkspacePolicy>, AccessError> {
     let Some(workspace) = &filesystem.workspace else {
         return Ok(None);
     };
@@ -669,7 +699,7 @@ fn resolve_workspace(
     let root_path = resolve_against_config_dir(config_dir, &workspace.root);
     let root = CanonicalRoot::canonicalize(&root_path)?;
     if !root.as_path().is_dir() {
-        return Err(ConfigError::Validation(format!(
+        return Err(AccessError::Validation(format!(
             "`access.filesystem.workspace.root` is not a directory: {}",
             root.as_path().display()
         )));
@@ -681,13 +711,13 @@ fn resolve_workspace(
 fn resolve_input_roots(
     roots: &[PathBuf],
     config_dir: &Path,
-) -> Result<Vec<CanonicalRoot>, ConfigError> {
+) -> Result<Vec<CanonicalRoot>, AccessError> {
     let mut resolved = Vec::with_capacity(roots.len());
     for root in roots {
         let path = resolve_against_config_dir(config_dir, root);
         let canonical = CanonicalRoot::canonicalize(&path)?;
         if !canonical.as_path().is_dir() {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "`access.filesystem.input_roots` entry is not a directory: {}",
                 canonical.as_path().display()
             )));
@@ -705,19 +735,19 @@ struct ResolvedRunLimits {
     max_timeout_ms: u64,
 }
 
-fn resolve_run(run: &RunPolicyConfig, config_dir: &Path) -> Result<ResolvedRunLimits, ConfigError> {
+fn resolve_run(run: &RunPolicyConfig, config_dir: &Path) -> Result<ResolvedRunLimits, AccessError> {
     validate_run_limits(run)?;
     validate_program_aliases(&run.programs)?;
 
     let mut programs = BTreeMap::new();
     for program in &run.programs {
         let alias = ProgramAlias::parse(&program.name).map_err(|reason| {
-            ConfigError::Validation(format!("`access.run.programs[].name`: {reason}"))
+            AccessError::Validation(format!("`access.run.programs[].name`: {reason}"))
         })?;
         let executable_path = resolve_against_config_dir(config_dir, &program.executable);
         let executable = CanonicalRoot::canonicalize(&executable_path)?;
         if !executable.as_path().is_file() {
-            return Err(ConfigError::Validation(format!(
+            return Err(AccessError::Validation(format!(
                 "`access.run.programs[{alias}].executable` is not a file: {}",
                 executable.as_path().display()
             )));
@@ -728,7 +758,7 @@ fn resolve_run(run: &RunPolicyConfig, config_dir: &Path) -> Result<ResolvedRunLi
             let path = resolve_against_config_dir(config_dir, root);
             let canonical = CanonicalRoot::canonicalize(&path)?;
             if !canonical.as_path().exists() {
-                return Err(ConfigError::Validation(format!(
+                return Err(AccessError::Validation(format!(
                     "`access.run.programs[{alias}].runtime_read_roots` missing: {}",
                     canonical.as_path().display()
                 )));
@@ -783,7 +813,6 @@ fn parse_known_builtins(names: &[&str]) -> BTreeSet<QualifiedTool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AccessPolicyConfig, HomeFsPolicyConfig, WorkspacePolicyConfig};
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -872,7 +901,11 @@ mod tests {
             },
         };
 
-        let policy = resolve_access_policy(Some(&access), dir.path()).expect("resolve");
+        let policy = ResolvedAccessPolicy::try_from(AccessResolveInput {
+            access: Some(&access),
+            config_dir: dir.path(),
+        })
+        .expect("resolve");
         assert_eq!(policy.mode(), AccessMode::Strict);
         assert!(policy.allows_builtin(&QualifiedTool::parse("home.run").unwrap()));
         assert_eq!(policy.home_read().len(), 2);

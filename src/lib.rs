@@ -15,4 +15,5 @@ pub mod provider;
 pub mod sandbox;
 pub mod settings;
 pub mod skills;
+pub mod tool_api;
 pub mod tools;

@@ -13,9 +13,9 @@ use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
 use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
 use agent_Kuibyshev::logging::Loggers;
-use agent_Kuibyshev::mcp::ToolExecutor;
 use agent_Kuibyshev::output::StopReason;
 use agent_Kuibyshev::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
+use agent_Kuibyshev::tool_api::ToolExecutor;
 use agent_Kuibyshev::tools::fs_home::HomeFs;
 use agent_Kuibyshev::tools::local_tools::LocalTools;
 use agent_Kuibyshev::tools::ToolError;
@@ -286,10 +286,9 @@ async fn denied_tool_is_returned_as_tool_result_error() {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tokio::test]
 async fn model_can_home_run_via_native_sandbox() {
-    use agent_Kuibyshev::access::resolve_access_policy;
-    use agent_Kuibyshev::config::{
-        AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, RunPolicyConfig,
-        ToolsPolicyConfig,
+    use agent_Kuibyshev::access::{
+        resolve_access_policy, AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig,
+        RunPolicyConfig, ToolsPolicyConfig,
     };
 
     let runner = Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default());

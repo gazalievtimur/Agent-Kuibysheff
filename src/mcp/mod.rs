@@ -3,14 +3,14 @@ pub mod oauth;
 pub mod sse;
 pub mod stdio_client;
 
-use async_trait::async_trait;
-use serde_json::Value;
 use thiserror::Error;
 
 use crate::logging::LoggingError;
-use crate::tools::ToolError;
+use crate::tool_api::{ExternalToolError, ToolError};
 
 use self::oauth::BearerChallenge;
+
+pub use crate::tool_api::ToolExecutor;
 
 /// MCP-specific error (JSON-RPC, transport, OAuth, server lifecycle).
 #[derive(Debug, Error)]
@@ -66,15 +66,84 @@ pub enum McpError {
 /// Backwards-compatible alias for the MCP-specific error type.
 pub type Error = McpError;
 
-/// Object-safe tool dispatch; `async_trait` is required because native `async fn` in traits is not
-/// dyn-compatible for `Arc<dyn ToolExecutor>`.
-#[async_trait]
-pub trait ToolExecutor: Send + Sync {
-    async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<Value, ToolError>;
-    fn available_tools(&self) -> Vec<String>;
+impl From<McpError> for ExternalToolError {
+    fn from(err: McpError) -> Self {
+        match err {
+            McpError::UnknownServer(server) => Self::UnknownServer(server),
+            McpError::UnknownTool { server, tool } => Self::UnknownTool { server, tool },
+            McpError::InvalidToolArguments { tool, error } => {
+                Self::InvalidToolArguments { tool, error }
+            }
+            other => Self::Failed {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
+impl From<McpError> for ToolError {
+    fn from(err: McpError) -> Self {
+        Self::External(ExternalToolError::from(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_api::ToolError;
+
+    #[test]
+    fn mcp_error_converts_to_tool_error_at_boundary() {
+        let err = ToolError::from(McpError::UnknownServer("docs".to_string()));
+        assert!(
+            matches!(
+                err,
+                ToolError::External(ExternalToolError::UnknownServer(ref s)) if s == "docs"
+            ),
+            "expected External::UnknownServer, got {err}"
+        );
+
+        let err = ToolError::from(McpError::UnknownTool {
+            server: "docs".to_string(),
+            tool: "search".to_string(),
+        });
+        assert!(
+            matches!(
+                err,
+                ToolError::External(ExternalToolError::UnknownTool {
+                    ref server,
+                    ref tool
+                }) if server == "docs" && tool == "search"
+            ),
+            "expected External::UnknownTool, got {err}"
+        );
+
+        let err = ToolError::from(McpError::ActorClosed {
+            server: "docs".to_string(),
+        });
+        assert!(
+            matches!(
+                err,
+                ToolError::External(ExternalToolError::Failed { ref message })
+                    if message.contains("actor channel closed")
+            ),
+            "expected External::Failed with actor message, got {err}"
+        );
+    }
+
+    #[test]
+    fn question_mark_converts_mcp_error() {
+        fn returns_mcp() -> Result<(), ToolError> {
+            Err(McpError::UnknownServer("docs".to_string()))?;
+            Ok(())
+        }
+        let err = returns_mcp().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ToolError::External(ExternalToolError::UnknownServer(ref s)) if s == "docs"
+            ),
+            "expected External::UnknownServer via ?, got {err}"
+        );
+    }
 }

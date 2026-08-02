@@ -82,7 +82,7 @@ flowchart TD
 - `src/main.rs` — entry point. Loads dotenv, parses CLI subcommands, and for `run` starts Tokio and wires all layers. It also calls `sandbox_linux::try_run_helper()` before Tokio starts so the Linux namespace helper runs single-threaded. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON.
 - `src/cli/` — `clap` subcommands: `run` (`RunArgs`: `--config`, `--settings-dir`, `--prompt`, `--home`, optional `--files`, limit overrides, `--save-chat-history`), `init` (`InitArgs`), and `check` (`CheckArgs`: `--config`, optional `--settings-dir`, skip flags).
 - `src/commands/` — management command implementations (`init` scaffold, `check` resource probes, future convert / add-mcp / add-access). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
-- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, optional `access`). Applies CLI overrides and resolves paths relative to the config file directory.
+- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, optional `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
 
@@ -97,7 +97,8 @@ flowchart TD
 - `src/tools/mod.rs` — `CompositeToolExecutor` routes built-in `home`/`local_tools` calls and falls through to MCP; `PolicyToolExecutor` wraps it and enforces `EffectiveToolPolicy`.
 - `src/tools/fs_home.rs` — built-in `home.*` tools (list, read, write, run). Enforces `HomeFsPolicy` and runs `home.run` through the sandbox runner.
 - `src/tools/local_tools.rs` — built-in `local_tools.*` tools (search_docs, read_file) for repository research. Enforces `WorkspaceFsPolicy`.
-- `src/access/mod.rs` — core policy types: `ResolvedAccessPolicy`, `EffectiveToolPolicy`, `QualifiedTool`, `ProgramAlias`, strict vs legacy mode.
+- `src/access/config.rs` — raw YAML/JSON access DTOs (`AccessPolicyConfig` and nested types); no dependency on `crate::config`.
+- `src/access/mod.rs` — validates/resolves DTOs into `ResolvedAccessPolicy` (`TryFrom<AccessResolveInput>`), plus `EffectiveToolPolicy`, `QualifiedTool`, `ProgramAlias`, strict vs legacy mode.
 - `src/access/paths.rs` — path grant logic: `RelativeGrant`, `PathGrantScope`, `HomeFsPolicy`, `WorkspaceFsPolicy`, `InputFilesPolicy`.
 - `src/skills/dsl.rs` — parses `skills.dsl` and builds the skills allowlist and prompt fragment.
 
@@ -205,7 +206,7 @@ On Linux, the helper re-execs the current binary before Tokio is initialized, se
 
 The runtime uses a layered policy:
 
-1. `AccessPolicyConfig` from YAML is validated and resolved into `ResolvedAccessPolicy`.
+1. `access::config::AccessPolicyConfig` from YAML is validated and resolved into `ResolvedAccessPolicy` (no `config` ↔ `access` type cycle).
 2. `SkillsCatalog` parses `skills.dsl` and produces a union of `allowed_tools`.
 3. `McpRegistry` discovers all tools from configured MCP servers.
 4. `EffectiveToolPolicy::compile` builds the final allowlist:
