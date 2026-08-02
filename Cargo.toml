@@ -67,3 +67,7 @@ path = "src/main.rs"
 [[bin]]
 name = "sandbox_e2e_fixture"
 path = "src/bin/sandbox_e2e_fixture.rs"
+
+[[bin]]
+name = "mcp_stdio_fixture"
+path = "src/bin/mcp_stdio_fixture.rs"

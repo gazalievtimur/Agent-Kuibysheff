@@ -75,9 +75,10 @@ const TOOLS = [
   },
 ];
 
-let buffered = Buffer.alloc(0);
+let buffered = "";
+process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
-  buffered = Buffer.concat([buffered, chunk]);
+  buffered += chunk;
   processFrames();
 });
 
@@ -87,30 +88,20 @@ process.stdin.on("error", () => {
 
 function processFrames() {
   for (;;) {
-    const headerEnd = buffered.indexOf("\r\n\r\n");
-    if (headerEnd === -1) {
+    const newline = buffered.indexOf("\n");
+    if (newline === -1) {
       return;
     }
 
-    const headerText = buffered.slice(0, headerEnd).toString("utf8");
-    const match = /content-length:\s*(\d+)/i.exec(headerText);
-    if (!match) {
-      buffered = Buffer.alloc(0);
-      return;
+    const line = buffered.slice(0, newline).replace(/\r$/, "");
+    buffered = buffered.slice(newline + 1);
+    if (!line.trim()) {
+      continue;
     }
-
-    const bodyLen = Number.parseInt(match[1], 10);
-    const messageEnd = headerEnd + 4 + bodyLen;
-    if (buffered.length < messageEnd) {
-      return;
-    }
-
-    const body = buffered.slice(headerEnd + 4, messageEnd).toString("utf8");
-    buffered = buffered.slice(messageEnd);
 
     let message;
     try {
-      message = JSON.parse(body);
+      message = JSON.parse(line);
     } catch {
       continue;
     }
@@ -391,8 +382,5 @@ function sendError(id, code, message) {
 }
 
 function writeMessage(msg) {
-  const body = Buffer.from(JSON.stringify(msg), "utf8");
-  const header = `Content-Length: ${body.length}\r\n\r\n`;
-  process.stdout.write(header, "utf8");
-  process.stdout.write(body);
+  process.stdout.write(`${JSON.stringify(msg)}\n`, "utf8");
 }
