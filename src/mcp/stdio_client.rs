@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -16,6 +16,9 @@ use crate::logging::SharedEventSink;
 use crate::mcp::http_client::McpHttpClient;
 use crate::mcp::{Error, ToolExecutor};
 use crate::tools::ToolError;
+
+/// Maximum NDJSON frame size (JSON payload + trailing newline), matching SSE buffer default.
+const MAX_STDIO_FRAME_BYTES: usize = 1024 * 1024;
 
 pub struct McpRegistry {
     servers: HashMap<String, ServerHandle>,
@@ -390,46 +393,196 @@ impl McpStdioClient {
     }
 
     async fn write_frame(&mut self, payload: &Value) -> Result<(), Error> {
-        let body = serde_json::to_vec(payload)?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin.write_all(header.as_bytes()).await?;
-        self.stdin.write_all(&body).await?;
+        let frame = encode_ndjson_frame(payload, &self.server_name)?;
+        self.stdin.write_all(&frame).await?;
         self.stdin.flush().await?;
         Ok(())
     }
 
     async fn read_frame(&mut self) -> Result<Value, Error> {
-        let mut content_length = None::<usize>;
-        loop {
-            let mut line = String::new();
-            let bytes = self.stdout.read_line(&mut line).await?;
-            if bytes == 0 {
+        let line = read_ndjson_line_bytes(&mut self.stdout, &self.server_name).await?;
+        decode_ndjson_line(&line, &self.server_name)
+    }
+}
+
+/// Encode a JSON-RPC message as one NDJSON line (`json\n`).
+fn encode_ndjson_frame(payload: &Value, server: &str) -> Result<Vec<u8>, Error> {
+    let body = serde_json::to_vec(payload)?;
+    if body.len().saturating_add(1) > MAX_STDIO_FRAME_BYTES {
+        return Err(Error::Protocol {
+            server: server.to_string(),
+            error: "MCP stdio frame exceeds max size".to_string(),
+        });
+    }
+    let mut out = body;
+    out.push(b'\n');
+    Ok(out)
+}
+
+/// Parse one NDJSON line (optional trailing `\r` / `\n`).
+fn decode_ndjson_line(line: &[u8], server: &str) -> Result<Value, Error> {
+    let line = strip_trailing_line_ending(line);
+    if looks_like_content_length_framing(line) {
+        return Err(Error::Protocol {
+            server: server.to_string(),
+            error: "expected NDJSON, got Content-Length framing".to_string(),
+        });
+    }
+    Ok(serde_json::from_slice(line)?)
+}
+
+fn strip_trailing_line_ending(mut line: &[u8]) -> &[u8] {
+    if line.last() == Some(&b'\n') {
+        line = &line[..line.len() - 1];
+    }
+    if line.last() == Some(&b'\r') {
+        line = &line[..line.len() - 1];
+    }
+    line
+}
+
+fn looks_like_content_length_framing(line: &[u8]) -> bool {
+    const PREFIX: &[u8] = b"content-length:";
+    let trimmed = trim_ascii_whitespace_start(line);
+    trimmed.len() >= PREFIX.len() && trimmed[..PREFIX.len()].eq_ignore_ascii_case(PREFIX)
+}
+
+fn trim_ascii_whitespace_start(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[start..]
+}
+
+/// Read one newline-delimited frame with a hard size cap (DoS guard).
+async fn read_ndjson_line_bytes<R>(reader: &mut R, server: &str) -> Result<Vec<u8>, Error>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut buf = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            if buf.is_empty() {
                 return Err(Error::Protocol {
-                    server: self.server_name.clone(),
+                    server: server.to_string(),
                     error: "unexpected EOF from MCP server".to_string(),
                 });
             }
-            if line == "\r\n" || line == "\n" {
-                break;
-            }
-            let lower = line.to_ascii_lowercase();
-            if let Some(rest) = lower.strip_prefix("content-length:") {
-                let parsed = rest
-                    .trim()
-                    .parse::<usize>()
-                    .map_err(|err| Error::Protocol {
-                        server: self.server_name.clone(),
-                        error: format!("invalid content-length header: {err}"),
-                    })?;
-                content_length = Some(parsed);
-            }
+            return Ok(buf);
         }
-        let size = content_length.ok_or_else(|| Error::Protocol {
-            server: self.server_name.clone(),
-            error: "missing content-length header".to_string(),
-        })?;
-        let mut body = vec![0u8; size];
-        self.stdout.read_exact(&mut body).await?;
-        Ok(serde_json::from_slice(&body)?)
+
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+            let end = pos + 1;
+            if buf.len().saturating_add(end) > MAX_STDIO_FRAME_BYTES {
+                return Err(Error::Protocol {
+                    server: server.to_string(),
+                    error: "MCP stdio frame exceeds max size".to_string(),
+                });
+            }
+            buf.extend_from_slice(&chunk[..end]);
+            reader.consume(end);
+            return Ok(buf);
+        }
+
+        if buf.len().saturating_add(chunk.len()) > MAX_STDIO_FRAME_BYTES {
+            return Err(Error::Protocol {
+                server: server.to_string(),
+                error: "MCP stdio frame exceeds max size".to_string(),
+            });
+        }
+        let n = chunk.len();
+        buf.extend_from_slice(chunk);
+        reader.consume(n);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader;
+
+    #[test]
+    fn encode_ndjson_produces_single_trailing_newline_without_headers() {
+        let payload = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+        let frame = encode_ndjson_frame(&payload, "test").expect("encode");
+        assert!(frame.ends_with(b"\n"));
+        assert_eq!(frame.iter().filter(|&&b| b == b'\n').count(), 1);
+        let text = std::str::from_utf8(&frame).expect("utf8");
+        assert!(!text.to_ascii_lowercase().contains("content-length"));
+        let parsed: Value = serde_json::from_slice(strip_trailing_line_ending(&frame)).expect("json");
+        assert_eq!(parsed, payload);
+    }
+
+    #[test]
+    fn decode_ndjson_accepts_lf_and_crlf() {
+        let lf = br#"{"ok":true}
+"#;
+        let crlf = br#"{"ok":true}
+"#;
+        assert_eq!(
+            decode_ndjson_line(lf, "test").expect("lf"),
+            json!({"ok": true})
+        );
+        assert_eq!(
+            decode_ndjson_line(crlf, "test").expect("crlf"),
+            json!({"ok": true})
+        );
+    }
+
+    #[test]
+    fn decode_rejects_content_length_framing() {
+        let line = b"Content-Length: 12\r\n";
+        let err = decode_ndjson_line(line, "srv").expect_err("content-length");
+        match err {
+            Error::Protocol { server, error } => {
+                assert_eq!(server, "srv");
+                assert!(error.contains("expected NDJSON, got Content-Length framing"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_rejects_oversized_frame() {
+        // Compact JSON of a large string exceeds the frame budget.
+        let huge = "x".repeat(MAX_STDIO_FRAME_BYTES);
+        let payload = json!({ "data": huge });
+        let err = encode_ndjson_frame(&payload, "srv").expect_err("oversize");
+        match err {
+            Error::Protocol { error, .. } => {
+                assert!(error.contains("MCP stdio frame exceeds max size"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_rejects_oversized_line() {
+        let mut oversized = vec![b'a'; MAX_STDIO_FRAME_BYTES];
+        oversized.push(b'\n');
+        let mut reader = BufReader::new(oversized.as_slice());
+        let err = read_ndjson_line_bytes(&mut reader, "srv")
+            .await
+            .expect_err("oversize");
+        match err {
+            Error::Protocol { error, .. } => {
+                assert!(error.contains("MCP stdio frame exceeds max size"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_and_decode_roundtrip_line() {
+        let data = br#"{"jsonrpc":"2.0","id":1,"result":{}}
+"#;
+        let mut reader = BufReader::new(data.as_slice());
+        let line = read_ndjson_line_bytes(&mut reader, "test")
+            .await
+            .expect("read");
+        let value = decode_ndjson_line(&line, "test").expect("decode");
+        assert_eq!(value["id"], 1);
     }
 }

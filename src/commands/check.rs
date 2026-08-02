@@ -158,10 +158,7 @@ async fn check_provider(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>)
             items.push(CheckItem {
                 name: "provider.api_key".to_string(),
                 status: CheckStatus::Fail,
-                detail: format!(
-                    "missing inline key and env `{}`",
-                    cfg.provider.api_key_env
-                ),
+                detail: format!("missing inline key and env `{}`", cfg.provider.api_key_env),
             });
             if !skip {
                 items.push(CheckItem {
@@ -284,10 +281,7 @@ fn check_access(access: &crate::access::ResolvedAccessPolicy, items: &mut Vec<Ch
                     items.push(CheckItem {
                         name: format!("access.run.{}", program.alias),
                         status: CheckStatus::Ok,
-                        detail: format!(
-                            "executable `{}`",
-                            program.executable.as_path().display()
-                        ),
+                        detail: format!("executable `{}`", program.executable.as_path().display()),
                     });
                 } else {
                     items.push(CheckItem {
@@ -559,8 +553,9 @@ logging:
         };
         let report = run(&args).expect("check");
         assert!(!report.all_passed());
-        assert!(report.items.iter().any(|i| {
-            i.name == "provider.api_key" && i.status == CheckStatus::Fail
-        }));
+        assert!(report
+            .items
+            .iter()
+            .any(|i| { i.name == "provider.api_key" && i.status == CheckStatus::Fail }));
     }
 }

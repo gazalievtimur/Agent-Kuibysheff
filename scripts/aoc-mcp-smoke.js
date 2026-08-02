@@ -7,32 +7,24 @@ const proc = spawn("node", [path.join(root, "mcp-aoc-tasks.js")], {
   stdio: ["pipe", "pipe", "inherit"],
 });
 
-let buf = Buffer.alloc(0);
+let buf = "";
 let step = 0;
 
+proc.stdout.setEncoding("utf8");
 proc.stdout.on("data", (chunk) => {
-  buf = Buffer.concat([buf, chunk]);
+  buf += chunk;
   for (;;) {
-    const headerEnd = buf.indexOf("\r\n\r\n");
-    if (headerEnd < 0) return;
-    const match = /content-length:\s*(\d+)/i.exec(buf.slice(0, headerEnd).toString());
-    if (!match) {
-      buf = Buffer.alloc(0);
-      return;
-    }
-    const len = Number(match[1]);
-    const end = headerEnd + 4 + len;
-    if (buf.length < end) return;
-    const msg = JSON.parse(buf.slice(headerEnd + 4, end).toString());
-    buf = buf.slice(end);
-    onMessage(msg);
+    const newline = buf.indexOf("\n");
+    if (newline < 0) return;
+    const line = buf.slice(0, newline).replace(/\r$/, "");
+    buf = buf.slice(newline + 1);
+    if (!line.trim()) continue;
+    onMessage(JSON.parse(line));
   }
 });
 
 function send(obj) {
-  const body = Buffer.from(JSON.stringify(obj), "utf8");
-  proc.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
-  proc.stdin.write(body);
+  proc.stdin.write(`${JSON.stringify(obj)}\n`);
 }
 
 function onMessage(msg) {
