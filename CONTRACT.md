@@ -36,6 +36,9 @@ agent_Kuibyshev run \
   creates it when necessary.
 
 `limits.*` stop the run (iterations / cumulative token budget / wall clock).
+Wall-clock expiry cancels in-flight provider/MCP waits cooperatively and is
+reported as `stop_reason: "limit_reached"` (same as other limit hits). Tool
+side effects that already started may still finish.
 `provider.history` controls how much chat context is sent to the model on each
 step: after a fixed prefix (system prompt + initial user message), only the
 newest `max_tail_messages` turns are kept, and the whole window is capped at

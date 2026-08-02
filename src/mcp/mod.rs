@@ -61,6 +61,8 @@ pub enum McpError {
     InvalidToolArguments { tool: String, error: String },
     #[error("MCP server `{server}` actor channel closed")]
     ActorClosed { server: String },
+    #[error("MCP call cancelled on server `{server}`")]
+    Cancelled { server: String },
 }
 
 /// Backwards-compatible alias for the MCP-specific error type.

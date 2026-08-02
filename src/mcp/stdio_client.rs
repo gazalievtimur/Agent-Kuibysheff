@@ -10,6 +10,7 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
 
 use crate::config::{McpServerConfig, McpStdioConfig, McpTransport};
@@ -44,6 +45,7 @@ struct McpClientHandle {
     join: Option<JoinHandle<()>>,
     /// Grace period used when awaiting the actor after the request channel closes.
     shutdown_timeout: Duration,
+    cancel: CancellationToken,
 }
 
 struct ActorRequest {
@@ -95,6 +97,7 @@ impl McpRegistry {
     pub async fn connect_all(
         configs: &[McpServerConfig],
         logger: Option<SharedEventSink>,
+        cancel: CancellationToken,
     ) -> Result<Self, Error> {
         let mut servers = HashMap::with_capacity(configs.len());
 
@@ -136,7 +139,7 @@ impl McpRegistry {
                 LiveClient::Stdio(c) => c.timeout,
                 LiveClient::Http(_) => Duration::from_secs(30),
             };
-            let handle = spawn_actor(cfg.name.clone(), client, shutdown_timeout);
+            let handle = spawn_actor(cfg.name.clone(), client, shutdown_timeout, cancel.clone());
 
             servers.insert(
                 cfg.name.clone(),
@@ -186,6 +189,7 @@ impl McpRegistry {
                     tx: Some(tx),
                     join: Some(join),
                     shutdown_timeout: Duration::from_secs(1),
+                    cancel: CancellationToken::new(),
                 },
             },
         );
@@ -197,20 +201,34 @@ fn spawn_actor(
     server_name: String,
     client: LiveClient,
     shutdown_timeout: Duration,
+    cancel: CancellationToken,
 ) -> McpClientHandle {
     let (tx, mut rx) = mpsc::channel::<ActorRequest>(32);
     let actor_name = server_name.clone();
+    let actor_cancel = cancel.clone();
     let join = tokio::spawn(async move {
         let mut client = client;
-        while let Some(req) = rx.recv().await {
-            let ActorRequest {
-                method,
-                params,
-                reply,
-            } = req;
-            let result = client.request(&method, params).await;
-            if reply.send(result).is_err() {
-                debug!(server = %actor_name, "MCP actor caller dropped before reply");
+        loop {
+            tokio::select! {
+                biased;
+                () = actor_cancel.cancelled() => {
+                    debug!(server = %actor_name, "MCP actor cancelled; shutting down");
+                    break;
+                }
+                maybe_req = rx.recv() => {
+                    let Some(req) = maybe_req else {
+                        break;
+                    };
+                    let ActorRequest {
+                        method,
+                        params,
+                        reply,
+                    } = req;
+                    let result = client.request(&method, params).await;
+                    if reply.send(result).is_err() {
+                        debug!(server = %actor_name, "MCP actor caller dropped before reply");
+                    }
+                }
             }
         }
         client.shutdown().await;
@@ -220,6 +238,7 @@ fn spawn_actor(
         tx: Some(tx),
         join: Some(join),
         shutdown_timeout,
+        cancel,
     }
 }
 
@@ -253,22 +272,41 @@ fn spawn_stderr_drain(server_name: String, stderr: ChildStderr) {
 
 impl McpClientHandle {
     async fn request(&self, method: &str, params: Value) -> Result<Value, Error> {
+        if self.cancel.is_cancelled() {
+            return Err(Error::Cancelled {
+                server: self.server_name.clone(),
+            });
+        }
         let tx = self.tx.as_ref().ok_or_else(|| Error::ActorClosed {
             server: self.server_name.clone(),
         })?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        tx.send(ActorRequest {
-            method: method.to_string(),
-            params,
-            reply: reply_tx,
-        })
-        .await
-        .map_err(|_| Error::ActorClosed {
-            server: self.server_name.clone(),
-        })?;
-        reply_rx.await.map_err(|_| Error::ActorClosed {
-            server: self.server_name.clone(),
-        })?
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => {
+                return Err(Error::Cancelled {
+                    server: self.server_name.clone(),
+                });
+            }
+            send_result = tx.send(ActorRequest {
+                method: method.to_string(),
+                params,
+                reply: reply_tx,
+            }) => {
+                send_result.map_err(|_| Error::ActorClosed {
+                    server: self.server_name.clone(),
+                })?;
+            }
+        }
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Err(Error::Cancelled {
+                server: self.server_name.clone(),
+            }),
+            reply = reply_rx => reply.map_err(|_| Error::ActorClosed {
+                server: self.server_name.clone(),
+            })?,
+        }
     }
 
     async fn shutdown(mut self) {

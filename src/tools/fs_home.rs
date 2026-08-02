@@ -8,6 +8,7 @@ use tokio::fs;
 
 use crate::access::paths::{is_within_root, relative_components};
 use crate::access::{HomeFsPolicy, PathOperation, ProgramAlias};
+use crate::agent::RunCancel;
 use crate::sandbox::{
     absolute_home_grants, build_sandbox_env, SandboxError, SandboxOutput, SandboxRunner,
     SandboxSpec,
@@ -22,6 +23,7 @@ pub struct HomeFs {
     root: PathBuf,
     policy: HomeFsPolicy,
     sandbox: Arc<SandboxRunner>,
+    run_cancel: RunCancel,
 }
 
 impl HomeFs {
@@ -38,6 +40,7 @@ impl HomeFs {
         root: &Path,
         policy: HomeFsPolicy,
         sandbox: Arc<SandboxRunner>,
+        run_cancel: RunCancel,
     ) -> Result<Self, HomeFsError> {
         fs::create_dir_all(root)
             .await
@@ -70,6 +73,7 @@ impl HomeFs {
             root,
             policy,
             sandbox,
+            run_cancel,
         })
     }
 
@@ -287,6 +291,14 @@ impl HomeFs {
         let timeout_ms = timeout_ms
             .unwrap_or(DEFAULT_RUN_TIMEOUT_MS)
             .clamp(1, self.policy.max_timeout_ms);
+        // Align sandbox kill timer with remaining run wall-clock budget when armed.
+        let timeout_ms = match self.run_cancel.remaining() {
+            Some(remaining) => {
+                let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+                timeout_ms.min(remaining_ms.max(1))
+            }
+            None => timeout_ms,
+        };
 
         let env = build_sandbox_env(&self.root, &program_policy.inherit_env);
         tracing::info!(
@@ -490,6 +502,7 @@ mod tests {
     use super::*;
     use crate::access::paths::PathGrantScope;
     use crate::access::{CanonicalRoot, ProgramAlias, RelativeGrant, ResolvedProgramPolicy};
+    use crate::agent::RunCancel;
     use crate::sandbox::{MockBackend, SandboxOutput, UnavailableBackend};
     use std::collections::BTreeMap;
 
@@ -555,9 +568,14 @@ mod tests {
     #[tokio::test]
     async fn writes_reads_and_lists_inside_home() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
-            .await
-            .expect("home");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
 
         home.call(
             "write",
@@ -581,9 +599,14 @@ mod tests {
     #[tokio::test]
     async fn rejects_parent_traversal() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
-            .await
-            .expect("home");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
 
         let error = home
             .call("write", json!({"path": "../outside.txt", "content": "no"}))
@@ -605,6 +628,7 @@ mod tests {
             dir.path(),
             strict_home(&["out"], &["out"]),
             unavailable_sandbox(),
+            RunCancel::new(),
         )
         .await
         .expect("home");
@@ -623,6 +647,7 @@ mod tests {
             dir.path(),
             strict_home(&["out"], &["out"]),
             unavailable_sandbox(),
+            RunCancel::new(),
         )
         .await
         .expect("home");
@@ -646,7 +671,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let policy = python_program_policy(dir.path()).await;
 
-        let home = HomeFs::new(dir.path(), policy, mock_sandbox())
+        let home = HomeFs::new(dir.path(), policy, mock_sandbox(), RunCancel::new())
             .await
             .expect("home");
         let result = home
@@ -678,7 +703,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let policy = python_program_policy(dir.path()).await;
 
-        let Err(err) = HomeFs::new(dir.path(), policy, unavailable_sandbox()).await else {
+        let Err(err) =
+            HomeFs::new(dir.path(), policy, unavailable_sandbox(), RunCancel::new()).await
+        else {
             panic!("must require working sandbox");
         };
         assert!(matches!(err, HomeFsError::SandboxUnavailable { .. }));
@@ -687,9 +714,14 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_program() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
-            .await
-            .expect("home");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
 
         let error = home
             .call("run", json!({"program": "  ", "args": []}))
@@ -701,9 +733,14 @@ mod tests {
     #[tokio::test]
     async fn rejects_unknown_program_alias() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let home = HomeFs::new(dir.path(), legacy_home(), unavailable_sandbox())
-            .await
-            .expect("home");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
         let error = home
             .call("run", json!({"program": "python", "args": []}))
             .await
