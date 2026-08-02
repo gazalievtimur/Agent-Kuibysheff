@@ -8,7 +8,7 @@
 - **Fail-closed security**: optional strict access policy denies everything that is not explicitly allowed (tools, paths, programs, env vars).
 - **OS-level sandboxing**: `home.run` payloads execute inside Linux namespaces or a Windows AppContainer with no network.
 - **Composability**: trait-based layering allows providers, tool executors, and sandbox backends to be swapped or tested independently.
-- **Single JSON contract**: regardless of success or failure, the process prints one `RunOutput` JSON document.
+- **Single JSON contract**: regardless of success or failure, `run` prints one `RunOutput` JSON document; `stop_reason: error` also exits non-zero.
 
 ## Workspace layout
 
@@ -228,7 +228,8 @@ Path grants (`home`, `workspace`, `input_roots`) are also fail-closed in strict 
 3. Settings, skills, input files, `HomeFs`, `LocalTools`, and MCP connections are initialized.
 4. The system prompt is assembled from `master_prompt.md`, optional `rules.md`, the skills fragment, and hardcoded runtime rules.
 5. `AgentEngine::run` starts the loop.
-6. On exit, `RunOutput` is serialized to pretty JSON and printed to stdout.
+6. On exit, `RunOutput` is serialized to pretty JSON and printed to stdout; the
+   process exits non-zero when `stop_reason` is `error`.
 
 ## Key security properties
 

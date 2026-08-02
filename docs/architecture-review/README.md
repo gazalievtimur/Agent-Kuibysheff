@@ -12,7 +12,7 @@
 | 05 | P1 | [05-break-config-access-cycle.md](05-break-config-access-cycle.md) | Разорвать цикл config ↔ access | open |
 | 06 | P1 | [06-tool-descriptor-registry.md](06-tool-descriptor-registry.md) | Единый ToolDescriptor registry | in progress (`feat/tool-descriptor-registry`) |
 | 07 | P1 | [07-hard-deadline-cancellation.md](07-hard-deadline-cancellation.md) | Hard deadline + CancellationToken | done (`feat/hard-deadline-cancellation`) |
-| 08 | P1 | [08-exit-code-on-run-error.md](08-exit-code-on-run-error.md) | Non-zero exit при stop_reason=error | open |
+| 08 | P1 | [08-exit-code-on-run-error.md](08-exit-code-on-run-error.md) | Non-zero exit при stop_reason=error | done (`feat/exit-code-on-run-error`) |
 | 09 | P1 | [09-sync-architecture-docs.md](09-sync-architecture-docs.md) | Синхронизировать ARCHITECTURE.md | open |
 | 10 | P2 | [10-curate-public-api.md](10-curate-public-api.md) | Curated lib.rs / pub(crate) | open |
 | 11 | P2 | [11-split-god-modules.md](11-split-god-modules.md) | Разбить god-modules | open |

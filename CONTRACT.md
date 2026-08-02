@@ -48,9 +48,12 @@ they are independent of `limits.max_tokens`.
 
 The `run` process prints exactly one JSON `RunOutput` document to stdout. A
 run-level failure is represented by `stop_reason: "error"` and an error message
-in `result`. Policy denials and sandbox unavailability are returned as
-tool-result errors (for example `PolicyDenied`, `SandboxUnavailable`) without
-performing the side effect.
+in `result`. In that case the process also exits with a non-zero status
+(stdout still contains the JSON). `goal_reached` and `limit_reached` exit 0.
+Serialize failure of `RunOutput` likewise prints a minimal error JSON and exits
+non-zero. Policy denials and sandbox unavailability are returned as tool-result
+errors (for example `PolicyDenied`, `SandboxUnavailable`) without performing
+the side effect.
 
 ### Management commands
 
