@@ -389,7 +389,7 @@ impl ResolvedAccessPolicy {
     }
 }
 
-/// Effective tool allowlist for one run: gated builtins ∪ unconditionally trusted MCP tools.
+/// Effective tool allowlist for one run: gated builtins ∪ skills-gated MCP tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveToolPolicy {
     tools: BTreeSet<QualifiedTool>,
