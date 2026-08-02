@@ -3,13 +3,52 @@
 //! Modes (first CLI arg):
 //! - (default) speak NDJSON and answer `initialize` / `tools/list`
 //! - `content-length` reply to the first JSON-RPC request with LSP-style framing
+//! - `hang` ignore stdin and sleep forever (for kill-path tests)
+//!
+//! Optional env `MCP_FIXTURE_ALIVE_FILE`: create this path on start and remove it on clean exit.
 
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
+struct AliveFile(Option<PathBuf>);
+
+impl AliveFile {
+    fn from_env() -> Self {
+        let path = std::env::var_os("MCP_FIXTURE_ALIVE_FILE").map(PathBuf::from);
+        if let Some(ref path) = path {
+            let _ = std::fs::write(path, b"alive\n");
+        }
+        Self(path)
+    }
+}
+
+impl Drop for AliveFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 fn main() {
-    let content_length_mode = std::env::args().nth(1).as_deref() == Some("content-length");
+    let _alive = AliveFile::from_env();
+    let mode = std::env::args().nth(1);
+    match mode.as_deref() {
+        Some("hang") => {
+            loop {
+                thread::sleep(Duration::from_secs(3600));
+            }
+        }
+        Some("content-length") => serve(true),
+        _ => serve(false),
+    }
+}
+
+fn serve(content_length_mode: bool) {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut used_content_length = false;

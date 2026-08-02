@@ -234,6 +234,7 @@ async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
                     status: CheckStatus::Ok,
                     detail: format!("{transport}; {} tool(s)", tools.len()),
                 });
+                registry.shutdown().await;
             }
             Err(err) => items.push(CheckItem {
                 name,

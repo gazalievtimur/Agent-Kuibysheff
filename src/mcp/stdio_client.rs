@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::{debug, instrument, warn};
 
@@ -20,6 +21,13 @@ use crate::tools::ToolError;
 /// Maximum NDJSON frame size (JSON payload + trailing newline), matching SSE buffer default.
 const MAX_STDIO_FRAME_BYTES: usize = 1024 * 1024;
 
+/// Extra time allowed for the actor to finish after the child grace period.
+const ACTOR_SHUTDOWN_SLACK: Duration = Duration::from_secs(2);
+
+/// Connected MCP servers and their discovered tools.
+///
+/// Prefer [`McpRegistry::shutdown`] over dropping: drop only closes actor channels
+/// (best-effort). Stdio children then rely on actor shutdown or `kill_on_drop`.
 pub struct McpRegistry {
     servers: HashMap<String, ServerHandle>,
     logger: Option<SharedEventSink>,
@@ -32,7 +40,10 @@ struct ServerHandle {
 
 struct McpClientHandle {
     server_name: String,
-    tx: mpsc::Sender<ActorRequest>,
+    tx: Option<mpsc::Sender<ActorRequest>>,
+    join: Option<JoinHandle<()>>,
+    /// Grace period used when awaiting the actor after the request channel closes.
+    shutdown_timeout: Duration,
 }
 
 struct ActorRequest {
@@ -55,9 +66,12 @@ impl LiveClient {
     }
 
     async fn shutdown(&mut self) {
-        if let Self::Http(client) = self {
-            if let Err(err) = client.shutdown().await {
-                warn!(error = %err, "MCP HTTP session shutdown failed");
+        match self {
+            Self::Stdio(client) => client.shutdown().await,
+            Self::Http(client) => {
+                if let Err(err) = client.shutdown().await {
+                    warn!(error = %err, "MCP HTTP session shutdown failed");
+                }
             }
         }
     }
@@ -66,10 +80,9 @@ impl LiveClient {
 struct McpStdioClient {
     server_name: String,
     timeout: Duration,
-    #[allow(dead_code)]
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    stdout: Option<BufReader<ChildStdout>>,
     next_id: AtomicU64,
 }
 
@@ -119,7 +132,11 @@ impl McpRegistry {
                 })?;
             }
 
-            let handle = spawn_actor(cfg.name.clone(), client);
+            let shutdown_timeout = match &client {
+                LiveClient::Stdio(c) => c.timeout,
+                LiveClient::Http(_) => Duration::from_secs(30),
+            };
+            let handle = spawn_actor(cfg.name.clone(), client, shutdown_timeout);
 
             servers.insert(
                 cfg.name.clone(),
@@ -132,12 +149,26 @@ impl McpRegistry {
 
         Ok(Self { servers, logger })
     }
+
+    /// Gracefully disconnects all MCP servers and waits for stdio children to exit.
+    ///
+    /// Prefer this over dropping the registry: [`Drop`] only closes actor channels and is
+    /// best-effort (stdio kill may run without awaiting exit).
+    pub async fn shutdown(self) {
+        for (_, handle) in self.servers {
+            handle.client.shutdown().await;
+        }
+    }
 }
 
-fn spawn_actor(server_name: String, client: LiveClient) -> McpClientHandle {
+fn spawn_actor(
+    server_name: String,
+    client: LiveClient,
+    shutdown_timeout: Duration,
+) -> McpClientHandle {
     let (tx, mut rx) = mpsc::channel::<ActorRequest>(32);
     let actor_name = server_name.clone();
-    tokio::spawn(async move {
+    let join = tokio::spawn(async move {
         let mut client = client;
         while let Some(req) = rx.recv().await {
             let ActorRequest {
@@ -152,7 +183,12 @@ fn spawn_actor(server_name: String, client: LiveClient) -> McpClientHandle {
         }
         client.shutdown().await;
     });
-    McpClientHandle { server_name, tx }
+    McpClientHandle {
+        server_name,
+        tx: Some(tx),
+        join: Some(join),
+        shutdown_timeout,
+    }
 }
 
 /// Continuously drains MCP stderr so a verbose server cannot fill the pipe and deadlock.
@@ -185,20 +221,58 @@ fn spawn_stderr_drain(server_name: String, stderr: ChildStderr) {
 
 impl McpClientHandle {
     async fn request(&self, method: &str, params: Value) -> Result<Value, Error> {
+        let tx = self.tx.as_ref().ok_or_else(|| Error::ActorClosed {
+            server: self.server_name.clone(),
+        })?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(ActorRequest {
-                method: method.to_string(),
-                params,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| Error::ActorClosed {
-                server: self.server_name.clone(),
-            })?;
+        tx.send(ActorRequest {
+            method: method.to_string(),
+            params,
+            reply: reply_tx,
+        })
+        .await
+        .map_err(|_| Error::ActorClosed {
+            server: self.server_name.clone(),
+        })?;
         reply_rx.await.map_err(|_| Error::ActorClosed {
             server: self.server_name.clone(),
         })?
+    }
+
+    async fn shutdown(mut self) {
+        // Closing the request channel lets the actor run LiveClient::shutdown.
+        self.tx.take();
+        let Some(join) = self.join.take() else {
+            return;
+        };
+        let join_timeout = self
+            .shutdown_timeout
+            .saturating_mul(2)
+            .saturating_add(ACTOR_SHUTDOWN_SLACK);
+        match timeout(join_timeout, join).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                warn!(
+                    server = %self.server_name,
+                    error = %err,
+                    "MCP actor task failed during shutdown"
+                );
+            }
+            Err(_) => {
+                warn!(
+                    server = %self.server_name,
+                    "MCP actor shutdown timed out"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for McpClientHandle {
+    fn drop(&mut self) {
+        // Best-effort: closing `tx` wakes the actor so it can shut down the live client.
+        // The JoinHandle is detached; prefer [`McpRegistry::shutdown`] to await exit.
+        self.tx.take();
     }
 }
 
@@ -278,6 +352,8 @@ impl McpStdioClient {
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+        // Safety net when Drop runs without an awaited shutdown (see Drop impl).
+        cmd.kill_on_drop(true);
         for (k, v) in &cfg.env {
             cmd.env(k, v);
         }
@@ -303,11 +379,22 @@ impl McpStdioClient {
         Ok(Self {
             server_name: server_name.to_string(),
             timeout: Duration::from_millis(timeout_ms),
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
+            child: Some(child),
+            stdin: Some(stdin),
+            stdout: Some(BufReader::new(stdout)),
             next_id: AtomicU64::new(1),
         })
+    }
+
+    /// Close stdin, wait for exit (with kill fallback), and log the status.
+    async fn shutdown(&mut self) {
+        // Close pipes so a well-behaved server can exit on EOF.
+        self.stdin.take();
+        self.stdout.take();
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        shutdown_stdio_child(&self.server_name, child, self.timeout).await;
     }
 
     async fn initialize(&mut self) -> Result<(), Error> {
@@ -394,15 +481,111 @@ impl McpStdioClient {
 
     async fn write_frame(&mut self, payload: &Value) -> Result<(), Error> {
         let frame = encode_ndjson_frame(payload, &self.server_name)?;
-        self.stdin.write_all(&frame).await?;
-        self.stdin.flush().await?;
+        let stdin = self.stdin.as_mut().ok_or_else(|| Error::Protocol {
+            server: self.server_name.clone(),
+            error: "stdio client already shut down".to_string(),
+        })?;
+        stdin.write_all(&frame).await?;
+        stdin.flush().await?;
         Ok(())
     }
 
     async fn read_frame(&mut self) -> Result<Value, Error> {
-        let line = read_ndjson_line_bytes(&mut self.stdout, &self.server_name).await?;
+        let stdout = self.stdout.as_mut().ok_or_else(|| Error::Protocol {
+            server: self.server_name.clone(),
+            error: "stdio client already shut down".to_string(),
+        })?;
+        let line = read_ndjson_line_bytes(stdout, &self.server_name).await?;
         decode_ndjson_line(&line, &self.server_name)
     }
+}
+
+impl Drop for McpStdioClient {
+    fn drop(&mut self) {
+        if self.child.is_none() {
+            return;
+        }
+        // Cannot await wait()/kill() in Drop. Close stdin and rely on kill_on_drop(true).
+        warn!(
+            server = %self.server_name,
+            "MCP stdio client dropped without shutdown; child termination is best-effort"
+        );
+        self.stdin.take();
+        self.stdout.take();
+    }
+}
+
+/// Close-stdin → wait(timeout) → kill → wait. Logs exit code/signal (never env).
+async fn shutdown_stdio_child(server_name: &str, mut child: Child, grace: Duration) {
+    match timeout(grace, child.wait()).await {
+        Ok(Ok(status)) => {
+            log_child_exit(server_name, status, false);
+            return;
+        }
+        Ok(Err(error)) => {
+            warn!(
+                server = %server_name,
+                error = %error,
+                "MCP stdio child wait failed"
+            );
+            return;
+        }
+        Err(_) => {
+            warn!(
+                server = %server_name,
+                grace_ms = grace.as_millis() as u64,
+                "MCP stdio child did not exit after stdin close; killing"
+            );
+        }
+    }
+
+    if let Err(error) = child.start_kill() {
+        warn!(
+            server = %server_name,
+            error = %error,
+            "MCP stdio child kill failed"
+        );
+        return;
+    }
+
+    match timeout(grace, child.wait()).await {
+        Ok(Ok(status)) => log_child_exit(server_name, status, true),
+        Ok(Err(error)) => {
+            warn!(
+                server = %server_name,
+                error = %error,
+                "MCP stdio child wait after kill failed"
+            );
+        }
+        Err(_) => {
+            warn!(
+                server = %server_name,
+                "MCP stdio child did not exit after kill"
+            );
+        }
+    }
+}
+
+fn log_child_exit(server_name: &str, status: ExitStatus, killed: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            debug!(
+                server = %server_name,
+                signal,
+                killed,
+                "MCP stdio child exited by signal"
+            );
+            return;
+        }
+    }
+    debug!(
+        server = %server_name,
+        exit_code = ?status.code(),
+        killed,
+        "MCP stdio child exited"
+    );
 }
 
 /// Encode a JSON-RPC message as one NDJSON line (`json\n`).
@@ -584,5 +767,107 @@ mod tests {
             .expect("read");
         let value = decode_ndjson_line(&line, "test").expect("decode");
         assert_eq!(value["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_stdio_child_exits_after_stdin_close() {
+        let mut child = hang_or_echo_command(false)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn");
+        drop(child.stdin.take());
+        drop(child.stdout.take());
+        let pid = child.id().expect("pid");
+        shutdown_stdio_child("graceful", child, Duration::from_secs(5)).await;
+        assert!(
+            !process_alive(pid),
+            "pid {pid} should be gone after stdin-close shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_stdio_child_kills_hung_process() {
+        let mut child = hang_or_echo_command(true)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn hang");
+        drop(child.stdin.take());
+        let pid = child.id().expect("pid");
+        shutdown_stdio_child("hang", child, Duration::from_millis(200)).await;
+        assert!(
+            !process_alive(pid),
+            "hung pid {pid} should be gone after kill"
+        );
+    }
+
+    /// `hang == false`: process exits when stdin closes.
+    /// `hang == true`: process ignores stdin and runs until killed.
+    fn hang_or_echo_command(hang: bool) -> Command {
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new("powershell");
+            if hang {
+                cmd.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"]);
+            } else {
+                // Drain stdin until EOF, then exit.
+                cmd.args([
+                    "-NoProfile",
+                    "-Command",
+                    "$in = [Console]::OpenStandardInput(); $buf = New-Object byte[] 4096; while (($n = $in.Read($buf,0,4096)) -gt 0) {}",
+                ]);
+            }
+            cmd
+        }
+        #[cfg(unix)]
+        {
+            if hang {
+                let mut cmd = Command::new("sleep");
+                cmd.arg("60");
+                cmd
+            } else {
+                Command::new("cat")
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = hang;
+            panic!("unsupported platform for shutdown test helper");
+        }
+    }
+
+    fn process_alive(pid: u32) -> bool {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let output = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .output();
+            match output {
+                Ok(out) => {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    text.contains(&pid.to_string())
+                }
+                Err(_) => false,
+            }
+        }
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status();
+            matches!(status, Ok(s) if s.success())
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = pid;
+            false
+        }
     }
 }
