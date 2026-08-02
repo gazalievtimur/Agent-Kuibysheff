@@ -694,7 +694,8 @@ mod tests {
         assert_eq!(frame.iter().filter(|&&b| b == b'\n').count(), 1);
         let text = std::str::from_utf8(&frame).expect("utf8");
         assert!(!text.to_ascii_lowercase().contains("content-length"));
-        let parsed: Value = serde_json::from_slice(strip_trailing_line_ending(&frame)).expect("json");
+        let parsed: Value =
+            serde_json::from_slice(strip_trailing_line_ending(&frame)).expect("json");
         assert_eq!(parsed, payload);
     }
 

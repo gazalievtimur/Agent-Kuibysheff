@@ -26,10 +26,7 @@ async fn mcp_stdio_ndjson_connect_lists_tools() {
     let registry = McpRegistry::connect_all(&configs, None)
         .await
         .expect("connect NDJSON fixture");
-    assert_eq!(
-        registry.available_tools(),
-        vec!["fixture.echo".to_string()]
-    );
+    assert_eq!(registry.available_tools(), vec!["fixture.echo".to_string()]);
     registry.shutdown().await;
 }
 

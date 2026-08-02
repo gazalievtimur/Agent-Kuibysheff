@@ -38,11 +38,9 @@ fn main() {
     let _alive = AliveFile::from_env();
     let mode = std::env::args().nth(1);
     match mode.as_deref() {
-        Some("hang") => {
-            loop {
-                thread::sleep(Duration::from_secs(3600));
-            }
-        }
+        Some("hang") => loop {
+            thread::sleep(Duration::from_secs(3600));
+        },
         Some("content-length") => serve(true),
         _ => serve(false),
     }
@@ -97,7 +95,12 @@ fn serve(content_length_mode: bool) {
                 }]
             }),
             _ => {
-                write_error(&mut stdout, id, -32601, format!("method not found: {method}"));
+                write_error(
+                    &mut stdout,
+                    id,
+                    -32601,
+                    format!("method not found: {method}"),
+                );
                 continue;
             }
         };
