@@ -135,13 +135,9 @@ where
 
 **Rules:** `async-cancellation-token`, `async-cancel-safety`
 
-No cancellation today — MCP actors and agent loop run until limits or completion.
-
-**Plan:**
-
-1. Thread `CancellationToken` from `main` into `AgentEngine::run`.
-2. Check token at top of agent loop and in MCP actor `select!`.
-3. On cancel: flush logs, return `StopReason::Error` or new `StopReason::Cancelled`.
+**Status:** done (architecture-review/07) — `RunCancel` from composition root into
+agent loop / MCP actors / `home.run` budget clamp; wall-clock expiry →
+`stop_reason: limit_reached`. External Ctrl-C wiring still optional follow-up.
 
 ---
 

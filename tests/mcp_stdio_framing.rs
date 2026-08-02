@@ -7,6 +7,7 @@ use agent_Kuibyshev::mcp::stdio_client::McpRegistry;
 use agent_Kuibyshev::mcp::Error;
 use agent_Kuibyshev::tool_api::ToolExecutor;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 fn fixture_bin() -> String {
     env!("CARGO_BIN_EXE_mcp_stdio_fixture").to_string()
@@ -24,7 +25,7 @@ async fn mcp_stdio_ndjson_connect_lists_tools() {
         }),
     }];
 
-    let registry = McpRegistry::connect_all(&configs, None)
+    let registry = McpRegistry::connect_all(&configs, None, CancellationToken::new())
         .await
         .expect("connect NDJSON fixture");
     assert_eq!(registry.available_tools(), vec!["fixture.echo".to_string()]);
@@ -43,7 +44,7 @@ async fn mcp_stdio_rejects_content_length_framing() {
         }),
     }];
 
-    let err = match McpRegistry::connect_all(&configs, None).await {
+    let err = match McpRegistry::connect_all(&configs, None, CancellationToken::new()).await {
         Ok(registry) => {
             registry.shutdown().await;
             panic!("Content-Length framing must fail");
@@ -90,7 +91,7 @@ async fn mcp_stdio_registry_shutdown_terminates_fixture() {
         }),
     }];
 
-    let registry = McpRegistry::connect_all(&configs, None)
+    let registry = McpRegistry::connect_all(&configs, None, CancellationToken::new())
         .await
         .expect("connect NDJSON fixture");
 

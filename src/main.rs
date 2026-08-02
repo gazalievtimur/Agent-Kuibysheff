@@ -5,7 +5,7 @@ use agent_Kuibyshev::access::{
     parse_tool_list, workspace_root_for_run, EffectiveToolPolicy, HomeFsPolicy, InputFilesPolicy,
     WorkspaceFsPolicy,
 };
-use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
+use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest, RunCancel};
 use agent_Kuibyshev::cli::{Cli, Commands, RunArgs};
 use agent_Kuibyshev::commands;
 use agent_Kuibyshev::config::{apply_cli_overrides, load_config, validate};
@@ -137,9 +137,11 @@ async fn run(cli: RunArgs) -> Result<RunOutput> {
             .context("building input file context task")?
             .context("building input file context")?;
 
+    let run_cancel = RunCancel::new();
+
     let home_policy = HomeFsPolicy::from_access(&access_policy);
     let sandbox = Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default());
-    let home = HomeFs::new(&cli.home, home_policy, sandbox)
+    let home = HomeFs::new(&cli.home, home_policy, sandbox, run_cancel.clone())
         .await
         .with_context(|| format!("initializing home workspace `{}`", cli.home.display()))?;
 
@@ -157,7 +159,7 @@ async fn run(cli: RunArgs) -> Result<RunOutput> {
             )
         })?;
 
-    let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone())
+    let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone(), run_cancel.token().clone())
         .await
         .context("connecting MCP servers")?;
     let mcp_tools = parse_tool_list(mcp.available_tools())
@@ -204,6 +206,7 @@ async fn run(cli: RunArgs) -> Result<RunOutput> {
             input_files_context,
             limits: cfg.limits,
             history: cfg.provider.history.clone(),
+            cancel: run_cancel,
         })
         .await)
 }

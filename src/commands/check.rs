@@ -16,6 +16,7 @@ use crate::sandbox::SandboxRunner;
 use crate::settings::{load_settings, SettingsError};
 use crate::skills::dsl::SkillsCatalog;
 use crate::tool_api::ToolExecutor;
+use tokio_util::sync::CancellationToken;
 
 /// Fatal errors that prevent producing a check report.
 #[derive(Debug, Error)]
@@ -226,7 +227,9 @@ async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
             McpTransport::Http(http) => format!("http `{}`", http.url),
         };
         let name = format!("mcp.{}", server.name);
-        match McpRegistry::connect_all(std::slice::from_ref(server), None).await {
+        match McpRegistry::connect_all(std::slice::from_ref(server), None, CancellationToken::new())
+            .await
+        {
             Ok(registry) => {
                 let tools = registry.available_tools();
                 items.push(CheckItem {

@@ -9,7 +9,7 @@ use agent_Kuibyshev::access::{
     CanonicalRoot, EffectiveToolPolicy, HomeFsPolicy, ProgramAlias, QualifiedTool,
     ResolvedAccessPolicy, ResolvedProgramPolicy, WorkspaceFsPolicy,
 };
-use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest};
+use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest, RunCancel};
 use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
 use agent_Kuibyshev::logging::Loggers;
@@ -58,6 +58,7 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         input_files_context: String::new(),
         limits,
         history: agent_Kuibyshev::config::ProviderHistoryConfig::default(),
+        cancel: RunCancel::new(),
     }
 }
 
@@ -66,7 +67,9 @@ async fn make_tools_with_runner(
     home_policy: HomeFsPolicy,
     runner: Arc<agent_Kuibyshev::sandbox::SandboxRunner>,
 ) -> Arc<CompositeToolExecutor> {
-    let home = HomeFs::new(dir, home_policy, runner).await.expect("home");
+    let home = HomeFs::new(dir, home_policy, runner, RunCancel::new())
+        .await
+        .expect("home");
     let local_tools = LocalTools::new(dir, WorkspaceFsPolicy::legacy())
         .await
         .expect("local tools");

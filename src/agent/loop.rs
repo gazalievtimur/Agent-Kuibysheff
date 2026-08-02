@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -6,6 +7,7 @@ use thiserror::Error;
 use tracing::{info, instrument, warn};
 
 use crate::access::QualifiedTool;
+use crate::agent::RunCancel;
 use crate::config::ProviderHistoryConfig;
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
@@ -36,6 +38,8 @@ pub struct AgentRunRequest {
     pub limits: LimitsConfig,
     /// Model context-window pruning budgets (`provider.history`).
     pub history: ProviderHistoryConfig,
+    /// Cooperative cancel + wall-clock deadline for this run.
+    pub cancel: RunCancel,
 }
 
 pub struct AgentEngine {
@@ -83,6 +87,7 @@ impl AgentEngine {
             input_files_context,
             limits,
             history,
+            cancel,
         } = request;
 
         let available_tools = self.tools.available_tools();
@@ -97,7 +102,15 @@ impl AgentEngine {
         let mut stop_reason = StopReason::LimitReached;
         let mut diag = RunDiagnostics::default();
 
+        // Align hard deadline with RunMetrics wall clock (not composition-root setup time).
+        cancel.arm_deadline(Duration::from_secs(limits.max_duration_sec));
+
         loop {
+            if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
+                final_result = "Execution stopped due to limit: max_duration_sec".to_string();
+                stop_reason = StopReason::LimitReached;
+                break;
+            }
             match metrics.pre_step_check(&limits) {
                 Ok(()) => {}
                 Err(limit) => {
@@ -109,7 +122,16 @@ impl AgentEngine {
             metrics.begin_iteration();
             let iteration = metrics.iterations();
 
-            let completion = match self.model.complete(&messages).await {
+            let completion = tokio::select! {
+                biased;
+                () = cancel.token().cancelled() => {
+                    final_result = "Execution stopped due to limit: max_duration_sec".to_string();
+                    stop_reason = StopReason::LimitReached;
+                    break;
+                }
+                completion = self.model.complete(&messages) => completion,
+            };
+            let completion = match completion {
                 Ok(completion) => completion,
                 Err(err) => {
                     self.loggers.persist_chat_history(&full_history, None).await;
@@ -122,7 +144,7 @@ impl AgentEngine {
                 stop_reason = StopReason::LimitReached;
                 break;
             }
-            if metrics.duration_limit_hit(&limits) {
+            if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                 stop_reason = StopReason::LimitReached;
                 break;
@@ -273,11 +295,21 @@ impl AgentEngine {
                 )
                 .await;
 
-                let tool_response = match self
-                    .tools
-                    .call_tool(qualified.server(), qualified.tool(), tool_call.arguments)
-                    .await
-                {
+                let tool_response = tokio::select! {
+                    biased;
+                    () = cancel.token().cancelled() => {
+                        final_result =
+                            "Execution stopped due to limit: max_duration_sec".to_string();
+                        stop_reason = StopReason::LimitReached;
+                        break;
+                    }
+                    response = self.tools.call_tool(
+                        qualified.server(),
+                        qualified.tool(),
+                        tool_call.arguments,
+                    ) => response,
+                };
+                let tool_response = match tool_response {
                     Ok(value) => value,
                     Err(err) => {
                         warn!(
@@ -336,7 +368,7 @@ impl AgentEngine {
                 )
                 .await;
 
-                if metrics.duration_limit_hit(&limits) {
+                if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
                     final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                     stop_reason = StopReason::LimitReached;
                     break;
@@ -990,6 +1022,7 @@ mod tests {
                 input_files_context: String::new(),
                 limits: test_limits(),
                 history: test_history(),
+                cancel: RunCancel::new(),
             })
             .await;
 
@@ -1029,6 +1062,7 @@ mod tests {
                 input_files_context: String::new(),
                 limits: test_limits(),
                 history: test_history(),
+                cancel: RunCancel::new(),
             })
             .await;
 
@@ -1080,6 +1114,7 @@ mod tests {
                 input_files_context: String::new(),
                 limits: test_limits(),
                 history: test_history(),
+                cancel: RunCancel::new(),
             })
             .await;
 
@@ -1138,6 +1173,7 @@ mod tests {
                 input_files_context: String::new(),
                 limits: test_limits(),
                 history: test_history(),
+                cancel: RunCancel::new(),
             })
             .await;
 
@@ -1147,6 +1183,57 @@ mod tests {
         assert!(
             loggers.audit_write_failed(),
             "failing audit sink must set audit_write_failed"
+        );
+    }
+
+    struct SlowProvider;
+
+    #[async_trait]
+    impl ModelClient for SlowProvider {
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> Result<ModelResponse, crate::provider::Error> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(ModelResponse {
+                content: r#"{"done":true,"thought":"late","tool_calls":[],"result":"too late"}"#
+                    .to_string(),
+                usage: test_usage(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn short_deadline_cancels_slow_provider_without_waiting() {
+        let provider = Arc::new(SlowProvider);
+        let tools = Arc::new(NoopTools);
+        let engine = AgentEngine::new(provider, tools, Loggers::default());
+        let started = std::time::Instant::now();
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: LimitsConfig {
+                    max_iterations: 10,
+                    max_tokens: 1_000,
+                    max_duration_sec: 1,
+                },
+                history: test_history(),
+                cancel: RunCancel::new(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::LimitReached);
+        assert!(
+            output.result.contains("max_duration_sec"),
+            "result was: {}",
+            output.result
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "run should exit on deadline, not wait for slow provider (elapsed {:?})",
+            started.elapsed()
         );
     }
 }
