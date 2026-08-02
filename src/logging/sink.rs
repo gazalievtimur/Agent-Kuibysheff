@@ -83,7 +83,15 @@ impl FileJsonlSink {
                         error = %err,
                         "failed to write log record"
                     );
+                    continue;
                 }
+            }
+            if let Err(err) = file.flush().await {
+                warn!(
+                    path = %log_path.display(),
+                    error = %err,
+                    "failed to flush log file"
+                );
             }
         });
 
@@ -134,33 +142,41 @@ impl Drop for FileJsonlSink {
         let handle = lock_mutex(&self.handle).take();
         if let Some(handle) = handle {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                // Drain the writer from a temporary thread to avoid blocking the runtime thread
-                // in current-thread schedulers or during runtime shutdown.
+                // Drain the writer from a temporary thread to avoid blocking the runtime
+                // thread. Do not use `tokio::time::timeout` here: timers are not driven
+                // inside `Handle::block_on` on a non-worker thread.
                 let path = self.path.clone();
-                match std::thread::spawn(move || {
-                    runtime.block_on(tokio::time::timeout(Duration::from_secs(5), handle))
-                })
-                .join()
-                {
-                    Ok(Ok(Ok(()))) => {}
-                    Ok(Ok(Err(err))) => {
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                let join = std::thread::spawn(move || {
+                    let result = runtime.block_on(handle);
+                    let _ = done_tx.send(result);
+                });
+                match done_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Ok(())) => {
+                        let _ = join.join();
+                    }
+                    Ok(Err(err)) => {
                         warn!(
                             path = %path.display(),
                             error = %err,
                             "log sink writer panicked during drop"
                         );
+                        let _ = join.join();
                     }
-                    Ok(Err(_)) => {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         warn!(
                             path = %path.display(),
                             "log sink writer drain timed out during drop"
                         );
+                        // Detach rather than blocking forever on join.
+                        drop(join);
                     }
-                    Err(_) => {
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                         warn!(
                             path = %path.display(),
-                            "log sink drain thread panicked during drop"
+                            "log sink drain thread exited without result during drop"
                         );
+                        let _ = join.join();
                     }
                 }
             }
