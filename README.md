@@ -205,7 +205,45 @@ Verify the toolchain is active:
 rustup show
 ```
 
-Run all checks before committing (fmt, clippy, cargo test, and AoC agent
+### Pre-commit CI gate
+
+Commits are gated by the same checks that CI runs first:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo +nightly miri test -p sandbox-linux` (Linux only, when nightly is installed)
+
+Enable the git hook once per clone:
+
+```powershell
+.\scripts\install-git-hooks.ps1
+```
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+That sets `core.hooksPath=.githooks`. Cursor also blocks `git commit --no-verify`
+and commits when hooks are not installed (see [`.cursor/hooks.json`](.cursor/hooks.json)).
+
+Run the gate manually:
+
+```powershell
+.\scripts\pre-commit-gate.ps1
+.\scripts\pre-commit-gate.ps1 -SkipMiri   # Windows / no nightly
+```
+
+```bash
+./scripts/pre-commit-gate.sh
+./scripts/pre-commit-gate.sh --skip-miri
+```
+
+Emergency bypass (local only): `SKIP_PRECOMMIT=1`.
+
+### Full local quality gate
+
+Run all checks before pushing (fmt, clippy, cargo test, and AoC agent
 regression against `local/aoc-bank`):
 
 ```powershell
@@ -224,15 +262,15 @@ Individual commands:
 
 ```powershell
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 .\scripts\aoc-regression.ps1
 ```
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ./scripts/aoc-regression.sh
 ```
 
