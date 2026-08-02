@@ -1,0 +1,135 @@
+//! Raw access-policy DTOs deserialized from YAML/JSON.
+//!
+//! These types are owned by `access` so resolve/validation can compile them without
+//! importing [`crate::config`]. The app config embeds [`AccessPolicyConfig`] and may
+//! re-export these names for callers.
+
+use std::path::PathBuf;
+
+use serde::Deserialize;
+
+/// Fail-closed capability policy declared in the config file.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct AccessPolicyConfig {
+    #[serde(default)]
+    pub tools: ToolsPolicyConfig,
+    #[serde(default)]
+    pub filesystem: FilesystemPolicyConfig,
+    #[serde(default)]
+    pub run: RunPolicyConfig,
+}
+
+/// Built-in tool allowlist (`server.tool` qualified names only).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ToolsPolicyConfig {
+    /// Empty means no built-ins are allowed (fail-closed).
+    #[serde(default)]
+    pub builtins: Vec<String>,
+}
+
+/// Filesystem grants for home, workspace research tools, and `--files` inputs.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct FilesystemPolicyConfig {
+    #[serde(default)]
+    pub home: HomeFsPolicyConfig,
+    pub workspace: Option<WorkspacePolicyConfig>,
+    /// Host directories; relative paths resolve against the config file directory.
+    #[serde(default)]
+    pub input_roots: Vec<PathBuf>,
+}
+
+/// Relative path prefixes inside CLI `--home`.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct HomeFsPolicyConfig {
+    /// Empty means no home reads are allowed (fail-closed).
+    #[serde(default)]
+    pub read: Vec<String>,
+    /// Empty means no home writes are allowed (fail-closed).
+    #[serde(default)]
+    pub write: Vec<String>,
+}
+
+/// Workspace root and read grants for `local_tools.*`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspacePolicyConfig {
+    /// Host path; relative values resolve against the config file directory.
+    pub root: PathBuf,
+    /// Relative prefixes inside `root`. Empty means only the root itself is readable when
+    /// an empty grant list is interpreted by callers; prefer explicit prefixes.
+    #[serde(default)]
+    pub read: Vec<String>,
+}
+
+/// Sandboxed `home.run` program aliases and argv limits.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RunPolicyConfig {
+    /// Empty means no programs are allowed for `home.run` (fail-closed).
+    #[serde(default)]
+    pub programs: Vec<ProgramPolicyConfig>,
+    #[serde(default = "RunPolicyConfig::default_max_args")]
+    pub max_args: usize,
+    #[serde(default = "RunPolicyConfig::default_max_arg_chars")]
+    pub max_arg_chars: usize,
+    #[serde(default = "RunPolicyConfig::default_max_output_chars")]
+    pub max_output_chars: usize,
+    #[serde(default = "RunPolicyConfig::default_max_timeout_ms")]
+    pub max_timeout_ms: u64,
+}
+
+impl Default for RunPolicyConfig {
+    fn default() -> Self {
+        Self {
+            programs: Vec::new(),
+            max_args: Self::default_max_args(),
+            max_arg_chars: Self::default_max_arg_chars(),
+            max_output_chars: Self::default_max_output_chars(),
+            max_timeout_ms: Self::default_max_timeout_ms(),
+        }
+    }
+}
+
+impl RunPolicyConfig {
+    #[must_use]
+    pub const fn default_max_args() -> usize {
+        32
+    }
+
+    #[must_use]
+    pub const fn default_max_arg_chars() -> usize {
+        4_096
+    }
+
+    #[must_use]
+    pub const fn default_max_output_chars() -> usize {
+        200_000
+    }
+
+    #[must_use]
+    pub const fn default_max_timeout_ms() -> u64 {
+        120_000
+    }
+}
+
+/// One sandboxed executable exposed to the model under a stable alias.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramPolicyConfig {
+    /// Value of `home.run.program` (alias, not a host path).
+    pub name: String,
+    /// Host path to the executable; relative values resolve against the config file directory.
+    pub executable: PathBuf,
+    /// Additional read-only host roots required by the runtime (e.g. interpreter install).
+    #[serde(default)]
+    pub runtime_read_roots: Vec<PathBuf>,
+    /// Environment variable names inherited into the sandbox (values come from the agent process).
+    #[serde(default)]
+    pub inherit_env: Vec<String>,
+    #[serde(default)]
+    pub allow_children: bool,
+}

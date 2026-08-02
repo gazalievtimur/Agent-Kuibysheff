@@ -286,10 +286,9 @@ async fn denied_tool_is_returned_as_tool_result_error() {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tokio::test]
 async fn model_can_home_run_via_native_sandbox() {
-    use agent_Kuibyshev::access::resolve_access_policy;
-    use agent_Kuibyshev::config::{
-        AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, RunPolicyConfig,
-        ToolsPolicyConfig,
+    use agent_Kuibyshev::access::{
+        resolve_access_policy, AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig,
+        RunPolicyConfig, ToolsPolicyConfig,
     };
 
     let runner = Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default());
