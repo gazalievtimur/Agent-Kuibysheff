@@ -12,7 +12,7 @@ use agent_Kuibyshev::config::{apply_cli_overrides, load_config, validate};
 use agent_Kuibyshev::context::build_input_files_context;
 use agent_Kuibyshev::logging::{init_tracing, resolve_base_dir, Loggers};
 use agent_Kuibyshev::mcp::stdio_client::McpRegistry;
-use agent_Kuibyshev::output::RunOutput;
+use agent_Kuibyshev::output::{RunOutput, StopReason};
 use agent_Kuibyshev::provider::openai_compat::OpenAiCompatClient;
 use agent_Kuibyshev::settings::load_settings;
 use agent_Kuibyshev::skills::dsl::SkillsCatalog;
@@ -87,7 +87,7 @@ fn run_worker(args: RunArgs) -> ExitCode {
     match serde_json::to_string_pretty(&output) {
         Ok(payload) => {
             println!("{payload}");
-            ExitCode::SUCCESS
+            exit_code_for_run_output(&output)
         }
         Err(err) => {
             error!(error = %err, "failed to serialize RunOutput as JSON");
@@ -96,6 +96,14 @@ fn run_worker(args: RunArgs) -> ExitCode {
             );
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Exit code after printing `RunOutput`: non-zero only for `stop_reason: error`.
+fn exit_code_for_run_output(output: &RunOutput) -> ExitCode {
+    match output.stop_reason {
+        StopReason::Error => ExitCode::FAILURE,
+        StopReason::GoalReached | StopReason::LimitReached => ExitCode::SUCCESS,
     }
 }
 

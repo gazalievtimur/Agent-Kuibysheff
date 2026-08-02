@@ -301,6 +301,11 @@ The CLI prints exactly one JSON document to stdout:
 }
 ```
 
+Process exit for `run`: `0` when `stop_reason` is `goal_reached` or
+`limit_reached`; non-zero when `stop_reason` is `error` (JSON is still printed
+on stdout). Management commands (`init`, `check`) keep their own exit semantics
+and do not emit `RunOutput`.
+
 ## Logging
 
 By default the agent writes detailed logs under `~/.agent-kuibyshev/logs`:
