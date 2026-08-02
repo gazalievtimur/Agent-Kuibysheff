@@ -106,6 +106,7 @@ jobs:
 
       - name: Run Miri tests
         # rust-toolchain.toml pins stable; Miri is nightly-only — force +nightly.
+        # Only --lib: tests/namespaces.rs needs real userns/FS (not Miri-isolatable).
         run: |
           cargo +nightly miri setup
-          cargo +nightly miri test -p sandbox-linux
+          cargo +nightly miri test -p sandbox-linux --lib

@@ -212,7 +212,7 @@ Commits are gated by the same checks that CI runs first:
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
-- `cargo +nightly miri test -p sandbox-linux` (Linux only, when nightly is installed)
+- `cargo +nightly miri test -p sandbox-linux --lib` (Linux only, when nightly is installed)
 
 Enable the git hook once per clone:
 

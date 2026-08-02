@@ -5,7 +5,7 @@
 #   - cargo fmt --all -- --check
 #   - cargo clippy --workspace --all-targets -- -D warnings
 #   - cargo test --workspace
-#   - cargo +nightly miri test -p sandbox-linux (Linux; skip with --skip-miri)
+#   - cargo +nightly miri test -p sandbox-linux --lib (Linux; skip with --skip-miri)
 #
 # Bypass: SKIP_PRECOMMIT=1
 set -euo pipefail
@@ -68,8 +68,8 @@ if [[ "$SKIP_MIRI_FLAG" -eq 1 || "${SKIP_MIRI:-}" == "1" ]]; then
 elif [[ "$(uname -s)" == "Linux" ]]; then
   if rustup run nightly rustc --version >/dev/null 2>&1; then
     step "cargo +nightly miri setup" cargo +nightly miri setup
-    step "cargo +nightly miri test -p sandbox-linux" \
-      cargo +nightly miri test -p sandbox-linux
+    step "cargo +nightly miri test -p sandbox-linux --lib" \
+      cargo +nightly miri test -p sandbox-linux --lib
   else
     echo "==> Skipping Miri (nightly toolchain not installed)"
   fi

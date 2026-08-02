@@ -4,6 +4,10 @@ Integration tests in `tests/namespaces.rs` need a real Linux host with
 unprivileged user namespaces. They are `cfg(target_os = "linux")` and do not
 run on Windows.
 
+Miri CI runs only library unit tests (`cargo miri test -p sandbox-linux --lib`).
+Namespace integration tests need host `stat`/`unshare`/`fork` and are not
+Miri-isolatable.
+
 ## Known lab host
 
 | Item | Value |

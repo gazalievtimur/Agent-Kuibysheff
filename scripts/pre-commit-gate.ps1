@@ -8,7 +8,7 @@
     - cargo fmt --all -- --check
     - cargo clippy --workspace --all-targets -- -D warnings
     - cargo test --workspace
-    - cargo +nightly miri test -p sandbox-linux (Linux only; skip with -SkipMiri)
+    - cargo +nightly miri test -p sandbox-linux --lib (Linux only; skip with -SkipMiri)
 
   Set SKIP_PRECOMMIT=1 to bypass callers (emergency only).
 #>
@@ -57,10 +57,10 @@ $onLinux = ($IsLinux -eq $true)
 if ($runMiri -and $onLinux) {
     & rustup run nightly rustc --version 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Invoke-Step "cargo +nightly miri test -p sandbox-linux" {
+        Invoke-Step "cargo +nightly miri test -p sandbox-linux --lib" {
             cargo +nightly miri setup
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo +nightly miri test -p sandbox-linux
+            cargo +nightly miri test -p sandbox-linux --lib
         }
     } else {
         Write-Host "==> Skipping Miri (nightly toolchain not installed)"
