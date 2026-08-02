@@ -159,6 +159,38 @@ impl McpRegistry {
             handle.client.shutdown().await;
         }
     }
+
+    /// Test helper: registry with one server whose every request returns `result`.
+    #[cfg(test)]
+    fn with_stub_server(
+        server: &str,
+        tool: &str,
+        result: Value,
+        logger: Option<SharedEventSink>,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel::<ActorRequest>(8);
+        let join = tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let _ = req.reply.send(Ok(result.clone()));
+            }
+        });
+        let mut tools = HashSet::new();
+        tools.insert(tool.to_string());
+        let mut servers = HashMap::new();
+        servers.insert(
+            server.to_string(),
+            ServerHandle {
+                tools,
+                client: McpClientHandle {
+                    server_name: server.to_string(),
+                    tx: Some(tx),
+                    join: Some(join),
+                    shutdown_timeout: Duration::from_secs(1),
+                },
+            },
+        );
+        Self { servers, logger }
+    }
 }
 
 fn spawn_actor(
@@ -311,23 +343,28 @@ impl ToolExecutor for McpRegistry {
             )
             .await?;
 
+        // Runtime audit is soft: tools/call already succeeded; never map sink
+        // failures to ToolError (would look like a tool failure to the model).
         if let Some(log) = &self.logger {
-            log.write_event(
-                "mcp_tool_call",
-                json!({
-                    "server": server,
-                    "tool": tool,
-                    "arguments": arguments_for_log,
-                    "result": result,
-                }),
-            )
-            .await
-            .map_err(|err| {
-                ToolError::Mcp(Error::Logging {
-                    server: server.to_string(),
-                    source: err,
-                })
-            })?;
+            if let Err(err) = log
+                .write_event(
+                    "mcp_tool_call",
+                    json!({
+                        "server": server,
+                        "tool": tool,
+                        "arguments": arguments_for_log,
+                        "result": result,
+                    }),
+                )
+                .await
+            {
+                warn!(
+                    server,
+                    tool,
+                    error = ?err,
+                    "MCP audit log write failed after successful tools/call; delivering tool result"
+                );
+            }
         }
 
         Ok(result)
@@ -685,6 +722,27 @@ where
 mod tests {
     use super::*;
     use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn call_tool_ok_when_audit_sink_fails() {
+        use std::sync::Arc;
+
+        use crate::logging::FailingEventSink;
+        use crate::mcp::ToolExecutor;
+
+        let logger: SharedEventSink = Arc::new(FailingEventSink::new());
+        let expected = json!({"content":[{"type":"text","text":"side-effect-done"}]});
+        let registry =
+            McpRegistry::with_stub_server("demo", "do_thing", expected.clone(), Some(logger));
+
+        let result = registry
+            .call_tool("demo", "do_thing", json!({"x": 1}))
+            .await
+            .expect("successful tools/call must not become ToolError on audit failure");
+        assert_eq!(result, expected);
+
+        registry.shutdown().await;
+    }
 
     #[test]
     fn encode_ndjson_produces_single_trailing_newline_without_headers() {

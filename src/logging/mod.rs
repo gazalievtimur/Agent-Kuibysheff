@@ -4,6 +4,7 @@ mod sink;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tracing::warn;
@@ -19,8 +20,8 @@ use crate::provider::ChatMessage;
 pub use chat_history::{write_chat_history, ChatHistoryRecord};
 pub use paths::{default_log_dir, resolve_base_dir};
 pub use sink::{
-    create_event_sink, create_file_sink, DbEventSink, EventSink, FileJsonlSink, JsonlLogger,
-    MemoryEventSink, SharedEventSink, SinkDestination,
+    create_event_sink, create_file_sink, DbEventSink, EventSink, FailingEventSink, FileJsonlSink,
+    JsonlLogger, MemoryEventSink, SharedEventSink, SinkDestination, TrackingEventSink,
 };
 
 use thiserror::Error;
@@ -63,6 +64,8 @@ pub struct Loggers {
     pub mcp: Option<SharedEventSink>,
     system_log: Option<PathBuf>,
     chat_history_path: Option<PathBuf>,
+    /// Set when any tracked audit sink `write_event` fails (runtime soft failures).
+    audit_write_failed: Arc<AtomicBool>,
 }
 
 impl Loggers {
@@ -73,16 +76,20 @@ impl Loggers {
     /// Returns [`LoggingError`] if a requested sink cannot be opened.
     pub async fn from_config(config: &LoggingConfig) -> Result<Self, LoggingError> {
         let base_dir = resolve_base_dir(config)?;
+        let audit_write_failed = Arc::new(AtomicBool::new(false));
         let mut loggers = Self {
             system_log: Some(base_dir.join("agent.trace.log")),
+            audit_write_failed: audit_write_failed.clone(),
             ..Self::default()
         };
 
         if config.enable_ai_log {
-            loggers.ai = Some(create_event_sink(config, "ai_usage.jsonl").await?);
+            let sink = create_event_sink(config, "ai_usage.jsonl").await?;
+            loggers.ai = Some(TrackingEventSink::wrap(sink, audit_write_failed.clone()));
         }
         if config.enable_mcp_log {
-            loggers.mcp = Some(create_event_sink(config, "mcp_usage.jsonl").await?);
+            let sink = create_event_sink(config, "mcp_usage.jsonl").await?;
+            loggers.mcp = Some(TrackingEventSink::wrap(sink, audit_write_failed));
         }
         if config.enable_chat_history {
             loggers.chat_history_path = Some(base_dir.join("chat_history.json"));
@@ -94,11 +101,19 @@ impl Loggers {
     /// Builds loggers with explicit AI/MCP sinks (for tests and custom wiring).
     #[must_use]
     pub fn with_sinks(ai: Option<SharedEventSink>, mcp: Option<SharedEventSink>) -> Self {
+        let audit_write_failed = Arc::new(AtomicBool::new(false));
         Self {
-            ai,
-            mcp,
+            ai: ai.map(|sink| TrackingEventSink::wrap(sink, audit_write_failed.clone())),
+            mcp: mcp.map(|sink| TrackingEventSink::wrap(sink, audit_write_failed.clone())),
+            audit_write_failed,
             ..Self::default()
         }
+    }
+
+    /// Whether any AI/MCP audit `write_event` has failed this run.
+    #[must_use]
+    pub fn audit_write_failed(&self) -> bool {
+        self.audit_write_failed.load(Ordering::Relaxed)
     }
 
     #[must_use]

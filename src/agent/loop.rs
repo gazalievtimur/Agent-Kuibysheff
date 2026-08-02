@@ -140,8 +140,11 @@ impl AgentEngine {
                     )
                     .await
                 {
-                    self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((err.into(), build_usage_report(&metrics)));
+                    warn!(
+                        iteration,
+                        error = ?err,
+                        "AI audit log write failed after successful completion; continuing run"
+                    );
                 }
             }
 
@@ -174,8 +177,11 @@ impl AgentEngine {
                             )
                             .await
                         {
-                            self.loggers.persist_chat_history(&full_history, None).await;
-                            return Err((log_err.into(), build_usage_report(&metrics)));
+                            warn!(
+                                iteration,
+                                error = ?log_err,
+                                "AI audit log write failed for directive_parse_failed; continuing run"
+                            );
                         }
                     }
                     push_message(
@@ -407,7 +413,7 @@ impl AgentEngine {
             return;
         };
         if let Err(err) = sink.write_event(event_type, payload).await {
-            warn!(error = %err, event_type, "failed to write tool lifecycle log event");
+            warn!(error = ?err, event_type, "failed to write tool lifecycle log event");
         }
     }
 
@@ -419,6 +425,7 @@ impl AgentEngine {
     ) {
         let done_without_home_run = *stop_reason == StopReason::GoalReached && !diag.home_run_ok;
         let stop_reason_name = stop_reason_name(stop_reason);
+        let audit_write_failed = self.loggers.audit_write_failed();
         info!(
             stop_reason = stop_reason_name,
             parse_failures = diag.parse_failures,
@@ -426,6 +433,7 @@ impl AgentEngine {
             home_write_ok = diag.home_write_ok,
             home_run_ok = diag.home_run_ok,
             done_without_home_run,
+            audit_write_failed,
             "agent run finished"
         );
         let Some(ai_log) = &self.loggers.ai else {
@@ -442,11 +450,12 @@ impl AgentEngine {
                     "home_write_ok": diag.home_write_ok,
                     "home_run_ok": diag.home_run_ok,
                     "done_without_home_run": done_without_home_run,
+                    "audit_write_failed": audit_write_failed,
                 }),
             )
             .await
         {
-            warn!(error = %err, "failed to write run_summary log event");
+            warn!(error = ?err, "failed to write run_summary log event");
         }
     }
 }
@@ -1099,5 +1108,45 @@ mod tests {
         assert_eq!(summary["home_run_ok"], true);
         assert_eq!(summary["done_without_home_run"], false);
         assert_eq!(summary["parse_failures"], 0);
+        assert_eq!(summary["audit_write_failed"], false);
+    }
+
+    #[tokio::test]
+    async fn audit_sink_failure_does_not_abort_run() {
+        use crate::logging::FailingEventSink;
+
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![
+                r#"{"done":false,"thought":"run","tool_calls":[{"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"]}}],"result":null}"#
+                    .to_string(),
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"11"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let failing: crate::logging::SharedEventSink = Arc::new(FailingEventSink::new());
+        let loggers = Loggers::with_sinks(Some(failing.clone()), Some(failing));
+        assert!(!loggers.audit_write_failed());
+        let engine = AgentEngine::new(provider, tools.clone(), loggers.clone());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "solve".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "11");
+        assert_eq!(tools.calls.lock().unwrap().len(), 1);
+        assert!(
+            loggers.audit_write_failed(),
+            "failing audit sink must set audit_write_failed"
+        );
     }
 }
