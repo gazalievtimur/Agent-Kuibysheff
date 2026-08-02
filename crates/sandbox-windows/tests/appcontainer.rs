@@ -1,5 +1,7 @@
 //! Windows AppContainer integration tests (host must support AppContainers).
 
+#![cfg(windows)]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
