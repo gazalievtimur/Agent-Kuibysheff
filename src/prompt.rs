@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::access::{EffectiveToolPolicy, ResolvedAccessPolicy};
+use crate::tools::registry::{self, BuiltinPrompt, BUILTINS};
 
 /// Builds the dynamic runtime rules section of the system prompt.
 ///
@@ -24,32 +25,16 @@ pub fn build_runtime_rules(
     ];
 
     let mut builtins = Vec::new();
-    if effective.allows_server_tool("home", "list") {
-        builtins.push("- home.list {\"path\":\".\"}".to_string());
-    }
-    if effective.allows_server_tool("home", "read") {
-        builtins.push("- home.read {\"path\":\"relative/path\",\"max_chars\":50000}".to_string());
-    }
-    if effective.allows_server_tool("home", "write") {
-        builtins.push("- home.write {\"path\":\"relative/path\",\"content\":\"...\"}".to_string());
-    }
-    if effective.allows_server_tool("home", "run") && !access.programs().is_empty() {
-        let aliases: Vec<&str> = access.programs().keys().map(|a| a.as_str()).collect();
-        let example = aliases.first().copied().unwrap_or("python");
-        let programs = aliases.join(", ");
-        builtins.push(format!(
-            "- home.run {{\"program\":\"{example}\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}} (available programs: {programs})"
-        ));
-    }
-    if effective.allows_server_tool("local_tools", "search_docs") {
-        builtins
-            .push("- local_tools.search_docs {\"query\":\"phrase\",\"max_results\":8}".to_string());
-    }
-    if effective.allows_server_tool("local_tools", "read_file") {
-        builtins.push(format!(
-            "- local_tools.read_file {{\"path\":\"relative/path\",\"max_chars\":6000}}. Reads from the workspace root (`{workspace}`), not from home.",
-            workspace = workspace.display()
-        ));
+    for descriptor in BUILTINS {
+        if !effective.allows_server_tool(descriptor.server, descriptor.tool) {
+            continue;
+        }
+        if descriptor.requires_programs && access.programs().is_empty() {
+            continue;
+        }
+        if let Some(line) = prompt_line_for(descriptor, access, workspace) {
+            builtins.push(line);
+        }
     }
 
     if !builtins.is_empty() {
@@ -60,7 +45,7 @@ pub fn build_runtime_rules(
     let mcp_tools: Vec<String> = effective
         .tools()
         .iter()
-        .filter(|t| t.server() != "home" && t.server() != "local_tools")
+        .filter(|t| !registry::is_builtin_server(t.server()))
         .map(|t| format!("- {}.{}", t.server(), t.tool()))
         .collect();
 
@@ -79,6 +64,30 @@ pub fn build_runtime_rules(
     lines.join("\n")
 }
 
+fn prompt_line_for(
+    descriptor: &registry::ToolDescriptor,
+    access: &ResolvedAccessPolicy,
+    workspace: &Path,
+) -> Option<String> {
+    match descriptor.prompt {
+        BuiltinPrompt::StaticArgs(args) => Some(format!("- {} {args}", descriptor.name)),
+        BuiltinPrompt::HomeRun => {
+            let aliases: Vec<&str> = access.programs().keys().map(|a| a.as_str()).collect();
+            let example = aliases.first().copied().unwrap_or("python");
+            let programs = aliases.join(", ");
+            Some(format!(
+                "- {} {{\"program\":\"{example}\",\"args\":[\"solution.py\"],\"timeout_ms\":30000}} (available programs: {programs})",
+                descriptor.name
+            ))
+        }
+        BuiltinPrompt::WorkspaceReadFile => Some(format!(
+            "- {} {{\"path\":\"relative/path\",\"max_chars\":6000}}. Reads from the workspace root (`{workspace}`), not from home.",
+            descriptor.name,
+            workspace = workspace.display()
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -86,6 +95,7 @@ mod tests {
 
     use super::*;
     use crate::access::QualifiedTool;
+    use crate::tools::registry;
 
     fn home_read_policy() -> EffectiveToolPolicy {
         let access = ResolvedAccessPolicy::legacy();
@@ -160,5 +170,24 @@ mod tests {
         assert!(rules.contains("Available MCP tools:"));
         assert!(rules.contains("- docs.search"));
         assert!(rules.contains("home.read"));
+    }
+
+    #[test]
+    fn advertised_builtins_match_registry_prompt_coverage() {
+        // Every non-requires_programs builtin must be representable in the prompt.
+        for descriptor in registry::BUILTINS {
+            if descriptor.requires_programs {
+                continue;
+            }
+            match descriptor.prompt {
+                BuiltinPrompt::StaticArgs(args) => {
+                    assert!(args.starts_with('{'), "static args for {}", descriptor.name);
+                }
+                BuiltinPrompt::WorkspaceReadFile => {}
+                BuiltinPrompt::HomeRun => {
+                    panic!("home.run should set requires_programs");
+                }
+            }
+        }
     }
 }
