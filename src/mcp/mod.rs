@@ -1,16 +1,21 @@
-pub mod http_client;
-pub mod oauth;
-pub mod sse;
-pub mod stdio_client;
+//! MCP client surface: registry, errors, and (crate-internal) transports.
+//!
+//! Stable for downstream use: [`McpRegistry`], [`McpError`] / [`Error`], and [`BearerChallenge`]
+//! (present in error variants). HTTP/OAuth/SSE modules are `pub(crate)`.
+
+pub(crate) mod http_client;
+pub(crate) mod oauth;
+pub(crate) mod sse;
+pub(crate) mod stdio_client;
 
 use thiserror::Error;
 
 use crate::logging::LoggingError;
 use crate::tool_api::{ExternalToolError, ToolError};
 
-use self::oauth::BearerChallenge;
-
 pub use crate::tool_api::ToolExecutor;
+pub use oauth::BearerChallenge;
+pub use stdio_client::McpRegistry;
 
 /// MCP-specific error (JSON-RPC, transport, OAuth, server lifecycle).
 #[derive(Debug, Error)]

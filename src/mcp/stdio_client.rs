@@ -765,7 +765,7 @@ mod tests {
     async fn call_tool_ok_when_audit_sink_fails() {
         use std::sync::Arc;
 
-        use crate::logging::FailingEventSink;
+        use crate::logging::sink::FailingEventSink;
         use crate::tool_api::ToolExecutor;
 
         let logger: SharedEventSink = Arc::new(FailingEventSink::new());

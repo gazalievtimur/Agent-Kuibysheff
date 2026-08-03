@@ -79,9 +79,10 @@ flowchart TD
 
 ### Bootstrap and orchestration
 
-- `src/main.rs` — entry point. Loads dotenv, parses CLI subcommands, and for `run` starts Tokio and wires all layers. It also calls `sandbox_linux::try_run_helper()` before Tokio starts so the Linux namespace helper runs single-threaded. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON.
-- `src/cli/` — `clap` subcommands: `run` (`RunArgs`: `--config`, `--settings-dir`, `--prompt`, `--home`, optional `--files`, limit overrides, `--save-chat-history`), `init` (`InitArgs`), and `check` (`CheckArgs`: `--config`, optional `--settings-dir`, skip flags).
-- `src/commands/` — management command implementations (`init` scaffold, `check` resource probes, future convert / add-mcp / add-access). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
+- `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
+- `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON.
+- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` (`RunArgs`: `--config`, `--settings-dir`, `--prompt`, `--home`, optional `--files`, limit overrides, `--save-chat-history`), `init` (`InitArgs`), and `check` (`CheckArgs`: `--config`, optional `--settings-dir`, skip flags).
+- `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes, future convert / add-mcp / add-access). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
 - `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, optional `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
@@ -104,12 +105,13 @@ flowchart TD
 
 ### MCP and provider
 
-- `src/mcp/mod.rs` — shared `ToolExecutor` trait and unified tool errors.
-- `src/mcp/stdio_client.rs` — MCP over stdio: server lifecycle, `tools/list`, `tools/call`, JSON-RPC actor, stderr drain, JSONL logging.
-- `src/mcp/http_client.rs` — MCP over Streamable HTTP.
-- `src/mcp/oauth.rs` — OAuth token acquisition and persistence for MCP servers that require it.
-- `src/provider/openai_compat.rs` — OpenAI-compatible `/chat/completions` client with retries.
+- `src/mcp/mod.rs` — stable MCP facade (`McpRegistry`, `McpError`); re-exports `ToolExecutor`.
+- `src/mcp/stdio_client.rs` — MCP over stdio (`pub(crate)` module; `McpRegistry` re-exported): server lifecycle, `tools/list`, `tools/call`, JSON-RPC actor, stderr drain, JSONL logging.
+- `src/mcp/http_client.rs` — MCP over Streamable HTTP (`pub(crate)`).
+- `src/mcp/oauth.rs` / `sse.rs` — OAuth and SSE parsing (`pub(crate)`).
+- `src/provider/openai_compat.rs` — OpenAI-compatible `/chat/completions` client with retries (`pub(crate)`).
 - `src/provider/mod.rs` — `ModelClient` trait and shared provider types.
+- `src/lib.rs` — curated public API; see crate rustdoc for the stable vs `pub(crate)` split.
 
 ### Logging
 
@@ -120,7 +122,7 @@ flowchart TD
 
 ### Sandbox
 
-- `src/sandbox/mod.rs` — `SandboxBackend` trait, `SandboxSpec`, `SandboxRunner`, `UnavailableBackend`, `MockBackend`.
+- `src/sandbox/mod.rs` — `SandboxBackend` trait, `SandboxSpec`, `SandboxRunner`, `UnavailableBackend`; `MockBackend` is `pub(crate)`.
 - `src/sandbox/native.rs` — platform adapters that run the Linux/Windows sandbox backends inside `tokio::task::spawn_blocking`.
 - `crates/sandbox-linux` — Linux implementation: re-exec helper, `clone3` namespaces, user/group maps, pivot_root, bind mounts, capability drop, seccomp, PID1 supervision.
 - `crates/sandbox-windows` — Windows implementation: AppContainer profile, temporary ACL grants, Job Object, suspended process launch, token verification, network isolation check.

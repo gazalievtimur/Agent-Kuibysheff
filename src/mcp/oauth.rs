@@ -47,6 +47,7 @@ impl TokenSet {
     /// Missing `expires_at` is treated as expired so callers refresh or re-auth instead of
     /// assuming an immortal token (`api-parse-dont-validate`).
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_expired(&self, skew_secs: u64) -> bool {
         match self.expires_at {
             Some(at) => now_unix().saturating_add(skew_secs) >= at,
@@ -138,6 +139,7 @@ impl McpOAuth {
     /// # Errors
     ///
     /// Returns [`Error`] when discovery, refresh, or interactive login fails.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn ensure_access_token(
         &mut self,
         challenge: Option<&BearerChallenge>,

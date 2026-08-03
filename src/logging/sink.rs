@@ -103,16 +103,12 @@ impl FileJsonlSink {
         })
     }
 
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// Closes the channel and waits for the background writer to finish.
     ///
     /// # Errors
     ///
     /// Returns [`LoggingError::TaskJoin`] if the background writer panics.
+    #[cfg(test)]
     pub async fn flush(self) -> Result<(), LoggingError> {
         self.shutdown().await
     }
@@ -249,11 +245,13 @@ impl EventSink for DbEventSink {
 }
 
 /// In-memory sink for tests and diagnostics capture.
+#[cfg(test)]
 #[derive(Default)]
 pub struct MemoryEventSink {
     events: Mutex<Vec<(String, Value)>>,
 }
 
+#[cfg(test)]
 impl MemoryEventSink {
     #[must_use]
     pub fn new() -> Self {
@@ -267,6 +265,7 @@ impl MemoryEventSink {
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl EventSink for MemoryEventSink {
     async fn write_event(&self, event_type: &str, payload: Value) -> Result<(), LoggingError> {
@@ -284,9 +283,11 @@ impl EventSink for MemoryEventSink {
 }
 
 /// Test/mock sink that always fails writes (used to assert soft audit handling).
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct FailingEventSink;
 
+#[cfg(test)]
 impl FailingEventSink {
     #[must_use]
     pub fn new() -> Self {
@@ -294,6 +295,7 @@ impl FailingEventSink {
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl EventSink for FailingEventSink {
     async fn write_event(&self, _event_type: &str, _payload: Value) -> Result<(), LoggingError> {
@@ -347,9 +349,6 @@ impl EventSink for TrackingEventSink {
         self.inner.shutdown().await
     }
 }
-
-/// Backward-compatible alias for the file-backed JSONL sink.
-pub type JsonlLogger = FileJsonlSink;
 
 /// Creates an event sink for a named channel file inside the resolved base dir.
 ///

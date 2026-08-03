@@ -1,4 +1,9 @@
-pub mod openai_compat;
+//! Provider traits and shared chat types.
+//!
+//! Stable: [`ModelClient`], [`ChatMessage`], [`ModelResponse`], [`Error`].
+//! The OpenAI-compatible HTTP adapter is `pub(crate)`.
+
+pub(crate) mod openai_compat;
 
 use std::sync::Arc;
 

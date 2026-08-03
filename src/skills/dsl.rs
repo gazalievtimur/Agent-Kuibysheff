@@ -134,6 +134,7 @@ impl SkillsCatalog {
     }
 
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn allowed_tool_set(&self) -> HashSet<String> {
         self.skills
             .iter()
