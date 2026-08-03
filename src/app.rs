@@ -3,6 +3,7 @@
 //! This module is the entry used by `main.rs`. It is public so the binary crate can call it,
 //! but it is **not** part of the stable library facade for downstream dependents.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -14,14 +15,16 @@ use crate::access::{
     parse_tool_list, workspace_root_for_run, EffectiveToolPolicy, HomeFsPolicy, InputFilesPolicy,
     WorkspaceFsPolicy,
 };
-use crate::agent::{AgentEngine, AgentRunRequest, RunCancel};
-use crate::cli::{Cli, Commands, RunArgs};
+use crate::acp;
+use crate::agent::{AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
+use crate::cli::{AcpArgs, Cli, Commands, RunArgs};
 use crate::commands;
-use crate::config::{apply_cli_overrides, load_config, load_dotenv, validate};
+use crate::config::{apply_limit_overrides, load_config, load_dotenv, validate, AppConfig};
 use crate::context::build_input_files_context;
 use crate::logging::{init_tracing, resolve_base_dir, Loggers};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
+use crate::project_paths::resolve_agent_paths;
 use crate::prompt::build_runtime_rules;
 use crate::provider::openai_compat::OpenAiCompatClient;
 use crate::sandbox::SandboxRunner;
@@ -32,7 +35,47 @@ use crate::tools::fs_home::HomeFs;
 use crate::tools::local_tools::LocalTools;
 use crate::tools::{CompositeToolExecutor, PolicyToolExecutor};
 
-/// Parse CLI args and dispatch to `run` / `init` / `check`.
+/// Shared inputs for one agent turn (CLI `run` or ACP `session/prompt`).
+#[derive(Clone)]
+pub struct AgentPromptArgs {
+    pub config: PathBuf,
+    pub settings_dir: PathBuf,
+    pub home: PathBuf,
+    pub prompt: String,
+    pub files: Vec<PathBuf>,
+    pub max_iterations: Option<u32>,
+    pub max_tokens: Option<u64>,
+    pub max_duration_sec: Option<u64>,
+    pub save_chat_history: bool,
+    pub cancel: RunCancel,
+    pub events: AgentEventTx,
+}
+
+impl From<RunArgs> for AgentPromptArgs {
+    fn from(cli: RunArgs) -> Self {
+        let (config, settings_dir, home) = resolve_agent_paths(
+            cli.project_root.as_deref(),
+            &cli.config,
+            &cli.settings_dir,
+            &cli.home,
+        );
+        Self {
+            config,
+            settings_dir,
+            home,
+            prompt: cli.prompt,
+            files: cli.files,
+            max_iterations: cli.max_iterations,
+            max_tokens: cli.max_tokens,
+            max_duration_sec: cli.max_duration_sec,
+            save_chat_history: cli.save_chat_history,
+            cancel: RunCancel::new(),
+            events: AgentEventTx::noop(),
+        }
+    }
+}
+
+/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp`.
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
@@ -50,6 +93,7 @@ pub fn run() -> ExitCode {
 
     match cli.command {
         Commands::Run(args) => run_worker(args),
+        Commands::Acp(args) => run_acp(args),
         Commands::Init(args) => match commands::init::run(&args) {
             Ok(result) => {
                 commands::init::print_success(&result);
@@ -89,7 +133,7 @@ fn run_worker(args: RunArgs) -> ExitCode {
         }
     };
 
-    let output = match runtime.block_on(run_agent(args)) {
+    let output = match runtime.block_on(run_agent_prompt(AgentPromptArgs::from(args))) {
         Ok(out) => out,
         Err(err) => RunOutput::error(format!("{err:#}")),
     };
@@ -109,6 +153,28 @@ fn run_worker(args: RunArgs) -> ExitCode {
     }
 }
 
+fn run_acp(args: AcpArgs) -> ExitCode {
+    // ACP stdio JSON-RPC must not share stdout with other prints; keep diagnostics on stderr.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: failed to start tokio runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtime.block_on(acp::run_acp_server(args)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: ACP server failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Exit code after printing `RunOutput`: non-zero only for `stop_reason: error`.
 fn exit_code_for_run_output(output: &RunOutput) -> ExitCode {
     match output.stop_reason {
@@ -117,17 +183,33 @@ fn exit_code_for_run_output(output: &RunOutput) -> ExitCode {
     }
 }
 
-async fn run_agent(cli: RunArgs) -> Result<RunOutput> {
-    let config_path = cli.config.clone();
+fn apply_prompt_overrides(cfg: &mut AppConfig, args: &AgentPromptArgs) {
+    apply_limit_overrides(
+        cfg,
+        args.max_iterations,
+        args.max_tokens,
+        args.max_duration_sec,
+        args.save_chat_history,
+    );
+}
+
+/// Wire config/tools/provider and run one agent turn.
+///
+/// # Errors
+///
+/// Returns setup failures (config, settings, MCP, home init). Engine failures become
+/// [`RunOutput`] with `stop_reason: error`.
+pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
+    let config_path = args.config.clone();
     let (mut cfg, access_policy) = tokio::task::spawn_blocking(move || load_config(&config_path))
         .await
         .context("loading config task")?
         .context("loading config")?;
 
-    apply_cli_overrides(&mut cfg, &cli);
+    apply_prompt_overrides(&mut cfg, &args);
     validate(&cfg).context("validating config")?;
-    if cli.prompt.trim().is_empty() {
-        bail!("`--prompt` must not be empty");
+    if args.prompt.trim().is_empty() {
+        bail!("prompt must not be empty");
     }
 
     let log_dir = resolve_base_dir(&cfg.logging).context("resolving log directory")?;
@@ -137,31 +219,31 @@ async fn run_agent(cli: RunArgs) -> Result<RunOutput> {
         .await
         .context("initializing loggers")?;
 
-    let settings_dir = cli.settings_dir.clone();
+    let settings_dir = args.settings_dir.clone();
     let settings = tokio::task::spawn_blocking(move || load_settings(&settings_dir))
         .await
         .context("loading settings task")?
-        .with_context(|| format!("loading settings from `{}`", cli.settings_dir.display()))?;
+        .with_context(|| format!("loading settings from `{}`", args.settings_dir.display()))?;
 
     let catalog = SkillsCatalog::parse(&settings.skills_source).context("parsing skills DSL")?;
     let skills_allowed = catalog.allowed_qualified_tools();
     let skill_prompt = catalog.build_prompt_fragment();
 
     let input_policy = InputFilesPolicy::from_access(&access_policy);
-    let input_files = cli.files.clone();
+    let input_files = args.files.clone();
     let input_files_context =
         tokio::task::spawn_blocking(move || build_input_files_context(&input_files, &input_policy))
             .await
             .context("building input file context task")?
             .context("building input file context")?;
 
-    let run_cancel = RunCancel::new();
+    let run_cancel = args.cancel;
 
     let home_policy = HomeFsPolicy::from_access(&access_policy);
     let sandbox = Arc::new(SandboxRunner::platform_default());
-    let home = HomeFs::new(&cli.home, home_policy, sandbox, run_cancel.clone())
+    let home = HomeFs::new(&args.home, home_policy, sandbox, run_cancel.clone())
         .await
-        .with_context(|| format!("initializing home workspace `{}`", cli.home.display()))?;
+        .with_context(|| format!("initializing home workspace `{}`", args.home.display()))?;
 
     let workspace_root = workspace_root_for_run(
         &access_policy,
@@ -191,7 +273,8 @@ async fn run_agent(cli: RunArgs) -> Result<RunOutput> {
         effective.clone(),
     );
 
-    let runtime_rules = build_runtime_rules(&effective, &access_policy, &cli.home, &workspace_root);
+    let runtime_rules =
+        build_runtime_rules(&effective, &access_policy, &args.home, &workspace_root);
 
     let system_prompt = format!(
         "{master}\n\n{rules_section}{skills}\n\n{runtime_rules}",
@@ -206,7 +289,7 @@ async fn run_agent(cli: RunArgs) -> Result<RunOutput> {
     );
 
     info!(
-        home = %cli.home.display(),
+        home = %args.home.display(),
         mcp_servers = cfg.mcp.len(),
         "starting agent run"
     );
@@ -214,12 +297,13 @@ async fn run_agent(cli: RunArgs) -> Result<RunOutput> {
     let engine = AgentEngine::new(Arc::new(provider), Arc::new(tools), loggers);
     Ok(engine
         .run(AgentRunRequest {
-            prompt: cli.prompt,
+            prompt: args.prompt,
             system_prompt,
             input_files_context,
             limits: cfg.limits,
             history: cfg.provider.history.clone(),
             cancel: run_cancel,
+            events: args.events,
         })
         .await)
 }

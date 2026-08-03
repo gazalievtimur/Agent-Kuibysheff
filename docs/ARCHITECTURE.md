@@ -80,19 +80,29 @@ flowchart TD
 ### Bootstrap and orchestration
 
 - `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
-- `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON.
-- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` (`RunArgs`: `--config`, `--settings-dir`, `--prompt`, `--home`, optional `--files`, limit overrides, `--save-chat-history`), `init` (`InitArgs`), and `check` (`CheckArgs`: `--config`, optional `--settings-dir`, skip flags).
-- `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes, future convert / add-mcp / add-access). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
-- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
+- `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio.
+- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` (`RunArgs`), `acp` (`AcpArgs`: `--config`, `--settings-dir`, `--home`, optional limit overrides), `init` (`InitArgs`), and `check` (`CheckArgs`).
+- `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
+- `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
 
 ### Agent core
 
-- `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/duration limits, prunes message history using `provider.history` (`history`), and emits `RunOutput`.
+- `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/duration limits, prunes message history using `provider.history` (`history`), emits optional `AgentEvent` progress (`events`), and returns `RunOutput`.
+- `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming (no-op for CLI `run`).
 - `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, and elapsed time.
 - `src/output.rs` — `RunOutput` schema: `result`, `usage`, `stop_reason`, `logs`.
 
+### IDE protocol (ACP)
+
+VS Code owns the Agent Host Protocol (AHP) sessions server. Kuibyshev plugs in as an ACP agent:
+
+```text
+Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibyshev acp
+```
+
+`src/acp/` handles initialize / session lifecycle / prompt turns and forwards engine events as `session/update` notifications. Access policy, sandbox, and MCP client behavior match the `run` worker.
 ### Tools and access policy
 
 - `src/tools/mod.rs` — `CompositeToolExecutor` routes built-in `home`/`local_tools` calls and falls through to MCP; `PolicyToolExecutor` wraps it and enforces `EffectiveToolPolicy`.

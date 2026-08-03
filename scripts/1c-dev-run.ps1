@@ -31,8 +31,11 @@ param(
     # Путь к бинарнику agent_Kuibyshev, либо "cargo" для сборки на лету
     [string] $AgentBin = "",
 
-    # Корень каталогов прогонов (по умолчанию workflows/1c-dev/runs)
+    # Корень каталогов прогонов (по умолчанию: ProjectRoot/.kuibyshev/runs или workflows/1c-dev/runs)
     [string] $RunsRoot = "",
+
+    # Папка продукта 1С (VS Code workspace). Когда задана — configs/homes под .kuibyshev/
+    [string] $ProjectRoot = "",
 
     # Идентификатор прогона; если пусто — генерируется из IssueKey/TaskFile + timestamp
     [string] $RunId = "",
@@ -40,7 +43,7 @@ param(
     # Корень репозитория Agent Kuibyshev; пусто = родитель каталога scripts/
     [string] $RepoRoot = "",
 
-    # Общий YAML-конфиг агента вместо agent-config.example.yaml профиля этапа
+    # Общий YAML-конфиг агента вместо agent-config.yaml / example профиля этапа
     [string] $ConfigOverride = "",
 
     # Закрыть human gate: утвердить план и разрешить этап coder
@@ -192,6 +195,9 @@ function Invoke-AgentRun {
         "--prompt", $shortPrompt,
         "--home", $HomeDir
     )
+    if ($script:ProjectRootForAgent) {
+        $argList += @("--project-root", $script:ProjectRootForAgent)
+    }
     foreach ($f in $allFiles) {
         if ($f -and (Test-Path -LiteralPath $f -PathType Leaf)) {
             $argList += @("--files", $f)
@@ -283,10 +289,30 @@ if (Test-Path -LiteralPath $dotenv) {
 
 # $workflowRoot — корень пакета воркфлоу workflows/1c-dev
 $workflowRoot = Resolve-RepoPath $RepoRoot "workflows/1c-dev"
-# $productPath — YAML адаптера продукта (demo.yaml и т.п.)
-$productPath = Resolve-RepoPath $RepoRoot "workflows/1c-dev/products/$Product.yaml"
+
+# $ProjectRootForAgent — передаётся в agent_Kuibyshev --project-root
+$script:ProjectRootForAgent = $null
+if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+    if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
+        throw "ProjectRoot not found: $ProjectRoot"
+    }
+    $script:ProjectRootForAgent = $ProjectRoot
+}
+
+# $productPath — YAML адаптера: .kuibyshev/product.yaml или products/<Product>.yaml
+$productPath = $null
+if ($script:ProjectRootForAgent) {
+    $inProject = Join-Path $script:ProjectRootForAgent ".kuibyshev\product.yaml"
+    if (Test-Path -LiteralPath $inProject -PathType Leaf) {
+        $productPath = $inProject
+    }
+}
+if (-not $productPath) {
+    $productPath = Resolve-RepoPath $RepoRoot "workflows/1c-dev/products/$Product.yaml"
+}
 if (-not (Test-Path -LiteralPath $productPath -PathType Leaf)) {
-    throw "Product config not found: $productPath (copy zup.yaml.example if needed)"
+    throw "Product config not found: $productPath (scaffold .kuibyshev/product.yaml or copy products/*.yaml.example)"
 }
 # $productYaml — сырое содержимое product YAML
 $productYaml = Get-Content -LiteralPath $productPath -Raw -Encoding UTF8
@@ -312,7 +338,11 @@ if (-not [string]::IsNullOrWhiteSpace($FromStage) -and $FromStage -notin @("1", 
 }
 
 if (-not $RunsRoot) {
-    $RunsRoot = Join-Path $workflowRoot "runs"
+    if ($script:ProjectRootForAgent) {
+        $RunsRoot = Join-Path $script:ProjectRootForAgent ".kuibyshev\runs"
+    } else {
+        $RunsRoot = Join-Path $workflowRoot "runs"
+    }
 } else {
     $RunsRoot = [System.IO.Path]::GetFullPath($RunsRoot)
 }
@@ -360,12 +390,30 @@ if (-not $AgentBin) {
     }
 }
 
+# $useProjectAgents — профили из {ProjectRoot}/.kuibyshev/agents
+$useProjectAgents = $false
+if ($script:ProjectRootForAgent) {
+    $probe = Join-Path $script:ProjectRootForAgent ".kuibyshev\agents\1c-analyst"
+    if (Test-Path -LiteralPath $probe -PathType Container) {
+        $useProjectAgents = $true
+    }
+}
+
 # $agentProfiles — настройки каждого этапа: Id, Settings, Config, Prompt
-$agentProfiles = @{
-    "1" = @{ Id = "1c-intake"; Settings = "test-agents/1c-intake"; Config = "test-agents/1c-intake/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage1.intake.md" }
-    "2" = @{ Id = "1c-analyst"; Settings = "test-agents/1c-analyst"; Config = "test-agents/1c-analyst/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage2.analysis.md" }
-    "3" = @{ Id = "1c-coder"; Settings = "test-agents/1c-coder"; Config = "test-agents/1c-coder/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage3.coder.md" }
-    "4" = @{ Id = "1c-implementer"; Settings = "test-agents/1c-implementer"; Config = "test-agents/1c-implementer/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage4.implement.md" }
+if ($useProjectAgents) {
+    $agentProfiles = @{
+        "1" = @{ Id = "1c-intake"; Settings = ".kuibyshev/agents/1c-intake"; Config = ".kuibyshev/agents/1c-intake/agent-config.yaml"; Prompt = "workflows/1c-dev/prompts/stage1.intake.md"; UnderProject = $true }
+        "2" = @{ Id = "1c-analyst"; Settings = ".kuibyshev/agents/1c-analyst"; Config = ".kuibyshev/agents/1c-analyst/agent-config.yaml"; Prompt = "workflows/1c-dev/prompts/stage2.analysis.md"; UnderProject = $true }
+        "3" = @{ Id = "1c-coder"; Settings = ".kuibyshev/agents/1c-coder"; Config = ".kuibyshev/agents/1c-coder/agent-config.yaml"; Prompt = "workflows/1c-dev/prompts/stage3.coder.md"; UnderProject = $true }
+        "4" = @{ Id = "1c-implementer"; Settings = ".kuibyshev/agents/1c-implementer"; Config = ".kuibyshev/agents/1c-implementer/agent-config.yaml"; Prompt = "workflows/1c-dev/prompts/stage4.implement.md"; UnderProject = $true }
+    }
+} else {
+    $agentProfiles = @{
+        "1" = @{ Id = "1c-intake"; Settings = "test-agents/1c-intake"; Config = "test-agents/1c-intake/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage1.intake.md"; UnderProject = $false }
+        "2" = @{ Id = "1c-analyst"; Settings = "test-agents/1c-analyst"; Config = "test-agents/1c-analyst/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage2.analysis.md"; UnderProject = $false }
+        "3" = @{ Id = "1c-coder"; Settings = "test-agents/1c-coder"; Config = "test-agents/1c-coder/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage3.coder.md"; UnderProject = $false }
+        "4" = @{ Id = "1c-implementer"; Settings = "test-agents/1c-implementer"; Config = "test-agents/1c-implementer/agent-config.example.yaml"; Prompt = "workflows/1c-dev/prompts/stage4.implement.md"; UnderProject = $false }
+    }
 }
 
 # Адаптеры: сначала adapters/<Product>/, иначе общий adapters/default/
@@ -509,14 +557,25 @@ function Run-Stage {
     # $profile — запись из $agentProfiles для этапа N
     $profile = $agentProfiles["$N"]
     # $settingsDir — каталог master_prompt / skills / rules
-    $settingsDir = Resolve-RepoPath $RepoRoot $profile.Settings
-    # $configPath — runtime YAML: -ConfigOverride, иначе agent-config.local.yaml, иначе example
+    if ($profile.UnderProject) {
+        $settingsDir = Resolve-RepoPath $script:ProjectRootForAgent $profile.Settings
+    } else {
+        $settingsDir = Resolve-RepoPath $RepoRoot $profile.Settings
+    }
+    # $configPath — runtime YAML: -ConfigOverride, иначе agent-config.yaml / local / example
     if ($ConfigOverride) {
         $configPath = $ConfigOverride
     } else {
+        $projectConfig = Join-Path $settingsDir "agent-config.yaml"
         $localConfig = Join-Path $settingsDir "agent-config.local.yaml"
-        $exampleConfig = Resolve-RepoPath $RepoRoot $profile.Config
-        if (Test-Path -LiteralPath $localConfig -PathType Leaf) {
+        if ($profile.UnderProject) {
+            $exampleConfig = Resolve-RepoPath $script:ProjectRootForAgent $profile.Config
+        } else {
+            $exampleConfig = Resolve-RepoPath $RepoRoot $profile.Config
+        }
+        if (Test-Path -LiteralPath $projectConfig -PathType Leaf) {
+            $configPath = $projectConfig
+        } elseif (Test-Path -LiteralPath $localConfig -PathType Leaf) {
             $configPath = $localConfig
         } else {
             $configPath = $exampleConfig
@@ -593,6 +652,9 @@ function Run-Stage {
             "--prompt", $shortPrompt,
             "--home", $stageHome
         )
+        if ($script:ProjectRootForAgent) {
+            $argList += @("--project-root", $script:ProjectRootForAgent)
+        }
         foreach ($f in $allFiles) {
             if ($f -and (Test-Path -LiteralPath $f -PathType Leaf)) {
                 $argList += @("--files", $f)

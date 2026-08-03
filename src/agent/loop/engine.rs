@@ -8,7 +8,7 @@ use tracing::{info, instrument, warn};
 use super::directive::{approx_json_object_count, content_preview, parse_directive};
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
-use crate::agent::RunCancel;
+use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
 use crate::config::ProviderHistoryConfig;
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
@@ -38,6 +38,8 @@ pub struct AgentRunRequest {
     pub history: ProviderHistoryConfig,
     /// Cooperative cancel + wall-clock deadline for this run.
     pub cancel: RunCancel,
+    /// Optional progress sink (ACP streaming); no-op for CLI `run`.
+    pub events: AgentEventTx,
 }
 
 pub struct AgentEngine {
@@ -86,6 +88,7 @@ impl AgentEngine {
             limits,
             history,
             cancel,
+            events,
         } = request;
 
         let available_tools = self.tools.available_tools();
@@ -235,7 +238,14 @@ impl AgentEngine {
                 &history,
             );
 
-            for tool_call in directive.tool_calls {
+            if let Some(thought) = directive.thought.as_deref() {
+                if !thought.trim().is_empty() {
+                    events.emit(AgentEvent::Thought(thought.to_string()));
+                }
+            }
+
+            for (tool_index, tool_call) in directive.tool_calls.into_iter().enumerate() {
+                let tool_call_id = format!("tc-{iteration}-{tool_index}");
                 let qualified =
                     match QualifiedTool::parse(&format!("{}.{}", tool_call.server, tool_call.tool))
                     {
@@ -259,6 +269,17 @@ impl AgentEngine {
                                 }),
                             )
                             .await;
+                            events.emit(AgentEvent::ToolStart {
+                                id: tool_call_id.clone(),
+                                server: tool_call.server.clone(),
+                                tool: tool_call.tool.clone(),
+                                arguments: tool_call.arguments.clone(),
+                            });
+                            events.emit(AgentEvent::ToolFinish {
+                                id: tool_call_id,
+                                ok: false,
+                                output: json!({ "error": reason }),
+                            });
                             push_message(
                                 &mut messages,
                                 &mut full_history,
@@ -292,6 +313,13 @@ impl AgentEngine {
                     }),
                 )
                 .await;
+
+                events.emit(AgentEvent::ToolStart {
+                    id: tool_call_id.clone(),
+                    server: server.clone(),
+                    tool: tool.clone(),
+                    arguments: tool_call.arguments.clone(),
+                });
 
                 let tool_response = tokio::select! {
                     biased;
@@ -327,6 +355,11 @@ impl AgentEngine {
                             }),
                         )
                         .await;
+                        events.emit(AgentEvent::ToolFinish {
+                            id: tool_call_id,
+                            ok: false,
+                            output: json!({ "error": err.to_string() }),
+                        });
                         push_message(
                             &mut messages,
                             &mut full_history,
@@ -366,6 +399,12 @@ impl AgentEngine {
                 )
                 .await;
 
+                events.emit(AgentEvent::ToolFinish {
+                    id: tool_call_id,
+                    ok: true,
+                    output: tool_response.clone(),
+                });
+
                 if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
                     final_result = "Execution stopped due to limit: max_duration_sec".to_string();
                     stop_reason = StopReason::LimitReached;
@@ -399,6 +438,9 @@ impl AgentEngine {
                     .result
                     .unwrap_or("Agent marked done without explicit result".to_string());
                 stop_reason = StopReason::GoalReached;
+                if !final_result.is_empty() {
+                    events.emit(AgentEvent::Message(final_result.clone()));
+                }
                 if !diag.home_run_ok {
                     warn!(
                         iterations = iteration,
@@ -417,6 +459,10 @@ impl AgentEngine {
 
         self.emit_run_summary(&diag, &stop_reason, &final_result)
             .await;
+
+        if stop_reason != StopReason::GoalReached && !final_result.is_empty() {
+            events.emit(AgentEvent::Message(final_result.clone()));
+        }
 
         let tokens = metrics.tokens();
         let output = RunOutput {
@@ -701,6 +747,7 @@ mod tests {
                 limits: test_limits(),
                 history: test_history(),
                 cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
             })
             .await;
 
@@ -741,6 +788,7 @@ mod tests {
                 limits: test_limits(),
                 history: test_history(),
                 cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
             })
             .await;
 
@@ -793,6 +841,7 @@ mod tests {
                 limits: test_limits(),
                 history: test_history(),
                 cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
             })
             .await;
 
@@ -852,6 +901,7 @@ mod tests {
                 limits: test_limits(),
                 history: test_history(),
                 cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
             })
             .await;
 
@@ -899,6 +949,7 @@ mod tests {
                 },
                 history: test_history(),
                 cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
             })
             .await;
 

@@ -29,6 +29,7 @@
 pub mod app;
 
 pub mod access;
+pub(crate) mod acp;
 pub mod agent;
 pub mod config;
 pub mod limits;
@@ -43,13 +44,14 @@ pub mod tools;
 pub(crate) mod cli;
 pub(crate) mod commands;
 pub(crate) mod context;
+pub(crate) mod project_paths;
 pub(crate) mod prompt;
 pub(crate) mod settings;
 pub(crate) mod skills;
 
 /// Common stable re-exports for library consumers and integration tests.
 pub mod prelude {
-    pub use crate::agent::{AgentEngine, AgentRunRequest, RunCancel};
+    pub use crate::agent::{AgentEngine, AgentEvent, AgentEventTx, AgentRunRequest, RunCancel};
     pub use crate::mcp::{Error as McpError, McpRegistry};
     pub use crate::output::{RunOutput, StopReason};
     pub use crate::provider::ModelClient;

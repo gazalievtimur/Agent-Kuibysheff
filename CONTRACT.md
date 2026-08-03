@@ -7,7 +7,10 @@ external orchestrator.
 Multi-stage product workflows may chain several `run` invocations (different
 `--settings-dir` / `--config` / `--home` per stage) and hand off `out/`
 artifacts between them. An example is the 1C conveyor under
-[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`).
+[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`). The same
+four profiles can be driven from an IDE as **four ACP registrations** plus an
+external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
+[`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md).
 
 ## Invocation
 
@@ -17,6 +20,7 @@ agent_Kuibyshev run \
   --settings-dir <DIR> \
   --prompt <TEXT> \
   --home <DIR> \
+  [--project-root <DIR>] \
   [--files <PATH>...] \
   [--max-iterations N] \
   [--max-tokens N] \
@@ -34,6 +38,12 @@ agent_Kuibyshev run \
   under `access.filesystem.input_roots`.
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
+- `--project-root` (optional) is a product/workspace directory. When set,
+  relative `--config`, `--settings-dir`, and `--home` resolve under
+  `{project-root}/.kuibyshev/`. Absolute paths are unchanged. The worker does
+  not rewrite MCP args or `access.filesystem.workspace` from this flag;
+  per-project MCP and workspace paths belong in the project's agent config
+  (typically under `.kuibyshev/agents/`).
 
 `limits.*` stop the run (iterations / cumulative token budget / wall clock).
 Wall-clock expiry cancels in-flight provider/MCP waits cooperatively and is
@@ -57,13 +67,15 @@ the side effect.
 
 ### Management commands
 
-Commands other than `run` (for example `init`, `check`) print human-readable
-text and use process exit codes. They do **not** emit `RunOutput` JSON.
+Commands other than `run` (for example `init`, `check`, `acp`) print
+human-readable text and use process exit codes — except `acp`, which speaks
+JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
 
 ```text
 agent_Kuibyshev help
 agent_Kuibyshev help init
 agent_Kuibyshev help check
+agent_Kuibyshev help acp
 agent_Kuibyshev --help
 
 agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
@@ -71,6 +83,15 @@ agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
 agent_Kuibyshev check --config <FILE> \
   [--settings-dir <DIR>] \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
+
+agent_Kuibyshev acp \
+  --config <FILE> \
+  --settings-dir <DIR> \
+  --home <DIR> \
+  [--max-iterations N] \
+  [--max-tokens N] \
+  [--max-duration-sec N] \
+  [--save-chat-history]
 ```
 
 `init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
@@ -90,6 +111,51 @@ directory) without running the agent loop. It reports pass/fail for:
 - settings files and `skills.dsl` parse (when `--settings-dir` is set)
 
 Exit code `0` only when every probe is `ok` or intentionally `skip`.
+
+### ACP (IDE / VS Code)
+
+`acp` starts an [Agent Client Protocol](https://agentclientprotocol.com/)
+agent on **stdio** so an IDE host can drive sessions. This is the agent-backend
+role in Microsoft’s layering:
+
+```text
+VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
+```
+
+- Kuibyshev does **not** implement an AHP host; VS Code already owns that.
+- The official AHP Rust crates (`ahp` / `ahp-ws`) are **clients** to a host and
+  are not used here.
+- Protocol version: ACP schema **v1** via `agent-client-protocol` 2.x
+  (`InitializeRequest` / `session/new` / `session/prompt` / `session/cancel` /
+  `session/update`).
+- Stdio is reserved for JSON-RPC; logs go to configured file sinks / stderr.
+- Each `session/prompt` runs the same worker wiring as `run` (access, sandbox,
+  MCP, `AgentEngine`). Deliverables still land under `--home`.
+- `session/new` supplies `cwd`. Effective project root is non-empty session
+  `cwd`, else CLI `--project-root`. Relative config/settings/home paths resolve
+  under `{project-root}/.kuibyshev/` the same way as `run`.
+- Fail-closed `access` is unchanged; policy denials surface as tool errors.
+
+Example VS Code ACP Client settings when the **product folder** is the
+workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
+
+```json
+"acp.agents": {
+  "1c-analyst": {
+    "command": "agent_Kuibyshev",
+    "args": [
+      "acp",
+      "--project-root", "${workspaceFolder}",
+      "--config", "agents/1c-analyst/agent-config.yaml",
+      "--settings-dir", "agents/1c-analyst",
+      "--home", "runs/vscode-active/stage2/home"
+    ]
+  }
+}
+```
+
+`run` remains the orchestrator contract. Multi-agent IDE flows register one ACP
+agent per profile; stage handoff and the plan gate stay outside the Rust binary.
 
 ## Access policy (fail-closed)
 

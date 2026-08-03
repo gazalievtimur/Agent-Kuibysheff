@@ -23,7 +23,9 @@ for a high-level architectural overview.
 
 For a multi-stage **1C development conveyor** (Jira/Confluence intake → analysis
 → coder → CFE packaging), see [workflows/1c-dev/README.md](workflows/1c-dev/README.md)
-and `scripts/1c-dev-run.ps1`.
+and `scripts/1c-dev-run.ps1`. To drive the same four stages from **VS Code via
+ACP** (human switches agents; prepare/promote helper), see
+[workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
 
 ## Inputs
 
@@ -35,8 +37,12 @@ agent_Kuibyshev run \
   --settings-dir <DIR> \
   --prompt <TEXT> \
   --home <DIR> \
+  [--project-root <DIR>] \
   [--files <PATH>...]
 ```
+
+With `--project-root`, relative `--config` / `--settings-dir` / `--home` resolve
+under `{project-root}/.kuibyshev/`.
 
 Scaffold a new agent profile:
 
@@ -57,6 +63,29 @@ agent_Kuibyshev check --config <FILE> [--settings-dir <DIR>]
 Probes the provider API key/HTTP endpoint, each MCP server, access paths and
 programs, logging dir, optional settings files, and the OS sandbox when
 `home.run` programs are configured. Exit code is non-zero if any probe fails.
+
+### VS Code / ACP
+
+To use this agent from VS Code (or another ACP client), run the ACP stdio
+server instead of one-shot `run`:
+
+```text
+agent_Kuibyshev acp \
+  --config <FILE> \
+  --settings-dir <DIR> \
+  --home <DIR> \
+  [--project-root <DIR>]
+```
+
+VS Code’s Agent Host speaks AHP to the UI; Kuibyshev is the ACP backend.
+For **1C products**, open the product folder as the workspace, scaffold
+`.kuibyshev/` (`scripts/1c-dev-scaffold-project.ps1`), and use the ACP preset in
+[`workflows/1c-dev/vscode/`](workflows/1c-dev/vscode/). Session `cwd` /
+`--project-root` point at that folder; agent MCP/workspace settings live in
+`.kuibyshev/agents/*/agent-config.yaml`. Guide:
+[workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
+
+See [CONTRACT.md](CONTRACT.md) for the full ACP notes.
 
 ## Releases
 
