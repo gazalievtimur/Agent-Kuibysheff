@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "kuibyshev-extension: compile",
+      "type": "npm",
+      "script": "compile",
+      "path": "extensions/vscode/",
+      "problemMatcher": ["$esbuild"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "kuibyshev-extension: watch",
+      "type": "npm",
+      "script": "watch",
+      "path": "extensions/vscode/",
+      "isBackground": true,
+      "problemMatcher": ["$esbuild-watch"]
+    }
+  ]
+}

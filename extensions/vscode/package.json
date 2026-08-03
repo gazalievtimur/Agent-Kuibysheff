@@ -1,0 +1,172 @@
+{
+  "name": "kuibyshev-1c",
+  "displayName": "Kuibyshev 1C Agents",
+  "description": "Manage Kuibyshev agent parameters and 1C ACP workflow in VS Code",
+  "version": "0.1.0",
+  "publisher": "kuibyshev",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:.kuibyshev",
+    "onView:kuibyshev.agents",
+    "onCommand:kuibyshev.scaffold"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kuibyshev",
+          "title": "Kuibyshev",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "kuibyshev": [
+        {
+          "id": "kuibyshev.agents",
+          "name": "Agents & Workflow"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "kuibyshev.scaffold",
+        "title": "Kuibyshev: Scaffold project",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "kuibyshev.refresh",
+        "title": "Kuibyshev: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "kuibyshev.editAgent",
+        "title": "Kuibyshev: Edit agent config",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "kuibyshev.openYaml",
+        "title": "Kuibyshev: Open agent YAML"
+      },
+      {
+        "command": "kuibyshev.check",
+        "title": "Kuibyshev: Check agent config",
+        "icon": "$(check)"
+      },
+      {
+        "command": "kuibyshev.syncAcp",
+        "title": "Kuibyshev: Sync ACP agents"
+      },
+      {
+        "command": "kuibyshev.prepare",
+        "title": "Kuibyshev: Prepare stage",
+        "icon": "$(play)"
+      },
+      {
+        "command": "kuibyshev.promote",
+        "title": "Kuibyshev: Promote stage out"
+      },
+      {
+        "command": "kuibyshev.validate",
+        "title": "Kuibyshev: Validate stage"
+      },
+      {
+        "command": "kuibyshev.promoteAndValidate",
+        "title": "Kuibyshev: Promote and validate"
+      },
+      {
+        "command": "kuibyshev.approvePlan",
+        "title": "Kuibyshev: Approve plan",
+        "icon": "$(pass)"
+      },
+      {
+        "command": "kuibyshev.copyChatStarter",
+        "title": "Kuibyshev: Copy chat starter"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "kuibyshev.refresh",
+          "when": "view == kuibyshev.agents",
+          "group": "navigation"
+        },
+        {
+          "command": "kuibyshev.scaffold",
+          "when": "view == kuibyshev.agents",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "kuibyshev.editAgent",
+          "when": "view == kuibyshev.agents && viewItem == agent",
+          "group": "inline"
+        },
+        {
+          "command": "kuibyshev.check",
+          "when": "view == kuibyshev.agents && viewItem == agent",
+          "group": "1_actions"
+        },
+        {
+          "command": "kuibyshev.openYaml",
+          "when": "view == kuibyshev.agents && viewItem == agent",
+          "group": "1_actions"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "kuibyshev.editAgent"
+        },
+        {
+          "command": "kuibyshev.openYaml"
+        },
+        {
+          "command": "kuibyshev.check"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Kuibyshev",
+      "properties": {
+        "kuibyshev.repoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the Agent Kuibyshev install (scripts and templates)."
+        },
+        "kuibyshev.binaryPath": {
+          "type": "string",
+          "default": "agent_Kuibyshev",
+          "description": "Path or name of the agent_Kuibyshev binary."
+        },
+        "kuibyshev.defaultIssueKey": {
+          "type": "string",
+          "default": "",
+          "description": "Default Jira issue key for Prepare stage."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.0"
+  }
+}

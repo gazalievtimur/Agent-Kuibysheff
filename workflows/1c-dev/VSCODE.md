@@ -39,7 +39,32 @@ cargo build --release --bin agent_Kuibyshev
 
 ---
 
+## 1b. Расширение VS Code (рекомендуется)
+
+В репозитории есть расширение [`extensions/vscode/`](../../extensions/vscode/) — sidebar для параметров агентов, scaffold и prepare/promote/approve/validate.
+
+```powershell
+cd "C:\Git\Agent Kuibyshev\extensions\vscode"
+npm install
+npm run compile
+```
+
+Запуск из репозитория Kuibyshev: **Run and Debug → Run Kuibyshev Extension** (F5), либо установите локальный `.vsix`.
+
+В настройках workspace продукта укажите:
+
+- `kuibyshev.repoRoot` — путь к установке Kuibyshev
+- `kuibyshev.binaryPath` — при необходимости (по умолчанию `agent_Kuibyshev` из PATH)
+
+Дальше в sidebar **Kuibyshev**: Scaffold → Edit agent (provider/MCP/`workspace.root`) → Validate → Prepare stage → чат с ACP-агентом. Tasks в `.vscode/tasks.json` остаются запасным вариантом.
+
+Подробности: [`extensions/vscode/README.md`](../../extensions/vscode/README.md).
+
+---
+
 ## 2. Scaffold в папку продукта
+
+CLI (если без расширения):
 
 ```powershell
 cd "C:\Git\Agent Kuibyshev"
@@ -69,8 +94,9 @@ cd "C:\Git\Agent Kuibyshev"
 ## 3. Работа в VS Code
 
 1. File → Open Folder → папка ЗУП.
-2. ACP Client → агенты `1c-intake` / `1c-analyst` / `1c-coder` / `1c-implementer`.
-3. Prepare (Task **1c: prepare stage** или CLI):
+2. Через расширение (**Kuibyshev** sidebar) или вручную: Prepare stage / Tasks / CLI.
+3. ACP Client → агенты `1c-intake` / `1c-analyst` / `1c-coder` / `1c-implementer`.
+4. Prepare (расширение **Prepare stage**, Task **1c: prepare stage**, или CLI):
 
 ```powershell
 & "C:\Git\Agent Kuibyshev\scripts\1c-dev-acp-prepare.ps1" `
@@ -81,13 +107,13 @@ cd "C:\Git\Agent Kuibyshev"
   -Stage 2
 ```
 
-4. Чат с нужным агентом, стартовая фраза из `CHAT_STARTER.txt`:
+5. Чат с нужным агентом, стартовая фраза из `CHAT_STARTER.txt` (команда расширения **Copy chat starter**):
 
 ```text
 Execute the stage instructions in the attached file stage_prompt.md (also under in/). Return JSON only on every turn.
 ```
 
-5. Promote / validate → approve plan → stage 3 → 4.
+6. Promote / validate → approve plan → stage 3 → 4.
 
 Homes: `.kuibyshev/runs/vscode-active/stageN/home`.  
 Apply/BuildCfe по-прежнему через `1c-dev-run.ps1 -ProjectRoot … -ApplyOut` / adapter.
@@ -125,9 +151,11 @@ agent_Kuibyshev run `
 ## 5. Чеклист
 
 - [ ] `agent_Kuibyshev` в PATH
+- [ ] Расширение собрано / запущено (или tasks.json как fallback)
+- [ ] `kuibyshev.repoRoot` указывает на установку Kuibyshev
 - [ ] Scaffold выполнен, `agent-config.yaml` поправлены под MCP/CF проекта
 - [ ] VS Code открыт на папке продукта
 - [ ] ACP видит четыре агента `1c-*`
-- [ ] `prepare -ProjectRoot … -Stage 2 -TaskFile …` отрабатывает
+- [ ] Prepare stage отрабатывает
 
 Полная установка MCP/инструментов на машине: [SETUP.md](SETUP.md). Контракты артефактов: [schema/](schema/).
