@@ -1,6 +1,7 @@
 //! ACP stdio agent server backed by Kuibyshev `AgentEngine`.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -18,9 +19,11 @@ use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
 use crate::app::{run_agent_prompt, AgentPromptArgs};
 use crate::cli::AcpArgs;
 use crate::output::StopReason;
+use crate::project_paths::{effective_project_root, resolve_agent_paths};
 
 struct SessionSlot {
     cancel: RunCancel,
+    cwd: PathBuf,
 }
 
 struct AcpRuntime {
@@ -55,6 +58,7 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
     info!(
         config = %runtime.args.config.display(),
         home = %runtime.args.home.display(),
+        project_root = ?runtime.args.project_root.as_ref().map(|p| p.display().to_string()),
         "starting ACP agent on stdio"
     );
 
@@ -80,16 +84,18 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_req: NewSessionRequest, responder, _cx| {
+            async move |req: NewSessionRequest, responder, _cx| {
                 let session_id = rt_session.next_session_id();
                 let id_key = session_id.0.to_string();
+                let cwd = req.cwd;
+                info!(session_id = %id_key, cwd = %cwd.display(), "ACP session created");
                 rt_session.sessions.lock().await.insert(
-                    id_key.clone(),
+                    id_key,
                     SessionSlot {
                         cancel: RunCancel::new(),
+                        cwd,
                     },
                 );
-                info!(session_id = %id_key, "ACP session created");
                 responder.respond(NewSessionResponse::new(session_id))
             },
             agent_client_protocol::on_receive_request!(),
@@ -129,7 +135,7 @@ async fn handle_prompt(
     let session_id = req.session_id.clone();
     let id_key = session_id.0.to_string();
 
-    let cancel = {
+    let (cancel, session_cwd) = {
         let mut sessions = runtime.sessions.lock().await;
         let Some(slot) = sessions.get_mut(&id_key) else {
             return responder.respond_with_error(AcpError::invalid_params().data(
@@ -138,7 +144,7 @@ async fn handle_prompt(
         };
         // Fresh cancel token per prompt (previous turn may have cancelled/expired).
         slot.cancel = RunCancel::new();
-        slot.cancel.clone()
+        (slot.cancel.clone(), slot.cwd.clone())
     };
 
     let prompt = extract_prompt_text(&req.prompt);
@@ -149,6 +155,17 @@ async fn handle_prompt(
             ),
         ));
     }
+
+    let project_root = effective_project_root(
+        Some(session_cwd.as_path()),
+        runtime.args.project_root.as_deref(),
+    );
+    let (config, settings_dir, home) = resolve_agent_paths(
+        project_root.as_deref(),
+        &runtime.args.config,
+        &runtime.args.settings_dir,
+        &runtime.args.home,
+    );
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let events = AgentEventTx::from_sender(event_tx);
@@ -167,9 +184,9 @@ async fn handle_prompt(
     });
 
     let prompt_args = AgentPromptArgs {
-        config: runtime.args.config.clone(),
-        settings_dir: runtime.args.settings_dir.clone(),
-        home: runtime.args.home.clone(),
+        config,
+        settings_dir,
+        home,
         prompt,
         files: Vec::new(),
         max_iterations: runtime.args.max_iterations,

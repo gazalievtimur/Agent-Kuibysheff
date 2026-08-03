@@ -44,6 +44,7 @@ pub mod tools;
 pub(crate) mod cli;
 pub(crate) mod commands;
 pub(crate) mod context;
+pub(crate) mod project_paths;
 pub(crate) mod prompt;
 pub(crate) mod settings;
 pub(crate) mod skills;

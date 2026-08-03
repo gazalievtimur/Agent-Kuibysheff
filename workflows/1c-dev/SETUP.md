@@ -12,7 +12,7 @@
 
 | Компонент | Назначение |
 |-----------|------------|
-| Репозиторий Agent Kuibyshev | CLI-воркер + оркестратор `scripts/1c-dev-run.ps1` |
+| Репозиторий Agent Kuibyshev | CLI-воркер + оркестратор `scripts/1c-dev-run.ps1` (+ VS Code: scaffold `.kuibyshev` в папке продукта — [VSCODE.md](VSCODE.md)) |
 | 4 профиля агентов | `test-agents/1c-{intake,analyst,coder,implementer}/` |
 | Адаптер продукта | `workflows/1c-dev/products/<id>.yaml` (из `*.yaml.example`) |
 | LLM API | OpenAI-compatible `/chat/completions` |

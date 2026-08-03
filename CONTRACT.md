@@ -7,7 +7,10 @@ external orchestrator.
 Multi-stage product workflows may chain several `run` invocations (different
 `--settings-dir` / `--config` / `--home` per stage) and hand off `out/`
 artifacts between them. An example is the 1C conveyor under
-[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`).
+[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`). The same
+four profiles can be driven from an IDE as **four ACP registrations** plus an
+external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
+[`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md).
 
 ## Invocation
 
@@ -17,6 +20,7 @@ agent_Kuibyshev run \
   --settings-dir <DIR> \
   --prompt <TEXT> \
   --home <DIR> \
+  [--project-root <DIR>] \
   [--files <PATH>...] \
   [--max-iterations N] \
   [--max-tokens N] \
@@ -34,6 +38,12 @@ agent_Kuibyshev run \
   under `access.filesystem.input_roots`.
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
+- `--project-root` (optional) is a product/workspace directory. When set,
+  relative `--config`, `--settings-dir`, and `--home` resolve under
+  `{project-root}/.kuibyshev/`. Absolute paths are unchanged. The worker does
+  not rewrite MCP args or `access.filesystem.workspace` from this flag;
+  per-project MCP and workspace paths belong in the project's agent config
+  (typically under `.kuibyshev/agents/`).
 
 `limits.*` stop the run (iterations / cumulative token budget / wall clock).
 Wall-clock expiry cancels in-flight provider/MCP waits cooperatively and is
@@ -121,25 +131,32 @@ VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
 - Stdio is reserved for JSON-RPC; logs go to configured file sinks / stderr.
 - Each `session/prompt` runs the same worker wiring as `run` (access, sandbox,
   MCP, `AgentEngine`). Deliverables still land under `--home`.
+- `session/new` supplies `cwd`. Effective project root is non-empty session
+  `cwd`, else CLI `--project-root`. Relative config/settings/home paths resolve
+  under `{project-root}/.kuibyshev/` the same way as `run`.
 - Fail-closed `access` is unchanged; policy denials surface as tool errors.
 
-Example VS Code ACP Client extension settings:
+Example VS Code ACP Client settings when the **product folder** is the
+workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
 
 ```json
 "acp.agents": {
-  "kuibyshev": {
+  "1c-analyst": {
     "command": "agent_Kuibyshev",
     "args": [
       "acp",
-      "--config", "path/to/agent-config.yaml",
-      "--settings-dir", "path/to/settings",
-      "--home", "path/to/home"
+      "--project-root", "${workspaceFolder}",
+      "--config", "agents/1c-analyst/agent-config.yaml",
+      "--settings-dir", "agents/1c-analyst",
+      "--home", "runs/vscode-active/stage2/home"
     ]
   }
 }
 ```
 
-`run` remains the orchestrator contract and is unaffected.
+`run` remains the orchestrator contract. Multi-agent IDE flows register one ACP
+agent per profile; stage handoff and the plan gate stay outside the Rust binary.
+
 ## Access policy (fail-closed)
 
 **Breaking (0.2.0):** `access` in the config file is **required**. Omitting it

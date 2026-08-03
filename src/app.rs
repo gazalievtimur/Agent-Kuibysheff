@@ -24,6 +24,7 @@ use crate::context::build_input_files_context;
 use crate::logging::{init_tracing, resolve_base_dir, Loggers};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
+use crate::project_paths::resolve_agent_paths;
 use crate::prompt::build_runtime_rules;
 use crate::provider::openai_compat::OpenAiCompatClient;
 use crate::sandbox::SandboxRunner;
@@ -52,10 +53,16 @@ pub struct AgentPromptArgs {
 
 impl From<RunArgs> for AgentPromptArgs {
     fn from(cli: RunArgs) -> Self {
+        let (config, settings_dir, home) = resolve_agent_paths(
+            cli.project_root.as_deref(),
+            &cli.config,
+            &cli.settings_dir,
+            &cli.home,
+        );
         Self {
-            config: cli.config,
-            settings_dir: cli.settings_dir,
-            home: cli.home,
+            config,
+            settings_dir,
+            home,
             prompt: cli.prompt,
             files: cli.files,
             max_iterations: cli.max_iterations,

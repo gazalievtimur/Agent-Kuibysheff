@@ -50,6 +50,11 @@ pub struct RunArgs {
     #[arg(long, value_name = "DIR")]
     pub home: PathBuf,
 
+    /// Project root (e.g. 1C product folder). Relative `--config` /
+    /// `--settings-dir` / `--home` resolve under `{project-root}/.kuibyshev/`.
+    #[arg(long, value_name = "DIR")]
+    pub project_root: Option<PathBuf>,
+
     #[arg(long, value_name = "PATH", num_args = 1.., action = clap::ArgAction::Append)]
     pub files: Vec<PathBuf>,
 
@@ -78,6 +83,12 @@ pub struct AcpArgs {
 
     #[arg(long, value_name = "DIR")]
     pub home: PathBuf,
+
+    /// Fallback project root when the ACP client does not send session `cwd`.
+    /// Relative `--config` / `--settings-dir` / `--home` resolve under
+    /// `{project-root}/.kuibyshev/` (session `cwd` wins when non-empty).
+    #[arg(long, value_name = "DIR")]
+    pub project_root: Option<PathBuf>,
 
     #[arg(long)]
     pub max_iterations: Option<u32>,
@@ -230,6 +241,48 @@ mod tests {
         assert_eq!(args.settings_dir, PathBuf::from("settings"));
         assert_eq!(args.home, PathBuf::from("home"));
         assert_eq!(args.max_iterations, Some(3));
+        assert!(args.project_root.is_none());
+    }
+
+    #[test]
+    fn parses_project_root_on_run_and_acp() {
+        let run = Cli::try_parse_from([
+            "agent",
+            "run",
+            "--config",
+            "agents/a/agent-config.yaml",
+            "--settings-dir",
+            "agents/a",
+            "--prompt",
+            "x",
+            "--home",
+            "runs/h",
+            "--project-root",
+            "/proj",
+        ])
+        .expect("parse run");
+        let Commands::Run(run_args) = run.command else {
+            panic!("expected Run");
+        };
+        assert_eq!(run_args.project_root, Some(PathBuf::from("/proj")));
+
+        let acp = Cli::try_parse_from([
+            "agent",
+            "acp",
+            "--config",
+            "agents/a/agent-config.yaml",
+            "--settings-dir",
+            "agents/a",
+            "--home",
+            "runs/h",
+            "--project-root",
+            "/proj",
+        ])
+        .expect("parse acp");
+        let Commands::Acp(acp_args) = acp.command else {
+            panic!("expected Acp");
+        };
+        assert_eq!(acp_args.project_root, Some(PathBuf::from("/proj")));
     }
 
     #[test]

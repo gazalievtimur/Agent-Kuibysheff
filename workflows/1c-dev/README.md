@@ -2,6 +2,10 @@
 
 **Установка на другом компьютере:** подробная пошаговая инструкция — [SETUP.md](SETUP.md).
 
+**VS Code (ACP):** открыть папку продукта 1С, scaffold `.kuibyshev/` —
+[VSCODE.md](VSCODE.md)
+(`scripts/1c-dev-scaffold-project.ps1`, `1c-dev-acp-prepare.ps1`).
+
 Four-stage external orchestrator around the stateless `agent_Kuibyshev` worker:
 
 1. **1c-intake** — Jira/Confluence → `task_brief.md` (skipped with `-TaskFile`)
@@ -14,18 +18,20 @@ Human gate between plan and coder: `-ApprovePlan` or `artifacts/plan/APPROVED`.
 ## Quick start
 
 ```powershell
-# From repo root; ensure .env has provider + Atlassian tokens as needed
-# Copy products/demo.yaml.example → products/demo.yaml and edit paths first
+# Preferred: product folder with .kuibyshev/ (after scaffold-project)
+.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -Stage 1
+
+# Legacy: products/<id>.yaml in this repo + test-agents profiles
 .\scripts\1c-dev-run.ps1 -Product demo -IssueKey PROJ-123 -Stage 1
 
-# Or skip intake with an operator-provided task file:
-.\scripts\1c-dev-run.ps1 -Product demo -TaskFile .\path\to\task.md -Stage 2
+# Skip intake with an operator-provided task file:
+.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -TaskFile .\tz.md -Stage 2
 
 # After reviewing artifacts/plan, continue:
-.\scripts\1c-dev-run.ps1 -Product demo -IssueKey PROJ-123 -RunId <id> -FromStage 3 -ApprovePlan
+.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -RunId <id> -FromStage 3 -ApprovePlan
 
 # Full conveyor after approval; copy/build CFE into the product task dir:
-.\scripts\1c-dev-run.ps1 -Product demo -IssueKey PROJ-123 -ApprovePlan -ApplyOut -BuildCfe
+.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -ApprovePlan -ApplyOut -BuildCfe
 ```
 
 CLI notes: `-Stage` / `-TaskFile` / `-Force` / `-ApplyOut` are aliases for `-WorkflowStage` / `-TaskFilePath` / `-ForceRerun` / `-DoApplyOut`.
