@@ -8,10 +8,24 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// Declared `access.mode` in the config file (`strict` by default when `access` is present).
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessModeField {
+    /// Fail-closed grants; everything not listed is denied.
+    #[default]
+    Strict,
+    /// Explicit opt-in to permissive home/workspace/input semantics; hides `home.run`.
+    Legacy,
+}
+
 /// Fail-closed capability policy declared in the config file.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct AccessPolicyConfig {
+    /// Defaults to [`AccessModeField::Strict`]. Use `legacy` only as an explicit opt-in.
+    #[serde(default)]
+    pub mode: AccessModeField,
     #[serde(default)]
     pub tools: ToolsPolicyConfig,
     #[serde(default)]
@@ -20,8 +34,18 @@ pub struct AccessPolicyConfig {
     pub run: RunPolicyConfig,
 }
 
+impl AccessPolicyConfig {
+    /// True when tools/filesystem/run match defaults (allowed with `mode: legacy`).
+    #[must_use]
+    pub fn grants_are_default(&self) -> bool {
+        self.tools == ToolsPolicyConfig::default()
+            && self.filesystem == FilesystemPolicyConfig::default()
+            && self.run == RunPolicyConfig::default()
+    }
+}
+
 /// Built-in tool allowlist (`server.tool` qualified names only).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct ToolsPolicyConfig {
     /// Empty means no built-ins are allowed (fail-closed).
@@ -30,7 +54,7 @@ pub struct ToolsPolicyConfig {
 }
 
 /// Filesystem grants for home, workspace research tools, and `--files` inputs.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct FilesystemPolicyConfig {
     #[serde(default)]
@@ -42,7 +66,7 @@ pub struct FilesystemPolicyConfig {
 }
 
 /// Relative path prefixes inside CLI `--home`.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct HomeFsPolicyConfig {
     /// Empty means no home reads are allowed (fail-closed).
@@ -54,7 +78,7 @@ pub struct HomeFsPolicyConfig {
 }
 
 /// Workspace root and read grants for `local_tools.*`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspacePolicyConfig {
     /// Host path; relative values resolve against the config file directory.
@@ -66,7 +90,7 @@ pub struct WorkspacePolicyConfig {
 }
 
 /// Sandboxed `home.run` program aliases and argv limits.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct RunPolicyConfig {
     /// Empty means no programs are allowed for `home.run` (fail-closed).
@@ -117,7 +141,7 @@ impl RunPolicyConfig {
 }
 
 /// One sandboxed executable exposed to the model under a stable alias.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProgramPolicyConfig {
     /// Value of `home.run.program` (alias, not a host path).

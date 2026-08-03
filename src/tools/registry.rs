@@ -31,7 +31,7 @@ pub struct ToolDescriptor {
     pub description: &'static str,
     /// JSON Schema (draft-ish object) for tool arguments.
     pub schema_json: &'static str,
-    /// Included when `access` is omitted (legacy mode).
+    /// Included when `access.mode: legacy`.
     pub legacy_default: bool,
     /// Prompt/runtime may require non-empty `access.run.programs`.
     pub requires_programs: bool,
@@ -121,7 +121,7 @@ pub fn known_builtin_names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().map(|d| d.name)
 }
 
-/// Qualified names included in legacy mode (`access` omitted).
+/// Qualified names included in legacy mode (`access.mode: legacy`).
 pub fn legacy_builtin_names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().filter(|d| d.legacy_default).map(|d| d.name)
 }

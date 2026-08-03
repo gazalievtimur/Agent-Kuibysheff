@@ -234,7 +234,9 @@ logging:
   output_dir: "$LOG_DIR"
 
 # Fail-closed OS sandbox for home.run (Linux namespaces).
+# Required since 0.2.0 (omitting access is an error). mode defaults to strict.
 access:
+  mode: strict
   tools:
     builtins:
       - home.list

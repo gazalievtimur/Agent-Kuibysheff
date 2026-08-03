@@ -48,11 +48,10 @@ logging:
     type: file
     # path: "./custom-logs"
 
-# Optional fail-closed capability policy.
-# - Omit `access` entirely for legacy mode: home.list/read/write and local_tools
-#   keep previous behavior, but `home.run` is not advertised until you declare
-#   programs under `access.run.programs` (and include `home.run` in builtins).
-# - When `access` is present, everything not listed is denied.
+# Required capability policy (fail-closed). Everything not listed is denied.
+# Escape hatch for permissive home/workspace/input semantics (hides home.run):
+#   access:
+#     mode: legacy
 #
 # Network is not configured here:
 # - provider.base_url is the only HTTP origin the agent process may call for the model API

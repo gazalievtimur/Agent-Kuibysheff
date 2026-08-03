@@ -3,9 +3,10 @@
 #
 # Set AOC_BANK_DIR to the local task bank (default: ./local/aoc-bank).
 #
-# scripts/aoc-eval.ps1 regenerates a per-run config that always injects a
-# fail-closed `access` section (python executable resolved from PATH + OS sandbox).
-# Keep this file aligned for manual `cargo run` experiments.
+# `access` is required (strict by default). scripts/aoc-eval.ps1 regenerates a
+# per-run config that always injects fail-closed grants + a staged Python
+# under local/aoc-sandbox-runtime/python (AppContainer-friendly on Windows).
+# Keep this file aligned for manual `cargo run` / `check` experiments.
 
 provider:
   base_url: "https://api.openai.com/v1"
@@ -32,7 +33,12 @@ logging:
   enable_mcp_log: true
   output_dir: "./logs"
 
+# Fail-closed: home.* + sandboxed python. Paths resolve against this file's dir.
+# Prefer the staged runtime (created by aoc-eval / aoc-regression):
+#   ../../local/aoc-sandbox-runtime/python
+# Host installs like C:/Python312 often fail AppContainer ACL inheritance.
 access:
+  mode: strict
   tools:
     builtins:
       - home.list
@@ -41,15 +47,14 @@ access:
       - home.run
   filesystem:
     home:
+      # input.txt / solution.py at home root; in/out for artifacts.
       read: [".", "in", "out"]
       write: [".", "out"]
   run:
-    # Manual runs: point at a user-writable Python tree. `scripts/aoc-eval.ps1`
-    # stages `local/aoc-sandbox-runtime/python` and injects absolute paths.
     programs:
       - name: python
-        executable: "C:/Python312/python.exe"
-        runtime_read_roots: ["C:/Python312"]
+        executable: "../../local/aoc-sandbox-runtime/python/python.exe"
+        runtime_read_roots: ["../../local/aoc-sandbox-runtime/python"]
         inherit_env: ["SYSTEMROOT", "SystemRoot"]
         allow_children: false
     max_args: 32

@@ -18,8 +18,8 @@ use thiserror::Error;
 use crate::tools::registry;
 
 pub use config::{
-    AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, ProgramPolicyConfig,
-    RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
+    AccessModeField, AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig,
+    ProgramPolicyConfig, RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
 };
 pub use paths::{
     workspace_root_for_run, HomeFsPolicy, InputFilesPolicy, PathGrantScope, WorkspaceFsPolicy,
@@ -40,11 +40,18 @@ pub fn known_builtins() -> impl Iterator<Item = &'static str> {
     registry::known_builtin_names()
 }
 
-/// Built-ins available in legacy mode (`access` omitted). `home.run` requires an explicit
-/// sandbox profile under `access.run`.
+/// Built-ins available in legacy mode (`access.mode: legacy`). `home.run` requires an explicit
+/// sandbox profile under strict `access.run`.
 pub fn legacy_builtins() -> impl Iterator<Item = &'static str> {
     registry::legacy_builtin_names()
 }
+
+const MISSING_ACCESS_MSG: &str = "`access` is required; declare fail-closed grants or set \
+     `access: { mode: legacy }` for permissive filesystem semantics";
+
+const LEGACY_MIXED_MSG: &str =
+    "`access.mode: legacy` must not set `tools`, `filesystem`, or `run`; \
+     use `access: { mode: legacy }` alone, or switch to strict mode with grants";
 
 /// Environment keys that must never be inherited into sandboxed `home.run` processes.
 const FORBIDDEN_INHERIT_ENV: &[&str] = &[
@@ -56,12 +63,12 @@ const FORBIDDEN_INHERIT_ENV: &[&str] = &[
     "DYLD_FORCE_FLAT_NAMESPACE",
 ];
 
-/// Whether the policy was compiled from an explicit `access` section or legacy defaults.
+/// Whether the policy was compiled as explicit legacy opt-in or fail-closed strict grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessMode {
-    /// No `access` section: preserve historical filesystem behavior; hide `home.run`.
+    /// Explicit `access.mode: legacy`: permissive home/workspace/input; hide `home.run`.
     Legacy,
-    /// Explicit `access`: everything not listed is denied.
+    /// Explicit `access` (default `mode: strict`): everything not listed is denied.
     Strict,
 }
 
@@ -370,7 +377,7 @@ impl ResolvedAccessPolicy {
         self.max_timeout_ms
     }
 
-    /// Compiles legacy defaults when `access` is omitted.
+    /// Compiles legacy defaults for explicit `access.mode: legacy` (and in-memory tests).
     #[must_use]
     pub fn legacy() -> Self {
         Self {
@@ -475,7 +482,7 @@ impl TryFrom<AccessResolveInput<'_>> for ResolvedAccessPolicy {
     }
 }
 
-/// Resolves optional raw access config into an immutable policy.
+/// Resolves required raw access config into an immutable policy.
 ///
 /// Host paths (`workspace.root`, `input_roots`, executables, runtime roots) are resolved
 /// relative to `config_dir` and canonicalized. Home grants stay relative prefixes.
@@ -485,14 +492,22 @@ impl TryFrom<AccessResolveInput<'_>> for ResolvedAccessPolicy {
 ///
 /// # Errors
 ///
-/// Returns [`AccessError::Validation`] for invalid grants, missing host roots, or bad programs.
+/// Returns [`AccessError::Validation`] when `access` is omitted, legacy mode mixes grants,
+/// or grants/host roots/programs are invalid.
 pub fn resolve_access_policy(
     access: Option<&AccessPolicyConfig>,
     config_dir: &Path,
 ) -> Result<ResolvedAccessPolicy, AccessError> {
     let Some(access) = access else {
-        return Ok(ResolvedAccessPolicy::legacy());
+        return Err(AccessError::Validation(MISSING_ACCESS_MSG.to_string()));
     };
+
+    if access.mode == AccessModeField::Legacy {
+        if !access.grants_are_default() {
+            return Err(AccessError::Validation(LEGACY_MIXED_MSG.to_string()));
+        }
+        return Ok(ResolvedAccessPolicy::legacy());
+    }
 
     let allowed_builtins = resolve_builtins(&access.tools)?;
     let home_read = resolve_relative_grants(&access.filesystem.home.read, "filesystem.home.read")?;
@@ -521,8 +536,8 @@ pub fn resolve_access_policy(
 ///
 /// # Errors
 ///
-/// Returns [`AccessError::Validation`] for duplicate aliases, unknown builtins, forbidden env,
-/// reserved MCP names, or zero limits.
+/// Returns [`AccessError::Validation`] when `access` is omitted, legacy mode mixes grants,
+/// duplicate aliases, unknown builtins, forbidden env, reserved MCP names, or zero limits.
 pub fn validate_access_config(
     access: Option<&AccessPolicyConfig>,
     mcp_names: impl IntoIterator<Item = impl AsRef<str>>,
@@ -537,8 +552,15 @@ pub fn validate_access_config(
     }
 
     let Some(access) = access else {
-        return Ok(());
+        return Err(AccessError::Validation(MISSING_ACCESS_MSG.to_string()));
     };
+
+    if access.mode == AccessModeField::Legacy {
+        if !access.grants_are_default() {
+            return Err(AccessError::Validation(LEGACY_MIXED_MSG.to_string()));
+        }
+        return Ok(());
+    }
 
     validate_builtins_list(&access.tools.builtins)?;
     validate_relative_grant_list(&access.filesystem.home.read, "filesystem.home.read")?;
@@ -891,6 +913,7 @@ mod tests {
                 max_output_chars: 200_000,
                 max_timeout_ms: 120_000,
             },
+            ..AccessPolicyConfig::default()
         };
 
         let policy = ResolvedAccessPolicy::try_from(AccessResolveInput {
@@ -923,13 +946,12 @@ mod tests {
     fn resolve_rejects_missing_input_root() {
         let dir = tempdir().expect("tempdir");
         let access = AccessPolicyConfig {
-            tools: ToolsPolicyConfig::default(),
             filesystem: FilesystemPolicyConfig {
                 home: HomeFsPolicyConfig::default(),
                 workspace: None,
                 input_roots: vec![PathBuf::from("missing-inputs")],
             },
-            run: RunPolicyConfig::default(),
+            ..AccessPolicyConfig::default()
         };
 
         let err = resolve_access_policy(Some(&access), dir.path()).expect_err("missing root");
@@ -939,8 +961,6 @@ mod tests {
     #[test]
     fn validate_rejects_duplicate_program_alias() {
         let access = AccessPolicyConfig {
-            tools: ToolsPolicyConfig::default(),
-            filesystem: FilesystemPolicyConfig::default(),
             run: RunPolicyConfig {
                 programs: vec![
                     ProgramPolicyConfig {
@@ -960,6 +980,7 @@ mod tests {
                 ],
                 ..RunPolicyConfig::default()
             },
+            ..AccessPolicyConfig::default()
         };
 
         let err = validate_access_config(Some(&access), None::<&str>).expect_err("dup");
@@ -973,13 +994,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_missing_access() {
+        let err = validate_access_config(None, None::<&str>).expect_err("missing");
+        assert!(err.to_string().contains("`access` is required"));
+    }
+
+    #[test]
+    fn resolve_explicit_legacy_mode() {
+        let access = AccessPolicyConfig {
+            mode: AccessModeField::Legacy,
+            ..AccessPolicyConfig::default()
+        };
+        let policy = resolve_access_policy(Some(&access), Path::new(".")).expect("legacy");
+        assert!(policy.is_legacy());
+        assert!(!policy.allows_builtin(&QualifiedTool::parse("home.run").unwrap()));
+    }
+
+    #[test]
+    fn validate_rejects_legacy_with_grants() {
+        let access = AccessPolicyConfig {
+            mode: AccessModeField::Legacy,
+            tools: ToolsPolicyConfig {
+                builtins: vec!["home.read".to_string()],
+            },
+            ..AccessPolicyConfig::default()
+        };
+        let err = validate_access_config(Some(&access), None::<&str>).expect_err("mixed");
+        assert!(err.to_string().contains("mode: legacy"));
+    }
+
+    #[test]
     fn validate_rejects_unknown_builtin() {
         let access = AccessPolicyConfig {
             tools: ToolsPolicyConfig {
                 builtins: vec!["home.explode".to_string()],
             },
-            filesystem: FilesystemPolicyConfig::default(),
-            run: RunPolicyConfig::default(),
+            ..AccessPolicyConfig::default()
         };
         let err = validate_access_config(Some(&access), None::<&str>).expect_err("unknown");
         assert!(err.to_string().contains("unknown built-in"));
