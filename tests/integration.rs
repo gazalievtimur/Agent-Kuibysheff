@@ -59,6 +59,7 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         limits,
         history: agent_Kuibyshev::config::ProviderHistoryConfig::default(),
         cancel: RunCancel::new(),
+        events: agent_Kuibyshev::agent::AgentEventTx::noop(),
     }
 }
 
@@ -167,6 +168,79 @@ async fn run_finishes_when_model_marks_done() {
     assert_eq!(output.result, "task completed");
     assert_eq!(output.usage.iterations, 1);
     assert_eq!(output.usage.total_tokens, 7);
+}
+
+#[tokio::test]
+async fn engine_emits_thought_message_and_tool_events() {
+    let model = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![
+            ModelResponse {
+                content: r#"{"done":false,"thought":"call echo","tool_calls":[{"server":"local","tool":"echo","arguments":{"x":1}}],"result":null}"#
+                    .to_string(),
+                usage: TokenUsage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                },
+            },
+            ModelResponse {
+                content: r#"{"done":true,"thought":"done","tool_calls":[],"result":"ok"}"#
+                    .to_string(),
+                usage: TokenUsage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                },
+            },
+        ])),
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut req = request(
+        "emit",
+        LimitsConfig {
+            max_iterations: 5,
+            max_tokens: 100,
+            max_duration_sec: 60,
+        },
+    );
+    req.events = agent_Kuibyshev::agent::AgentEventTx::from_sender(tx);
+
+    let engine = AgentEngine::new(Arc::new(model), Arc::new(FakeTools), Loggers::default());
+    let output = engine.run(req).await;
+    assert_eq!(output.stop_reason, StopReason::GoalReached);
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    assert!(
+        events.iter().any(
+            |e| matches!(e, agent_Kuibyshev::agent::AgentEvent::Thought(t) if t == "call echo")
+        ),
+        "missing thought: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            agent_Kuibyshev::agent::AgentEvent::ToolStart { tool, .. } if tool == "echo"
+        )),
+        "missing tool start: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            agent_Kuibyshev::agent::AgentEvent::ToolFinish { ok: true, .. }
+        )),
+        "missing tool finish: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, agent_Kuibyshev::agent::AgentEvent::Message(m) if m == "ok")),
+        "missing message: {events:?}"
+    );
 }
 
 #[tokio::test]

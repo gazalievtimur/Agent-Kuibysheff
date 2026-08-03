@@ -431,16 +431,33 @@ pub fn config_parent_dir(path: &Path) -> &Path {
 }
 
 pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &RunArgs) {
-    if let Some(max_iterations) = cli.max_iterations {
+    apply_limit_overrides(
+        cfg,
+        cli.max_iterations,
+        cli.max_tokens,
+        cli.max_duration_sec,
+        cli.save_chat_history,
+    );
+}
+
+/// Apply optional limit / chat-history overrides shared by `run` and `acp`.
+pub fn apply_limit_overrides(
+    cfg: &mut AppConfig,
+    max_iterations: Option<u32>,
+    max_tokens: Option<u64>,
+    max_duration_sec: Option<u64>,
+    save_chat_history: bool,
+) {
+    if let Some(max_iterations) = max_iterations {
         cfg.limits.max_iterations = max_iterations;
     }
-    if let Some(max_tokens) = cli.max_tokens {
+    if let Some(max_tokens) = max_tokens {
         cfg.limits.max_tokens = max_tokens;
     }
-    if let Some(max_duration_sec) = cli.max_duration_sec {
+    if let Some(max_duration_sec) = max_duration_sec {
         cfg.limits.max_duration_sec = max_duration_sec;
     }
-    if cli.save_chat_history {
+    if save_chat_history {
         cfg.logging.enable_chat_history = true;
     }
 }

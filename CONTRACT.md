@@ -57,13 +57,15 @@ the side effect.
 
 ### Management commands
 
-Commands other than `run` (for example `init`, `check`) print human-readable
-text and use process exit codes. They do **not** emit `RunOutput` JSON.
+Commands other than `run` (for example `init`, `check`, `acp`) print
+human-readable text and use process exit codes — except `acp`, which speaks
+JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
 
 ```text
 agent_Kuibyshev help
 agent_Kuibyshev help init
 agent_Kuibyshev help check
+agent_Kuibyshev help acp
 agent_Kuibyshev --help
 
 agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
@@ -71,6 +73,15 @@ agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
 agent_Kuibyshev check --config <FILE> \
   [--settings-dir <DIR>] \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
+
+agent_Kuibyshev acp \
+  --config <FILE> \
+  --settings-dir <DIR> \
+  --home <DIR> \
+  [--max-iterations N] \
+  [--max-tokens N] \
+  [--max-duration-sec N] \
+  [--save-chat-history]
 ```
 
 `init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
@@ -91,6 +102,44 @@ directory) without running the agent loop. It reports pass/fail for:
 
 Exit code `0` only when every probe is `ok` or intentionally `skip`.
 
+### ACP (IDE / VS Code)
+
+`acp` starts an [Agent Client Protocol](https://agentclientprotocol.com/)
+agent on **stdio** so an IDE host can drive sessions. This is the agent-backend
+role in Microsoft’s layering:
+
+```text
+VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
+```
+
+- Kuibyshev does **not** implement an AHP host; VS Code already owns that.
+- The official AHP Rust crates (`ahp` / `ahp-ws`) are **clients** to a host and
+  are not used here.
+- Protocol version: ACP schema **v1** via `agent-client-protocol` 2.x
+  (`InitializeRequest` / `session/new` / `session/prompt` / `session/cancel` /
+  `session/update`).
+- Stdio is reserved for JSON-RPC; logs go to configured file sinks / stderr.
+- Each `session/prompt` runs the same worker wiring as `run` (access, sandbox,
+  MCP, `AgentEngine`). Deliverables still land under `--home`.
+- Fail-closed `access` is unchanged; policy denials surface as tool errors.
+
+Example VS Code ACP Client extension settings:
+
+```json
+"acp.agents": {
+  "kuibyshev": {
+    "command": "agent_Kuibyshev",
+    "args": [
+      "acp",
+      "--config", "path/to/agent-config.yaml",
+      "--settings-dir", "path/to/settings",
+      "--home", "path/to/home"
+    ]
+  }
+}
+```
+
+`run` remains the orchestrator contract and is unaffected.
 ## Access policy (fail-closed)
 
 **Breaking (0.2.0):** `access` in the config file is **required**. Omitting it

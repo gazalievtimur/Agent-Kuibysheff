@@ -58,6 +58,37 @@ Probes the provider API key/HTTP endpoint, each MCP server, access paths and
 programs, logging dir, optional settings files, and the OS sandbox when
 `home.run` programs are configured. Exit code is non-zero if any probe fails.
 
+### VS Code / ACP
+
+To use this agent from VS Code (or another ACP client), run the ACP stdio
+server instead of one-shot `run`:
+
+```text
+agent_Kuibyshev acp \
+  --config <FILE> \
+  --settings-dir <DIR> \
+  --home <DIR>
+```
+
+VS Code’s Agent Host speaks AHP to the UI; Kuibyshev is the ACP backend.
+Example extension setting:
+
+```json
+"acp.agents": {
+  "kuibyshev": {
+    "command": "agent_Kuibyshev",
+    "args": [
+      "acp",
+      "--config", "path/to/agent-config.yaml",
+      "--settings-dir", "path/to/settings",
+      "--home", "path/to/home"
+    ]
+  }
+}
+```
+
+See [CONTRACT.md](CONTRACT.md) for the full ACP notes. The CLI `run` contract
+is unchanged.
 ## Releases
 
 Prebuilt binaries for Windows and Linux are published on

@@ -27,15 +27,16 @@ pub struct Cli {
 pub enum Commands {
     /// Run one worker iteration (orchestrator entrypoint).
     Run(RunArgs),
+    /// Serve Agent Client Protocol (ACP) over stdio for IDE hosts.
+    Acp(AcpArgs),
     /// Create a new agent settings directory and starter config.
     Init(InitArgs),
     /// Check availability of resources configured for an agent.
     Check(CheckArgs),
-    // later: Convert, AddMcp, AddAccess, ...
 }
 
 /// Arguments for a single agent worker run.
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct RunArgs {
     #[arg(long, value_name = "FILE")]
     pub config: PathBuf,
@@ -62,6 +63,32 @@ pub struct RunArgs {
     pub max_duration_sec: Option<u64>,
 
     /// Persist the full unpruned chat transcript for this run.
+    #[arg(long)]
+    pub save_chat_history: bool,
+}
+
+/// Arguments for the ACP stdio server (no prompt; IDE drives turns).
+#[derive(Debug, Clone, Parser)]
+pub struct AcpArgs {
+    #[arg(long, value_name = "FILE")]
+    pub config: PathBuf,
+
+    #[arg(long, value_name = "DIR")]
+    pub settings_dir: PathBuf,
+
+    #[arg(long, value_name = "DIR")]
+    pub home: PathBuf,
+
+    #[arg(long)]
+    pub max_iterations: Option<u32>,
+
+    #[arg(long)]
+    pub max_tokens: Option<u64>,
+
+    #[arg(long)]
+    pub max_duration_sec: Option<u64>,
+
+    /// Persist the full unpruned chat transcript for each prompt turn.
     #[arg(long)]
     pub save_chat_history: bool,
 }
@@ -174,9 +201,35 @@ mod tests {
         let err = Cli::try_parse_from(["agent", "--help"]).expect_err("help is an error exit");
         let rendered = err.to_string();
         assert!(rendered.contains("run"), "{rendered}");
+        assert!(rendered.contains("acp"), "{rendered}");
         assert!(rendered.contains("init"), "{rendered}");
         assert!(rendered.contains("check"), "{rendered}");
         assert!(rendered.contains("help"), "{rendered}");
+    }
+
+    #[test]
+    fn parses_acp_subcommand() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "acp",
+            "--config",
+            "config.yaml",
+            "--settings-dir",
+            "settings",
+            "--home",
+            "home",
+            "--max-iterations",
+            "3",
+        ])
+        .expect("parse acp");
+
+        let Commands::Acp(args) = cli.command else {
+            panic!("expected Acp");
+        };
+        assert_eq!(args.config, PathBuf::from("config.yaml"));
+        assert_eq!(args.settings_dir, PathBuf::from("settings"));
+        assert_eq!(args.home, PathBuf::from("home"));
+        assert_eq!(args.max_iterations, Some(3));
     }
 
     #[test]
