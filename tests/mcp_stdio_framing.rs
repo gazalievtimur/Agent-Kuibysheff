@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use agent_Kuibyshev::config::{McpServerConfig, McpStdioConfig, McpTransport};
-use agent_Kuibyshev::mcp::stdio_client::McpRegistry;
 use agent_Kuibyshev::mcp::Error;
+use agent_Kuibyshev::mcp::McpRegistry;
 use agent_Kuibyshev::tool_api::ToolExecutor;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;

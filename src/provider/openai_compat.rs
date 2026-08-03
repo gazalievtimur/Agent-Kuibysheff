@@ -50,6 +50,7 @@ impl TrustedProviderOrigin {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &Url {
         &self.base
     }
@@ -147,6 +148,7 @@ impl OpenAiCompatClient {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn origin(&self) -> &TrustedProviderOrigin {
         &self.origin
     }

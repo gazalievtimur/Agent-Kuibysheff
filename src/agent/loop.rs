@@ -657,7 +657,7 @@ mod tests {
 
     use super::*;
     use crate::limits::TokenUsage;
-    use crate::logging::MemoryEventSink;
+    use crate::logging::sink::MemoryEventSink;
     use crate::provider::ModelResponse;
 
     struct FailingProvider {
@@ -1148,7 +1148,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_sink_failure_does_not_abort_run() {
-        use crate::logging::FailingEventSink;
+        use crate::logging::sink::FailingEventSink;
 
         let provider = Arc::new(ScriptedProvider {
             responses: vec![

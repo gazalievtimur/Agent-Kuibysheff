@@ -2,6 +2,9 @@
 //!
 //! Production payloads never use plain `tokio::process::Command`. Native backends live in
 //! `sandbox-linux` / `sandbox-windows` and are selected by [`SandboxRunner::platform_default`].
+//!
+//! Stable: [`SandboxBackend`], [`SandboxRunner`], [`SandboxSpec`], [`SandboxOutput`],
+//! [`SandboxError`], [`UnavailableBackend`]. `MockBackend` is `pub(crate)` for in-crate tests.
 
 mod collect;
 mod native;
@@ -243,10 +246,12 @@ impl SandboxBackend for UnavailableBackend {
 }
 
 /// Test backend that returns a fixed output or invokes a callback.
-pub struct MockBackend {
+#[cfg(test)]
+pub(crate) struct MockBackend {
     output: Result<SandboxOutput, SandboxError>,
 }
 
+#[cfg(test)]
 impl MockBackend {
     #[must_use]
     pub fn with_output(output: SandboxOutput) -> Self {
@@ -254,11 +259,13 @@ impl MockBackend {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_error(error: SandboxError) -> Self {
         Self { output: Err(error) }
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl SandboxBackend for MockBackend {
     fn probe(&self) -> Result<(), SandboxError> {

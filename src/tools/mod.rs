@@ -1,4 +1,9 @@
-pub mod error;
+//! Built-in tools, policy wrappers, and the descriptor registry.
+//!
+//! Stable: [`CompositeToolExecutor`], [`PolicyToolExecutor`], [`ToolError`], and
+//! [`registry`] descriptors. Concrete error submodule stays `pub(crate)`.
+
+pub(crate) mod error;
 pub mod fs_home;
 pub mod local_tools;
 pub mod registry;

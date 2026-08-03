@@ -1,12 +1,19 @@
+//! Logging facade: tracing init, `Loggers`, and path helpers.
+//!
+//! Stable: [`Loggers`], [`init_tracing`], [`default_log_dir`], [`resolve_base_dir`],
+//! [`EventSink`] / [`SharedEventSink`]. Concrete sink adapters and test doubles are
+//! `pub(crate)`.
+
 mod chat_history;
 mod paths;
-mod sink;
+pub(crate) mod sink;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use thiserror::Error;
 use tracing::warn;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -17,14 +24,12 @@ use crate::config::LoggingConfig;
 use crate::output::LogReport;
 use crate::provider::ChatMessage;
 
-pub use chat_history::{write_chat_history, ChatHistoryRecord};
 pub use paths::{default_log_dir, resolve_base_dir};
-pub use sink::{
-    create_event_sink, create_file_sink, DbEventSink, EventSink, FailingEventSink, FileJsonlSink,
-    JsonlLogger, MemoryEventSink, SharedEventSink, SinkDestination, TrackingEventSink,
-};
+pub use sink::{EventSink, SharedEventSink, SinkDestination};
 
-use thiserror::Error;
+pub(crate) use chat_history::{write_chat_history, ChatHistoryRecord};
+
+use sink::{create_event_sink, TrackingEventSink};
 
 #[derive(Debug, Error)]
 pub enum LoggingError {
@@ -126,7 +131,10 @@ impl Loggers {
     /// # Errors
     ///
     /// Returns [`LoggingError`] when the transcript file cannot be written.
-    pub async fn save_chat_history(&self, record: &ChatHistoryRecord) -> Result<(), LoggingError> {
+    pub(crate) async fn save_chat_history(
+        &self,
+        record: &ChatHistoryRecord,
+    ) -> Result<(), LoggingError> {
         let Some(path) = &self.chat_history_path else {
             return Ok(());
         };
