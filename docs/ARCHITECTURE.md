@@ -67,7 +67,7 @@ flowchart TD
     NATIVE -->|Windows| WX
 
     CONFIG -->|provider| PROVIDER[provider/openai_compat.rs]
-    POLICY -->|ToolExecutor| AGENT[agent/loop.rs]
+    POLICY -->|ToolExecutor| AGENT[agent/loop]
     PROVIDER -->|ModelClient| AGENT
     CONTEXT --> AGENT
 
@@ -89,7 +89,7 @@ flowchart TD
 
 ### Agent core
 
-- `src/agent/loop.rs` — `AgentEngine` runs the iterative LLM loop. It sends messages to the provider, parses the model's JSON directive, dispatches tool calls, collects results, enforces iteration/token/duration limits, prunes message history using `provider.history`, and emits `RunOutput`.
+- `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/duration limits, prunes message history using `provider.history` (`history`), and emits `RunOutput`.
 - `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, and elapsed time.
 - `src/output.rs` — `RunOutput` schema: `result`, `usage`, `stop_reason`, `logs`.
 
