@@ -254,7 +254,7 @@ fn check_access(access: &crate::access::ResolvedAccessPolicy, items: &mut Vec<Ch
             items.push(CheckItem {
                 name: "access".to_string(),
                 status: CheckStatus::Ok,
-                detail: "legacy mode (no `access` section)".to_string(),
+                detail: "legacy mode (`access.mode: legacy`)".to_string(),
             });
         }
         AccessMode::Strict => {
@@ -455,6 +455,9 @@ logging:
   enable_chat_history: false
   sink:
     type: file
+
+access:
+  mode: legacy
 "#
             ),
         )
@@ -485,6 +488,11 @@ logging:
             .items
             .iter()
             .any(|i| i.name == "mcp" && i.status == CheckStatus::Ok));
+        assert!(report.items.iter().any(|i| {
+            i.name == "access"
+                && i.status == CheckStatus::Ok
+                && i.detail.contains("access.mode: legacy")
+        }));
     }
 
     #[test]
@@ -543,6 +551,9 @@ logging:
   enable_chat_history: false
   sink:
     type: file
+
+access:
+  mode: legacy
 "#,
         )
         .expect("write");

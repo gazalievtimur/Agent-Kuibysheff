@@ -16,6 +16,6 @@
 | 09 | P1 | [09-sync-architecture-docs.md](09-sync-architecture-docs.md) | Синхронизировать ARCHITECTURE.md | done |
 | 10 | P2 | [10-curate-public-api.md](10-curate-public-api.md) | Curated lib.rs / pub(crate) | done |
 | 11 | P2 | [11-split-god-modules.md](11-split-god-modules.md) | Разбить god-modules | in progress (`agent/loop` done) |
-| 12 | P2 | [12-legacy-access-mode-hardening.md](12-legacy-access-mode-hardening.md) | Legacy mode без access | open |
+| 12 | P2 | [12-legacy-access-mode-hardening.md](12-legacy-access-mode-hardening.md) | Legacy mode без access | done (`0.2.0` option B) |
 
 Связанные документы: [ARCHITECTURE.md](../ARCHITECTURE.md), [CONTRACT.md](../../CONTRACT.md), [FURTHER_FIXES.md](../FURTHER_FIXES.md).

@@ -14,20 +14,19 @@ const RULES_MD: &str = include_str!("../templates/agent_init/rules.md");
 const AGENT_CONFIG: &str = include_str!("../templates/agent_init/agent-config.example.yaml");
 
 const CONFIG_ACCESS_FOOTER: &str = r#"
-# Optional fail-closed capability policy.
-# Omit `access` for legacy filesystem mode.
-# When present, everything not listed is denied.
-#
-# access:
-#   tools:
-#     builtins:
-#       - home.list
-#       - home.read
-#       - home.write
-#   filesystem:
-#     home:
-#       read: ["in", "out"]
-#       write: ["out"]
+# Required capability policy (fail-closed). For permissive FS only:
+#   access:
+#     mode: legacy
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]
 "#;
 
 #[derive(Debug, Error)]

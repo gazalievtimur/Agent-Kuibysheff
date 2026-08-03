@@ -32,17 +32,17 @@ logging:
   sink:
     type: file
 
-# Optional fail-closed capability policy.
-# Omit `access` for legacy filesystem mode.
-# When present, everything not listed is denied.
-#
-# access:
-#   tools:
-#     builtins:
-#       - home.list
-#       - home.read
-#       - home.write
-#   filesystem:
-#     home:
-#       read: ["in", "out"]
-#       write: ["out"]
+# Required capability policy (fail-closed). Everything not listed is denied.
+# Escape hatch for permissive FS (hides home.run):
+#   access:
+#     mode: legacy
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]

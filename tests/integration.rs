@@ -338,6 +338,7 @@ async fn model_can_home_run_via_native_sandbox() {
             max_output_chars: 65_536,
             max_timeout_ms: 60_000,
         },
+        ..AccessPolicyConfig::default()
     };
     let access = resolve_access_policy(Some(&access_cfg), dir.path()).expect("access policy");
     let tools = policy_executor_for(composite, &access, &["home.run"]);

@@ -24,13 +24,13 @@ agent_Kuibyshev run \
 ```
 
 - `--config` contains provider (including optional `provider.history` context
-  pruning), MCP, limits, logging, and optional `access` policy configuration.
+  pruning), MCP, limits, logging, and required `access` policy configuration.
 - `--settings-dir` contains `master_prompt.md`, `skills.dsl`, and optional
   `rules.md`.
 - `--prompt` is the task for one run.
 - `--files` are UTF-8 files embedded into the model context as read-only
   inputs. They are not copied into home. Each file is truncated to 50,000
-  characters in the context. When `access` is present, each file must fall
+  characters in the context. Under strict `access`, each file must fall
   under `access.filesystem.input_roots`.
 - `--home` is the root for built-in `home.*` filesystem tools. The agent
   creates it when necessary.
@@ -93,12 +93,14 @@ Exit code `0` only when every probe is `ok` or intentionally `skip`.
 
 ## Access policy (fail-closed)
 
-`access` in the config file is optional:
+**Breaking (0.2.0):** `access` in the config file is **required**. Omitting it
+fails config validation. Prior releases treated omission as silent legacy
+(permissive FS); that footgun is removed.
 
 | Mode | Behavior |
 |------|----------|
-| `access` omitted (legacy) | `home.list` / `home.read` / `home.write` and `local_tools.*` keep prior home/workspace semantics. `home.run` is **not** advertised. |
-| `access` present (strict) | Only listed built-ins, path grants, and program aliases are allowed. Everything else is denied. |
+| `access.mode: legacy` | Explicit opt-in: `home.list` / `home.read` / `home.write` and `local_tools.*` keep permissive home/workspace/input semantics. `home.run` is **not** advertised. Must not set `tools` / `filesystem` / `run` alongside. |
+| `access` present (strict; default when `mode` omitted) | Only listed built-ins, path grants, and program aliases are allowed. Everything else is denied. |
 
 Effective tools are computed as follows:
 
@@ -172,11 +174,12 @@ and comments.
 
 ### Migration
 
-1. Keep running without `access` if you only need filesystem tools (legacy).
-2. To enable `home.run`, add an `access` block that includes `home.run` in
-   `tools.builtins`, path grants under `filesystem.home`, and at least one
-   entry in `run.programs` (`name` is the model-facing alias; `executable` is a
-   host path resolved against the config file directory).
+1. Add an `access` block (required). For a temporary permissive FS opt-in use
+   `access: { mode: legacy }`. Prefer strict grants in production.
+2. To enable `home.run`, use strict mode with `home.run` in `tools.builtins`,
+   path grants under `filesystem.home`, and at least one entry in
+   `run.programs` (`name` is the model-facing alias; `executable` is a host
+   path resolved against the config file directory).
 3. Update `skills.dsl` `allowed_tools` to qualified names that intersect the
    built-in allowlist.
 4. If you use `--files` under strict mode, declare `filesystem.input_roots`.
@@ -197,8 +200,8 @@ home/
 ```
 
 The layout is a convention between coding-agent settings and the orchestrator.
-Under legacy mode the CLI permits access anywhere below home, but never
-outside it. Under strict `access`, only the configured home read/write
+Under `access.mode: legacy` the CLI permits access anywhere below home, but
+never outside it. Under strict `access`, only the configured home read/write
 prefixes are available.
 
 For a successful coding task, the agent must produce `out/manifest.json`:

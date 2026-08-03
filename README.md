@@ -153,16 +153,17 @@ Model context-window pruning is configured under `provider.history` (defaults
 models; they are independent of `limits.max_tokens` (the run stop budget).
 
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
-(including the optional `access` policy),
+(including the required `access` policy),
 [`settings/`](settings/) for the settings layout,
 [`test-agents/`](test-agents/) for specialized test agent profiles, and
 [`prompt-examples.md`](prompt-examples.md) for ready-to-use `--prompt` templates.
 
 ## Access policy and sandbox
 
-Omit `access` for legacy filesystem behavior (`home.run` stays hidden). Add an
-`access` block for fail-closed tools, path grants, and program aliases. Details
-and migration steps: [CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
+`access` is required. Prefer fail-closed tools, path grants, and program
+aliases in production. Permissive FS is only via explicit
+`access: { mode: legacy }` (`home.run` stays hidden). Details and migration:
+[CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
 
 `home.run` always uses the host OS sandbox (no network). Platform notes:
 

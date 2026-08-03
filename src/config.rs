@@ -13,8 +13,8 @@ use crate::limits::LimitsConfig;
 
 // Access DTOs live in `access`; re-export so `config::AccessPolicyConfig` keeps working.
 pub use crate::access::{
-    AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, ProgramPolicyConfig,
-    RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
+    AccessModeField, AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig,
+    ProgramPolicyConfig, RunPolicyConfig, ToolsPolicyConfig, WorkspacePolicyConfig,
 };
 
 #[derive(Debug, Error)]
@@ -49,8 +49,8 @@ pub struct AppConfig {
     pub limits: LimitsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
-    /// When omitted, legacy filesystem behavior is preserved and `home.run` stays unavailable.
-    /// When present, enforcement is fail-closed: anything not listed is denied.
+    /// Required capability policy. Use `access.mode: legacy` for permissive FS; otherwise
+    /// enforcement is fail-closed (anything not listed is denied).
     #[serde(default)]
     pub access: Option<AccessPolicyConfig>,
 }
@@ -596,7 +596,7 @@ mod tests {
                 output_dir: None,
                 sink: LogSinkConfig::default(),
             },
-            access: None,
+            access: Some(AccessPolicyConfig::default()),
         }
     }
 
@@ -756,7 +756,7 @@ limits:
     }
 
     #[test]
-    fn legacy_config_without_access_parses() {
+    fn config_without_access_is_rejected() {
         let yaml = r"
 provider:
   base_url: https://example.com/v1
@@ -770,10 +770,61 @@ limits:
 
         let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
         assert!(cfg.access.is_none());
+        let err = validate(&cfg).expect_err("missing access");
+        assert!(
+            err.to_string().contains("`access` is required"),
+            "unexpected error: {err}"
+        );
+        let err = resolve_access_policy(None, Path::new(".")).expect_err("missing access");
+        assert!(err.to_string().contains("`access` is required"));
+    }
+
+    #[test]
+    fn explicit_legacy_access_mode_resolves() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  mode: legacy
+";
+
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
         validate(&cfg).expect("validate");
-        let policy = resolve_access_policy(None, Path::new(".")).expect("legacy");
+        let policy = resolve_access_policy(cfg.access.as_ref(), Path::new(".")).expect("legacy");
         assert!(policy.is_legacy());
         assert!(!policy.allows_builtin(&crate::access::QualifiedTool::parse("home.run").unwrap()));
+        assert!(policy.allows_builtin(&crate::access::QualifiedTool::parse("home.read").unwrap()));
+    }
+
+    #[test]
+    fn legacy_mode_rejects_mixed_grants() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  mode: legacy
+  tools:
+    builtins: [home.read]
+";
+
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        let err = validate(&cfg).expect_err("mixed legacy");
+        assert!(
+            err.to_string().contains("mode: legacy"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -859,8 +910,6 @@ access:
     fn access_rejects_duplicate_program_alias() {
         let mut cfg = sample_config();
         cfg.access = Some(AccessPolicyConfig {
-            tools: ToolsPolicyConfig::default(),
-            filesystem: FilesystemPolicyConfig::default(),
             run: RunPolicyConfig {
                 programs: vec![
                     ProgramPolicyConfig {
@@ -880,6 +929,7 @@ access:
                 ],
                 ..RunPolicyConfig::default()
             },
+            ..AccessPolicyConfig::default()
         });
         let err = validate(&cfg).expect_err("duplicate");
         assert!(err.to_string().contains("duplicate program alias"));
@@ -959,6 +1009,8 @@ mcp:
   - name: local
     command: mcp-server
     args: [--flag]
+access:
+  mode: strict
 ";
         let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
         validate(&cfg).expect("valid");
@@ -993,6 +1045,8 @@ mcp:
       scopes: [mcp:tools]
       redirect_port: 0
       token_store: ./tokens.json
+access:
+  mode: strict
 ";
         let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
         validate(&cfg).expect("valid");
