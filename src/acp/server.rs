@@ -24,13 +24,17 @@ use crate::project_paths::{effective_project_root, resolve_agent_paths};
 struct SessionSlot {
     cancel: RunCancel,
     cwd: PathBuf,
+    touched_seq: u64,
 }
 
 struct AcpRuntime {
     args: AcpArgs,
     sessions: Mutex<HashMap<String, SessionSlot>>,
     session_seq: AtomicU64,
+    session_touch_seq: AtomicU64,
 }
+
+const MAX_ACTIVE_SESSIONS: usize = 256;
 
 impl AcpRuntime {
     fn new(args: AcpArgs) -> Self {
@@ -38,12 +42,17 @@ impl AcpRuntime {
             args,
             sessions: Mutex::new(HashMap::new()),
             session_seq: AtomicU64::new(1),
+            session_touch_seq: AtomicU64::new(1),
         }
     }
 
     fn next_session_id(&self) -> SessionId {
         let n = self.session_seq.fetch_add(1, Ordering::Relaxed);
         SessionId::new(format!("kuib-{n}"))
+    }
+
+    fn next_touch_seq(&self) -> u64 {
+        self.session_touch_seq.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -89,13 +98,36 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
                 let id_key = session_id.0.to_string();
                 let cwd = req.cwd;
                 info!(session_id = %id_key, cwd = %cwd.display(), "ACP session created");
-                rt_session.sessions.lock().await.insert(
-                    id_key,
+                let mut sessions = rt_session.sessions.lock().await;
+                sessions.insert(
+                    id_key.clone(),
                     SessionSlot {
                         cancel: RunCancel::new(),
                         cwd,
+                        touched_seq: rt_session.next_touch_seq(),
                     },
                 );
+                if sessions.len() > MAX_ACTIVE_SESSIONS {
+                    let evicted = sessions
+                        .iter()
+                        .min_by_key(|(_, slot)| slot.touched_seq)
+                        .map(|(key, _)| key.clone())
+                        .and_then(|oldest| {
+                            if oldest != id_key {
+                                sessions.remove(&oldest)?;
+                                Some(oldest)
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(evicted_id) = evicted {
+                        warn!(
+                            session_id = %evicted_id,
+                            max_sessions = MAX_ACTIVE_SESSIONS,
+                            "ACP evicted least-recently-used session"
+                        );
+                    }
+                }
                 responder.respond(NewSessionResponse::new(session_id))
             },
             agent_client_protocol::on_receive_request!(),
@@ -144,6 +176,7 @@ async fn handle_prompt(
         };
         // Fresh cancel token per prompt (previous turn may have cancelled/expired).
         slot.cancel = RunCancel::new();
+        slot.touched_seq = runtime.next_touch_seq();
         (slot.cancel.clone(), slot.cwd.clone())
     };
 

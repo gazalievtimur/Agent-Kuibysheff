@@ -76,6 +76,7 @@ fn wait_pidfd(pidfd: OwnedFd, deadline: Duration) -> Result<i32, SandboxLinuxErr
                 events: POLLIN,
                 revents: 0,
             };
+            // SAFETY: poll waits for pidfd readability after kill, best-effort bounded by timeout.
             let _ = unsafe { libc::poll(&mut pfd, 1, 2000) };
             return Ok(124);
         }

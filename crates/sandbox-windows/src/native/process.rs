@@ -186,6 +186,8 @@ fn open_nul_inheritable() -> Result<OwnedHandle, SandboxWindowsError> {
 fn read_pipe_bounded(handle: OwnedHandle, max_chars: usize) -> (String, bool) {
     let mut bytes = Vec::new();
     let mut buf = [0u8; 4096];
+    let max_bytes = max_chars.saturating_mul(4).saturating_add(64);
+    let mut truncated = false;
     loop {
         let mut read = 0u32;
         // SAFETY: ReadFile on an owned pipe read end.
@@ -201,14 +203,22 @@ fn read_pipe_bounded(handle: OwnedHandle, max_chars: usize) -> (String, bool) {
         if ok == 0 || read == 0 {
             break;
         }
-        bytes.extend_from_slice(&buf[..read as usize]);
-        // Stop early once we clearly exceed the char budget (UTF-8 upper bound).
-        if bytes.len() > max_chars.saturating_mul(4).saturating_add(64) {
-            break;
+        let chunk = &buf[..read as usize];
+        if !truncated {
+            let remaining = max_bytes.saturating_sub(bytes.len());
+            if remaining > 0 {
+                let keep = remaining.min(chunk.len());
+                bytes.extend_from_slice(&chunk[..keep]);
+                if keep < chunk.len() {
+                    truncated = true;
+                }
+            } else {
+                truncated = true;
+            }
         }
     }
     let lossy = String::from_utf8_lossy(&bytes);
-    if lossy.chars().count() > max_chars {
+    if truncated || lossy.chars().count() > max_chars {
         let truncated: String = lossy.chars().take(max_chars).collect();
         (truncated, true)
     } else {
@@ -665,22 +675,44 @@ fn stage_in_profile_folder(
 
     // Interpreters often need adjacent DLLs (e.g. python312.dll next to python.exe).
     if let Some(parent) = request.executable.parent() {
-        if let Ok(entries) = std::fs::read_dir(parent) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Some(name) = path.file_name() else {
-                    continue;
-                };
-                let is_dll = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"));
-                if !is_dll {
-                    continue;
-                }
-                let dest = folder.join(name);
-                let _ = std::fs::copy(&path, &dest);
+        let entries = std::fs::read_dir(parent).map_err(|err| {
+            SandboxWindowsError::setup(
+                SandboxStage::AclGrant,
+                format!("read executable directory {}: {err}", parent.display()),
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                SandboxWindowsError::setup(
+                    SandboxStage::AclGrant,
+                    format!(
+                        "read executable directory entry {}: {err}",
+                        parent.display()
+                    ),
+                )
+            })?;
+            let path = entry.path();
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let is_dll = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"));
+            if !is_dll {
+                continue;
             }
+            let dest = folder.join(name);
+            std::fs::copy(&path, &dest).map_err(|err| {
+                SandboxWindowsError::setup(
+                    SandboxStage::AclGrant,
+                    format!(
+                        "stage sibling DLL {} -> {}: {err}",
+                        path.display(),
+                        dest.display()
+                    ),
+                )
+            })?;
         }
     }
 

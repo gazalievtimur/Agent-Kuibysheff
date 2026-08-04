@@ -34,7 +34,7 @@ impl HomeFs {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::mcp::Error`] if the directory cannot be created, is not a directory, or the
+    /// Returns [`HomeFsError`] if the directory cannot be created, is not a directory, or the
     /// sandbox required for configured programs is unavailable.
     pub async fn new(
         root: &Path,
@@ -81,7 +81,7 @@ impl HomeFs {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::mcp::Error`] for invalid arguments, paths, or I/O failures.
+    /// Returns [`HomeFsError`] for invalid arguments, paths, or I/O failures.
     pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, HomeFsError> {
         match tool {
             "list" => {

@@ -1,11 +1,13 @@
 //! Capability drop and no_new_privs.
 
+use std::fs;
+
 use libc::{prctl, PR_CAPBSET_DROP, PR_SET_NO_NEW_PRIVS};
 
 use crate::error::{SandboxLinuxError, SandboxStage};
 use crate::native::util::errno_err;
 
-const CAP_LAST_CAP: i32 = 40;
+const FALLBACK_CAP_LAST_CAP: i32 = 40;
 
 /// Clears ambient/bounding/effective capabilities and enables no_new_privs.
 pub fn drop_capabilities() -> Result<(), SandboxLinuxError> {
@@ -14,7 +16,7 @@ pub fn drop_capabilities() -> Result<(), SandboxLinuxError> {
         return Err(errno_err(SandboxStage::Caps, "PR_SET_NO_NEW_PRIVS"));
     }
 
-    for cap in 0..=CAP_LAST_CAP {
+    for cap in 0..=kernel_cap_last_cap() {
         // SAFETY: drop each capability from the bounding set (EINVAL means absent).
         let rc = unsafe { prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) };
         if rc != 0 {
@@ -63,4 +65,12 @@ pub fn drop_capabilities() -> Result<(), SandboxLinuxError> {
         return Err(errno_err(SandboxStage::Caps, "capset"));
     }
     Ok(())
+}
+
+fn kernel_cap_last_cap() -> i32 {
+    fs::read_to_string("/proc/sys/kernel/cap_last_cap")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i32>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(FALLBACK_CAP_LAST_CAP)
 }

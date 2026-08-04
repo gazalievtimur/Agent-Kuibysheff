@@ -107,9 +107,16 @@ impl AgentEngine {
         cancel.arm_deadline(Duration::from_secs(limits.max_duration_sec));
 
         loop {
-            if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
-                final_result = "Execution stopped due to limit: max_duration_sec".to_string();
-                stop_reason = StopReason::LimitReached;
+            if should_stop_for_duration(&metrics, &limits, &mut final_result, &mut stop_reason) {
+                break;
+            }
+            if should_stop_for_cancel(
+                &cancel,
+                &metrics,
+                &limits,
+                &mut final_result,
+                &mut stop_reason,
+            ) {
                 break;
             }
             match metrics.pre_step_check(&limits) {
@@ -126,8 +133,13 @@ impl AgentEngine {
             let completion = tokio::select! {
                 biased;
                 () = cancel.token().cancelled() => {
-                    final_result = "Execution stopped due to limit: max_duration_sec".to_string();
-                    stop_reason = StopReason::LimitReached;
+                    set_cancel_or_duration_stop(
+                        &cancel,
+                        &metrics,
+                        &limits,
+                        &mut final_result,
+                        &mut stop_reason,
+                    );
                     break;
                 }
                 completion = self.model.complete(&messages) => completion,
@@ -145,9 +157,16 @@ impl AgentEngine {
                 stop_reason = StopReason::LimitReached;
                 break;
             }
-            if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
-                final_result = "Execution stopped due to limit: max_duration_sec".to_string();
-                stop_reason = StopReason::LimitReached;
+            if should_stop_for_duration(&metrics, &limits, &mut final_result, &mut stop_reason) {
+                break;
+            }
+            if should_stop_for_cancel(
+                &cancel,
+                &metrics,
+                &limits,
+                &mut final_result,
+                &mut stop_reason,
+            ) {
                 break;
             }
 
@@ -324,9 +343,29 @@ impl AgentEngine {
                 let tool_response = tokio::select! {
                     biased;
                     () = cancel.token().cancelled() => {
-                        final_result =
-                            "Execution stopped due to limit: max_duration_sec".to_string();
-                        stop_reason = StopReason::LimitReached;
+                        self.log_tool_event(
+                            "tool_call_failed",
+                            json!({
+                                "iteration": iteration,
+                                "server": server,
+                                "tool": tool,
+                                "ok": false,
+                                "error": "cancelled",
+                            }),
+                        )
+                        .await;
+                        events.emit(AgentEvent::ToolFinish {
+                            id: tool_call_id,
+                            ok: false,
+                            output: json!({ "error": "cancelled" }),
+                        });
+                        set_cancel_or_duration_stop(
+                            &cancel,
+                            &metrics,
+                            &limits,
+                            &mut final_result,
+                            &mut stop_reason,
+                        );
                         break;
                     }
                     response = self.tools.call_tool(
@@ -405,9 +444,17 @@ impl AgentEngine {
                     output: tool_response.clone(),
                 });
 
-                if cancel.is_cancelled() || metrics.duration_limit_hit(&limits) {
-                    final_result = "Execution stopped due to limit: max_duration_sec".to_string();
-                    stop_reason = StopReason::LimitReached;
+                if should_stop_for_duration(&metrics, &limits, &mut final_result, &mut stop_reason)
+                {
+                    break;
+                }
+                if should_stop_for_cancel(
+                    &cancel,
+                    &metrics,
+                    &limits,
+                    &mut final_result,
+                    &mut stop_reason,
+                ) {
                     break;
                 }
                 push_message(
@@ -587,6 +634,49 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
     }
 }
 
+fn should_stop_for_duration(
+    metrics: &RunMetrics,
+    limits: &LimitsConfig,
+    final_result: &mut String,
+    stop_reason: &mut StopReason,
+) -> bool {
+    if metrics.duration_limit_hit(limits) {
+        *final_result = "Execution stopped due to limit: max_duration_sec".to_string();
+        *stop_reason = StopReason::LimitReached;
+        return true;
+    }
+    false
+}
+
+fn should_stop_for_cancel(
+    cancel: &RunCancel,
+    metrics: &RunMetrics,
+    limits: &LimitsConfig,
+    final_result: &mut String,
+    stop_reason: &mut StopReason,
+) -> bool {
+    if cancel.is_cancelled() {
+        set_cancel_or_duration_stop(cancel, metrics, limits, final_result, stop_reason);
+        return true;
+    }
+    false
+}
+
+fn set_cancel_or_duration_stop(
+    _cancel: &RunCancel,
+    metrics: &RunMetrics,
+    limits: &LimitsConfig,
+    final_result: &mut String,
+    stop_reason: &mut StopReason,
+) {
+    if metrics.duration_limit_hit(limits) {
+        *final_result = "Execution stopped due to limit: max_duration_sec".to_string();
+    } else {
+        *final_result = "Execution cancelled by user".to_string();
+    }
+    *stop_reason = StopReason::LimitReached;
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -595,6 +685,7 @@ mod tests {
 
     use async_trait::async_trait;
     use serde_json::{json, Value};
+    use tokio::sync::mpsc;
 
     use super::*;
     use crate::limits::TokenUsage;
@@ -964,5 +1055,103 @@ mod tests {
             "run should exit on deadline, not wait for slow provider (elapsed {:?})",
             started.elapsed()
         );
+    }
+
+    struct SlowTools;
+
+    #[async_trait]
+    impl ToolExecutor for SlowTools {
+        async fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            _arguments: Value,
+        ) -> Result<Value, crate::tool_api::ToolError> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(json!({"ok": true}))
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            vec!["home.run".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_cancel_returns_cancelled_message() {
+        let provider = Arc::new(SlowProvider);
+        let tools = Arc::new(NoopTools);
+        let engine = AgentEngine::new(provider, tools, Loggers::default());
+        let cancel = RunCancel::new();
+        cancel.cancel();
+
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel,
+                events: crate::agent::AgentEventTx::noop(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::LimitReached);
+        assert_eq!(output.result, "Execution cancelled by user");
+    }
+
+    #[tokio::test]
+    async fn cancel_during_tool_call_emits_tool_finish() {
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![r#"{"done":false,"thought":"run","tool_calls":[{"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"]}}],"result":null}"#
+                .to_string()],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let tools = Arc::new(SlowTools);
+        let engine = AgentEngine::new(provider, tools, Loggers::default());
+        let cancel = RunCancel::new();
+        let cancel_signal = cancel.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_signal.cancel();
+        });
+
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: LimitsConfig {
+                    max_iterations: 10,
+                    max_tokens: 1_000,
+                    max_duration_sec: 60,
+                },
+                history: test_history(),
+                cancel,
+                events: crate::agent::AgentEventTx::from_sender(tx),
+            })
+            .await;
+
+        let mut saw_tool_start = false;
+        let mut saw_cancelled_tool_finish = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::ToolStart { .. } => saw_tool_start = true,
+                AgentEvent::ToolFinish { ok, output, .. } => {
+                    if !ok && output["error"] == "cancelled" {
+                        saw_cancelled_tool_finish = true;
+                    }
+                }
+                AgentEvent::Thought(_) | AgentEvent::Message(_) => {}
+            }
+        }
+
+        assert_eq!(output.stop_reason, StopReason::LimitReached);
+        assert_eq!(output.result, "Execution cancelled by user");
+        assert!(saw_tool_start);
+        assert!(saw_cancelled_tool_finish);
     }
 }

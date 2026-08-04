@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -7,6 +9,7 @@ use thiserror::Error;
 use crate::access::InputFilesPolicy;
 
 pub const MAX_INPUT_FILE_CHARS: usize = 50_000;
+const MAX_INPUT_FILE_BYTES: usize = MAX_INPUT_FILE_CHARS * 4 + 4;
 
 #[derive(Debug, Error)]
 pub enum InputContextError {
@@ -63,13 +66,10 @@ fn canonicalize_input(
 }
 
 fn format_file(path: &Path) -> Result<String, InputContextError> {
-    let content = fs::read_to_string(path).map_err(|source| InputContextError::ReadFile {
-        path: path.display().to_string(),
-        source,
-    })?;
+    let (content, truncated_by_bytes) = read_utf8_prefix(path)?;
     let total_chars = content.chars().count();
-    let truncated = total_chars > MAX_INPUT_FILE_CHARS;
-    let content = if truncated {
+    let truncated = truncated_by_bytes || total_chars > MAX_INPUT_FILE_CHARS;
+    let content = if total_chars > MAX_INPUT_FILE_CHARS {
         content
             .chars()
             .take(MAX_INPUT_FILE_CHARS)
@@ -89,6 +89,61 @@ fn format_file(path: &Path) -> Result<String, InputContextError> {
         content,
         marker
     ))
+}
+
+fn read_utf8_prefix(path: &Path) -> Result<(String, bool), InputContextError> {
+    let file = File::open(path).map_err(|source| InputContextError::ReadFile {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut reader = BufReader::new(file);
+    let mut bytes = Vec::with_capacity(MAX_INPUT_FILE_BYTES.min(8 * 1024));
+    let mut chunk = [0u8; 8192];
+    let mut truncated = false;
+
+    loop {
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|source| InputContextError::ReadFile {
+                path: path.display().to_string(),
+                source,
+            })?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_INPUT_FILE_BYTES.saturating_sub(bytes.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        let keep = remaining.min(read);
+        bytes.extend_from_slice(&chunk[..keep]);
+        if keep < read {
+            truncated = true;
+            break;
+        }
+    }
+
+    let content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(err) => {
+            let utf8_err = err.utf8_error();
+            if truncated && utf8_err.error_len().is_none() {
+                let mut bytes = err.into_bytes();
+                bytes.truncate(utf8_err.valid_up_to());
+                String::from_utf8(bytes).expect("valid UTF-8 prefix after truncation")
+            } else {
+                let source =
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, utf8_err.to_string());
+                return Err(InputContextError::ReadFile {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    };
+
+    Ok((content, truncated))
 }
 
 #[cfg(test)]
@@ -137,5 +192,19 @@ mod tests {
         let context = build_input_files_context(&[path.clone(), same], &InputFilesPolicy::legacy())
             .expect("context");
         assert_eq!(context.matches("once").count(), 1);
+    }
+
+    #[test]
+    fn truncates_large_utf8_file_without_broken_char() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("large.txt");
+        let content = "🙂".repeat(MAX_INPUT_FILE_CHARS + 50);
+        fs::write(&path, content).expect("write");
+
+        let context =
+            build_input_files_context(std::slice::from_ref(&path), &InputFilesPolicy::legacy())
+                .expect("context");
+        assert!(context.contains("[truncated at 50000 characters]"));
+        assert!(!context.contains('\u{FFFD}'));
     }
 }
