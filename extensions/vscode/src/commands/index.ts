@@ -14,7 +14,7 @@ import {
   runPowerShellScript,
   scaffoldScript,
 } from "../process/runBinary";
-import { ensureRepoRoot, getDefaultIssueKey } from "../settings";
+import { ensureRepoRoot, getDefaultIssueKey, isKuibyshevInstall } from "../settings";
 import { AgentsTreeProvider } from "../views/agentsTree";
 import { openAgentConfigEditor } from "../views/configWebview";
 
@@ -98,6 +98,12 @@ export function registerCommands(
     if (!repoRoot) {
       return;
     }
+    if (!isKuibyshevInstall(repoRoot)) {
+      vscode.window.showErrorMessage(
+        `kuibyshev.repoRoot is not a Kuibyshev install: ${repoRoot}`,
+      );
+      return;
+    }
 
     const force = await vscode.window.showWarningMessage(
       "Scaffold .kuibyshev into this workspace?",
@@ -110,10 +116,6 @@ export function registerCommands(
     }
 
     const script = scaffoldScript(repoRoot);
-    if (!fs.existsSync(script)) {
-      vscode.window.showErrorMessage(`Scaffold script not found: ${script}`);
-      return;
-    }
 
     const args = ["-ProjectRoot", workspaceRoot, "-RepoRoot", repoRoot];
     if (force === "Force overwrite") {

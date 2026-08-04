@@ -4,6 +4,11 @@
   "description": "Manage Kuibyshev agent parameters and 1C ACP workflow in VS Code",
   "version": "0.1.0",
   "publisher": "kuibyshev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gybson63/Agent-Kuibyshev.git",
+    "directory": "extensions/vscode"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -138,7 +143,7 @@
         "kuibyshev.repoRoot": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the Agent Kuibyshev install (scripts and templates)."
+          "markdownDescription": "Absolute path to the **Agent Kuibyshev** install (the clone that contains `scripts/1c-dev-scaffold-project.ps1`), **not** the 1C product folder opened as the workspace. Example: `C:\\\\Git\\\\Agent Kuibyshev`."
         },
         "kuibyshev.binaryPath": {
           "type": "string",

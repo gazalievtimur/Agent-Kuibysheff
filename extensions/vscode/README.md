@@ -22,7 +22,7 @@ This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host 
 
 | Setting | Description |
 |---------|-------------|
-| `kuibyshev.repoRoot` | Absolute path to the Agent Kuibyshev clone |
+| `kuibyshev.repoRoot` | Absolute path to the **Agent Kuibyshev** clone (with `scripts/…`), **not** the product folder |
 | `kuibyshev.binaryPath` | Binary name/path (default `agent_Kuibyshev`) |
 | `kuibyshev.defaultIssueKey` | Default issue key for Prepare |
 
@@ -49,4 +49,4 @@ Or install a local VSIX after `npx @vscode/vsce package` from `extensions/vscode
 5. **Prepare stage** → copy chat starter → chat with the matching ACP agent (`1c-analyst`, …).
 6. Promote / Validate / Approve plan as needed.
 
-See also [`workflows/1c-dev/VSCODE.md`](../../workflows/1c-dev/VSCODE.md).
+See also [workflows/1c-dev/VSCODE.md](https://github.com/gybson63/Agent-Kuibyshev/blob/main/workflows/1c-dev/VSCODE.md).
