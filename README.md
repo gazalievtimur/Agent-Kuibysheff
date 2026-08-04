@@ -79,11 +79,13 @@ agent_Kuibyshev acp \
 
 VS Code’s Agent Host speaks AHP to the UI; Kuibyshev is the ACP backend.
 For **1C products**, open the product folder as the workspace, scaffold
-`.kuibyshev/` (`scripts/1c-dev-scaffold-project.ps1`), and use the ACP preset in
+`.kuibyshev/` (`scripts/1c-dev-scaffold-project.ps1` or the
+[`extensions/vscode`](extensions/vscode/) sidebar), and use the ACP preset in
 [`workflows/1c-dev/vscode/`](workflows/1c-dev/vscode/). Session `cwd` /
 `--project-root` point at that folder; agent MCP/workspace settings live in
 `.kuibyshev/agents/*/agent-config.yaml`. Guide:
 [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
+Extension README: [extensions/vscode/README.md](extensions/vscode/README.md).
 
 See [CONTRACT.md](CONTRACT.md) for the full ACP notes.
 

@@ -38,7 +38,7 @@ impl LocalTools {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::mcp::Error`] if the directory cannot be resolved or is not a directory.
+    /// Returns [`LocalToolsError`] if the directory cannot be resolved or is not a directory.
     pub async fn new(root: &Path, policy: WorkspaceFsPolicy) -> Result<Self, LocalToolsError> {
         fs::create_dir_all(root)
             .await
@@ -63,7 +63,7 @@ impl LocalTools {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::mcp::Error`] for invalid arguments, paths, or I/O failures.
+    /// Returns [`LocalToolsError`] for invalid arguments, paths, or I/O failures.
     pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value, LocalToolsError> {
         match tool {
             "search_docs" => {
@@ -205,6 +205,16 @@ impl LocalTools {
             .map_err(|error| local_io("canonicalize", &candidate, error))?;
         ensure_within_root(&self.root, &canonical, relative)?;
         ensure_grant_for_canonical(&self.root, &self.policy, &canonical, relative)?;
+        if !fs::metadata(&canonical)
+            .await
+            .map_err(|error| local_io("metadata", &canonical, error))?
+            .is_file()
+        {
+            return Err(local_path(
+                relative.display().to_string(),
+                "path is not a file",
+            ));
+        }
         Ok(canonical)
     }
 }

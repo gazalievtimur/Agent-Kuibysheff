@@ -63,6 +63,14 @@ const FORBIDDEN_INHERIT_ENV: &[&str] = &[
     "DYLD_FORCE_FLAT_NAMESPACE",
 ];
 
+/// Returns true when an environment key must never be inherited into sandboxed child processes.
+#[must_use]
+pub fn is_forbidden_inherit_env_key(key: &str) -> bool {
+    FORBIDDEN_INHERIT_ENV
+        .iter()
+        .any(|forbidden| key.eq_ignore_ascii_case(forbidden))
+}
+
 /// Whether the policy was compiled as explicit legacy opt-in or fail-closed strict grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessMode {
@@ -665,10 +673,7 @@ fn validate_program_aliases(programs: &[ProgramPolicyConfig]) -> Result<(), Acce
                     "`access.run.programs[{alias}].inherit_env` entries must not be empty"
                 )));
             }
-            if FORBIDDEN_INHERIT_ENV
-                .iter()
-                .any(|forbidden| normalized.eq_ignore_ascii_case(forbidden))
-            {
+            if is_forbidden_inherit_env_key(normalized) {
                 return Err(AccessError::Validation(format!(
                     "`access.run.programs[{alias}].inherit_env` must not include `{normalized}`"
                 )));

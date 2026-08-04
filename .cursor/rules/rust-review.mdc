@@ -1,0 +1,66 @@
+---
+description: Rust code review protocol aligned with Rust Style Guide and project CI gates.
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Rust Code Review Protocol
+
+Use this checklist when reviewing Rust changes in this repository.
+Base rules come from the Rust Style Guide: https://doc.rust-lang.org/style-guide/
+
+## Hard Gates Before Approval (blockers)
+
+- `cargo fmt --all -- --check` passes.
+- `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- `cargo test --workspace` passes.
+- For Linux sandbox changes, ensure Miri coverage remains valid (`cargo +nightly miri test -p sandbox-linux --lib` in CI).
+
+## Style Guide Checklist
+
+- Keep formatting rustfmt-compatible: spaces only, 4-space indent, no trailing whitespace, 100-char width.
+- Use trailing commas in multiline argument/field/list forms.
+- Prefer block indent over visual indent to keep diffs small and avoid rightward drift.
+- Keep imports stable and readable:
+  - Sort imports with style-guide version sorting inside each import group.
+  - Keep existing import groups; do not merge/un-merge groups unless needed for clarity.
+  - In list imports, keep `self` and `super` first; keep glob/group imports last.
+- Keep comments/docs consistent:
+  - Prefer `//` and `///` over block comments for normal/doc comments.
+  - Put doc comments before attributes.
+  - Write full-sentence comments when the comment is a standalone line.
+- Keep names idiomatic:
+  - Types/variants `UpperCamelCase`.
+  - Functions/methods/variables/modules/macros `snake_case`.
+  - Const/static `SCREAMING_SNAKE_CASE`.
+- Prefer expression-oriented Rust where it improves clarity (for example, `let x = if ...` instead of separate assignment branches).
+
+## Project-Specific Constraints
+
+- Align review with enforced policy, not generic pedantic advice:
+  - `clippy::all` is active; CI treats warnings as errors via `-D warnings`.
+  - `clippy::pedantic` is intentionally `allow` in this repo. Do not block PRs only on pedantic nits.
+- Respect unsafe boundaries:
+  - Root crate forbids unsafe code (`[lints.rust] unsafe_code = "forbid"`).
+  - Sandbox crates allow narrow FFI exceptions and enforce `unsafe_op_in_unsafe_fn = "forbid"`.
+  - Any new unsafe block requires a clear `// SAFETY:` justification.
+- Keep compatibility with current project baseline:
+  - Edition is 2021 (`rustfmt.toml` and crate manifests).
+  - CI validates MSRV at Rust 1.86 with `cargo check --workspace`; flag changes that require a higher compiler.
+
+## Cargo.toml Review Notes (when touched by the same PR)
+
+- Follow style-guide Cargo conventions: stable key order, one space around `=`, clean section spacing.
+- Keep crate metadata valid (license SPDX expression, URLs with scheme).
+- Ensure dependency and lint changes are consistent across root and sandbox crates when required.
+
+## Review Outcome Policy
+
+- Blocker: breaks hard gates, violates unsafe policy, or introduces high-risk style-guide regressions that harm correctness/maintainability.
+- Warning: non-blocking style/readability issue that should be fixed before merge when practical.
+- Suggestion: optional refinement (idioms, simplification, micro-optimizations) that does not block merge.
+
+## Relationship To rust-skills
+
+Use this protocol for project-specific acceptance decisions.
+Use `.cursor/rules/rust-skills.mdc` and `/rust-skills` for deeper idiomatic guidance and category-specific best practices.

@@ -112,7 +112,9 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     let config_path = args.config.clone();
     let (cfg, access) = tokio::task::spawn_blocking(move || load_config(&config_path))
         .await
-        .map_err(|err| ConfigError::Validation(format!("config load task: {err}")))??;
+        .map_err(|err| {
+            CheckError::Runtime(io::Error::other(format!("config load task: {err}")))
+        })??;
 
     let mut items = Vec::new();
     items.push(CheckItem {

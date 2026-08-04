@@ -9,6 +9,8 @@ use crate::error::SandboxLinuxError;
 
 const MS_REC: u64 = 0x4000;
 const MS_PRIVATE: u64 = 1 << 18;
+const SYS_CLONE3: i64 = 435;
+const SYS_PIDFD_SEND_SIGNAL: i64 = 424;
 
 /// Returns `Ok(())` when unprivileged user namespaces and mounts look usable.
 pub fn probe_primitives() -> Result<(), SandboxLinuxError> {
@@ -44,7 +46,58 @@ pub fn probe_primitives() -> Result<(), SandboxLinuxError> {
     // Full probe: unshare + uid/gid map + MS_PRIVATE remount.
     // A bare unshare can succeed while AppArmor still denies capabilities in the
     // new user namespace (`kernel.apparmor_restrict_unprivileged_userns=1`).
+    probe_clone3_pidfd_syscalls()?;
     probe_userns_mount_capability()?;
+
+    Ok(())
+}
+
+fn probe_clone3_pidfd_syscalls() -> Result<(), SandboxLinuxError> {
+    // SAFETY: probe syscall presence with intentionally invalid arguments.
+    let clone_rc = unsafe { libc::syscall(SYS_CLONE3, std::ptr::null::<libc::c_void>(), 0usize) };
+    if clone_rc == -1 {
+        let err = std::io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EFAULT) | Some(libc::EINVAL) => {}
+            Some(libc::ENOSYS) => {
+                return Err(SandboxLinuxError::unavailable(
+                    "clone3 syscall is unavailable on this kernel",
+                ));
+            }
+            _ => {
+                return Err(SandboxLinuxError::unavailable(format!(
+                    "clone3 probe failed: {err}"
+                )));
+            }
+        }
+    }
+
+    // SAFETY: probe pidfd_send_signal syscall presence with an invalid pidfd.
+    let pidfd_rc = unsafe {
+        libc::syscall(
+            SYS_PIDFD_SEND_SIGNAL,
+            -1,
+            libc::SIGKILL,
+            std::ptr::null::<libc::c_int>(),
+            0,
+        )
+    };
+    if pidfd_rc == -1 {
+        let err = std::io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EBADF) | Some(libc::EINVAL) => {}
+            Some(libc::ENOSYS) => {
+                return Err(SandboxLinuxError::unavailable(
+                    "pidfd_send_signal syscall is unavailable on this kernel",
+                ));
+            }
+            _ => {
+                return Err(SandboxLinuxError::unavailable(format!(
+                    "pidfd_send_signal probe failed: {err}"
+                )));
+            }
+        }
+    }
 
     Ok(())
 }

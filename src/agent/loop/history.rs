@@ -42,9 +42,44 @@ fn prune_by_message_count(messages: &mut Vec<ChatMessage>, history: &ProviderHis
 
 fn prune_by_char_budget(messages: &mut Vec<ChatMessage>, history: &ProviderHistoryConfig) {
     while messages.len() > HISTORY_PREFIX_LEN && history_char_len(messages) > history.max_chars {
+        if messages.len() == HISTORY_PREFIX_LEN + 1 {
+            let prefix_chars = history_char_len(&messages[..HISTORY_PREFIX_LEN]);
+            let budget_for_tail = history.max_chars.saturating_sub(prefix_chars);
+            if budget_for_tail == 0 {
+                messages.remove(HISTORY_PREFIX_LEN);
+                continue;
+            }
+
+            let tail_idx = HISTORY_PREFIX_LEN;
+            let tail = messages[tail_idx].content.as_ref();
+            let truncated_tail = truncate_for_budget(tail, budget_for_tail);
+            if truncated_tail.chars().count() < tail.chars().count() {
+                messages[tail_idx].content = truncated_tail.into();
+                continue;
+            }
+        }
         // Drop the oldest non-prefix turn; prefer retaining recent context.
         messages.remove(HISTORY_PREFIX_LEN);
     }
+}
+
+fn truncate_for_budget(content: &str, max_chars: usize) -> String {
+    const MARKER: &str = "\n...[truncated for history budget]";
+    let char_count = content.chars().count();
+    if char_count <= max_chars {
+        return content.to_string();
+    }
+
+    let marker_chars = MARKER.chars().count();
+    if max_chars <= marker_chars {
+        return content.chars().take(max_chars).collect();
+    }
+
+    let head_chars = max_chars - marker_chars;
+    let mut out = String::with_capacity(max_chars.saturating_add(8));
+    out.extend(content.chars().take(head_chars));
+    out.push_str(MARKER);
+    out
 }
 
 pub(crate) fn history_char_len(messages: &[ChatMessage]) -> usize {
@@ -201,6 +236,24 @@ mod tests {
         assert!(messages
             .iter()
             .any(|message| message.content.chars().count() == 100_000));
+    }
+
+    #[test]
+    fn prune_message_history_truncates_single_tail_when_over_budget() {
+        let history = test_history();
+        let mut messages = vec![
+            ChatMessage::new(ChatRole::System, "system"),
+            ChatMessage::new(ChatRole::User, "goal"),
+            ChatMessage::new(ChatRole::User, "t".repeat(300_000)),
+        ];
+
+        prune_message_history(&mut messages, &history);
+
+        assert_eq!(messages.len(), HISTORY_PREFIX_LEN + 1);
+        assert!(history_char_len(&messages) <= history.max_chars);
+        assert!(messages[HISTORY_PREFIX_LEN]
+            .content
+            .contains("...[truncated for history budget]"));
     }
 
     #[test]

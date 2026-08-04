@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tracing::info;
 
-use crate::access::{CanonicalRoot, PathGrantScope, ProgramAlias, RelativeGrant};
+use crate::access::{
+    is_forbidden_inherit_env_key, CanonicalRoot, PathGrantScope, ProgramAlias, RelativeGrant,
+};
 
 pub use collect::{collect_utf8_bounded, truncate_utf8_chars};
 
@@ -211,17 +213,7 @@ fn validate_spec(spec: &SandboxSpec) -> Result<(), SandboxError> {
 }
 
 fn is_forbidden_env_key(key: &str) -> bool {
-    const FORBIDDEN: &[&str] = &[
-        "LD_PRELOAD",
-        "LD_AUDIT",
-        "LD_LIBRARY_PATH",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-        "DYLD_FORCE_FLAT_NAMESPACE",
-    ];
-    FORBIDDEN
-        .iter()
-        .any(|forbidden| key.eq_ignore_ascii_case(forbidden))
+    is_forbidden_inherit_env_key(key)
 }
 
 /// Backend that always reports unavailable (fail-closed default).
