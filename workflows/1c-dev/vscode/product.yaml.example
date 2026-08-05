@@ -1,4 +1,4 @@
-# Copy to <project>/.kuibyshev/product.yaml and adjust for this product.
+# Copy to <project>/.kuibysheff/product.yaml and adjust for this product.
 # Paths are relative to the VS Code / --project-root folder unless absolute.
 
 id: my-product

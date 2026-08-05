@@ -1,6 +1,6 @@
 # 1c-intake
 
-Stage 1 of the [1C Kuibyshev workflow](../../workflows/1c-dev/README.md): Jira/Confluence → `task_brief.md`.
+Stage 1 of the [1C Kuibysheff workflow](../../workflows/1c-dev/README.md): Jira/Confluence → `task_brief.md`.
 
 ## Dependencies
 

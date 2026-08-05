@@ -1,18 +1,18 @@
-//! Resolve agent paths under a project's `.kuibyshev` directory.
+//! Resolve agent paths under a project's `.kuibysheff` directory.
 
 use std::path::{Path, PathBuf};
 
-/// Directory name for per-project Kuibyshev settings and run homes.
-pub const KUIBYSHEV_DIR: &str = ".kuibyshev";
+/// Directory name for per-project Kuibysheff settings and run homes.
+pub const KUIBYSHEFF_DIR: &str = ".kuibysheff";
 
 /// When `project_root` is set, resolve a relative `path` against
-/// `{project_root}/.kuibyshev/`. Absolute paths are returned unchanged.
+/// `{project_root}/.kuibysheff/`. Absolute paths are returned unchanged.
 #[must_use]
-pub fn resolve_under_kuibyshev(project_root: &Path, path: &Path) -> PathBuf {
+pub fn resolve_under_kuibysheff(project_root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    project_root.join(KUIBYSHEV_DIR).join(path)
+    project_root.join(KUIBYSHEFF_DIR).join(path)
 }
 
 /// Resolve config / settings-dir / home for a worker or ACP turn.
@@ -25,9 +25,9 @@ pub fn resolve_agent_paths(
 ) -> (PathBuf, PathBuf, PathBuf) {
     match project_root {
         Some(root) => (
-            resolve_under_kuibyshev(root, config),
-            resolve_under_kuibyshev(root, settings_dir),
-            resolve_under_kuibyshev(root, home),
+            resolve_under_kuibysheff(root, config),
+            resolve_under_kuibysheff(root, settings_dir),
+            resolve_under_kuibysheff(root, home),
         ),
         None => (
             config.to_path_buf(),
@@ -62,14 +62,17 @@ mod tests {
         let abs = PathBuf::from(r"C:\abs\config.yaml");
         #[cfg(not(windows))]
         let abs = PathBuf::from("/abs/config.yaml");
-        assert_eq!(resolve_under_kuibyshev(root, &abs), abs);
+        assert_eq!(resolve_under_kuibysheff(root, &abs), abs);
     }
 
     #[test]
-    fn relative_paths_join_kuibyshev() {
+    fn relative_paths_join_kuibysheff() {
         let root = PathBuf::from("proj");
-        let resolved = resolve_under_kuibyshev(&root, Path::new("agents/1c-analyst"));
-        assert_eq!(resolved, root.join(KUIBYSHEV_DIR).join("agents/1c-analyst"));
+        let resolved = resolve_under_kuibysheff(&root, Path::new("agents/1c-analyst"));
+        assert_eq!(
+            resolved,
+            root.join(KUIBYSHEFF_DIR).join("agents/1c-analyst")
+        );
     }
 
     #[test]

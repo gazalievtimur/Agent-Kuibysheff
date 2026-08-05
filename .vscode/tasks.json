@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "kuibyshev-extension: compile",
+      "label": "kuibysheff-extension: compile",
       "type": "npm",
       "script": "compile",
       "path": "extensions/vscode/",
@@ -13,7 +13,7 @@
       }
     },
     {
-      "label": "kuibyshev-extension: watch",
+      "label": "kuibysheff-extension: watch",
       "type": "npm",
       "script": "watch",
       "path": "extensions/vscode/",

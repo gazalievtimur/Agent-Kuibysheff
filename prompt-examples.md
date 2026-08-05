@@ -1,4 +1,4 @@
-# Prompt examples for agent_Kuibyshev
+# Prompt examples for agent_Kuibysheff
 
 Use these as `--prompt` values when calling the CLI or when configuring an
 external orchestrator.
@@ -45,7 +45,7 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config .\agent-config.local-demo.yaml `
   --settings-dir .\settings `
   --prompt "Summarize the attached README in 5-8 bullet points.`n`nRequired steps:`n1. First response: done=false, one home.write call creating out/summary.md`n2. Second response: done=false, one home.write call creating out/manifest.json`n3. Third response: done=true with a short result`n`nReturn JSON only on every turn." `

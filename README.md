@@ -1,6 +1,6 @@
-# agent_Kuibyshev
+# agent_Kuibysheff
 
-[![CI](https://github.com/gybson63/Agent-Kuibyshev/actions/workflows/ci.yml/badge.svg)](https://github.com/gybson63/Agent-Kuibyshev/actions/workflows/ci.yml)
+[![CI](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml/badge.svg)](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml)
 
 Minimal and reliable CLI agent worker in Rust.
 
@@ -27,12 +27,16 @@ and `scripts/1c-dev-run.ps1`. To drive the same four stages from **VS Code via
 ACP** (human switches agents; prepare/promote helper), see
 [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
 
+For a **live Advent of Code** example that speaks ACP stdio from a Python
+singleton (download puzzle → agent solve → submit → retry ≤5), see
+[workflows/aoc-live/README.md](workflows/aoc-live/README.md).
+
 ## Inputs
 
 Worker (`run`):
 
 ```text
-agent_Kuibyshev run \
+agent_Kuibysheff run \
   --config <FILE> \
   --settings-dir <DIR> \
   --prompt <TEXT> \
@@ -42,13 +46,13 @@ agent_Kuibyshev run \
 ```
 
 With `--project-root`, relative `--config` / `--settings-dir` / `--home` resolve
-under `{project-root}/.kuibyshev/`.
+under `{project-root}/.kuibysheff/`.
 
 Scaffold a new agent profile:
 
 ```text
-agent_Kuibyshev help
-agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+agent_Kuibysheff help
+agent_Kuibysheff init <agent-id> [--path DIR] [--force] [-i|--interactive]
 ```
 
 Creates `./<agent-id>/` (or `--path`) with settings files and
@@ -57,7 +61,7 @@ Creates `./<agent-id>/` (or `--path`) with settings files and
 Check that configured resources are reachable before a run:
 
 ```text
-agent_Kuibyshev check --config <FILE> [--settings-dir <DIR>]
+agent_Kuibysheff check --config <FILE> [--settings-dir <DIR>]
 ```
 
 Probes the provider API key/HTTP endpoint, each MCP server, access paths and
@@ -70,7 +74,7 @@ To use this agent from VS Code, a messenger bridge, or another ACP client, run
 the ACP stdio server instead of one-shot `run`:
 
 ```text
-agent_Kuibyshev acp \
+agent_Kuibysheff acp \
   --config <FILE> \
   --settings-dir <DIR> \
   --home <DIR> \
@@ -82,13 +86,13 @@ separate `stderr` pipe and drain it. Prefer one long-lived process per config.
 Each `session/prompt` is independent — the bridge owns chat/mail thread history.
 Messenger and email credentials stay in the external app, not in this binary.
 
-VS Code’s Agent Host speaks AHP to the UI; Kuibyshev is the ACP backend.
+VS Code’s Agent Host speaks AHP to the UI; Kuibysheff is the ACP backend.
 For **1C products**, open the product folder as the workspace, scaffold
-`.kuibyshev/` (`scripts/1c-dev-scaffold-project.ps1` or the
+`.kuibysheff/` (`scripts/1c-dev-scaffold-project.ps1` or the
 [`extensions/vscode`](extensions/vscode/) sidebar), and use the ACP preset in
 [`workflows/1c-dev/vscode/`](workflows/1c-dev/vscode/). Session `cwd` /
 `--project-root` point at that folder; agent MCP/workspace settings live in
-`.kuibyshev/agents/*/agent-config.yaml`. Guide:
+`.kuibysheff/agents/*/agent-config.yaml`. Guide:
 [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
 Extension README: [extensions/vscode/README.md](extensions/vscode/README.md).
 
@@ -98,30 +102,30 @@ bridge contract.
 ## Releases
 
 Prebuilt binaries for Windows and Linux are published on
-[GitHub Releases](https://github.com/gybson63/Agent-Kuibyshev/releases)
+[GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases)
 when a version tag is pushed.
 
 | Platform | Archive |
 | --- | --- |
-| Windows x86_64 | `agent_Kuibyshev-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
-| Linux x86_64 | `agent_Kuibyshev-vX.Y.Z-x86_64-unknown-linux-gnu.zip` |
+| Windows x86_64 | `agent_Kuibysheff-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
+| Linux x86_64 | `agent_Kuibysheff-vX.Y.Z-x86_64-unknown-linux-gnu.zip` |
 
-Each archive contains the `agent_Kuibyshev` binary. A matching
+Each archive contains the `agent_Kuibysheff` binary. A matching
 `.zip.sha256` checksum file is attached to the release.
 
 PowerShell (Windows):
 
 ```powershell
 # After downloading and extracting the zip:
-.\agent_Kuibyshev-v0.1.0-x86_64-pc-windows-msvc.exe --help
+.\agent_Kuibysheff-v0.1.0-x86_64-pc-windows-msvc.exe --help
 ```
 
 Bash (Linux):
 
 ```bash
 # After downloading and extracting the zip:
-chmod +x ./agent_Kuibyshev-v0.1.0-x86_64-unknown-linux-gnu
-./agent_Kuibyshev-v0.1.0-x86_64-unknown-linux-gnu --help
+chmod +x ./agent_Kuibysheff-v0.1.0-x86_64-unknown-linux-gnu
+./agent_Kuibysheff-v0.1.0-x86_64-unknown-linux-gnu --help
 ```
 
 To cut a release from a commit on `main`:
@@ -133,7 +137,7 @@ git push origin v0.1.0
 ```
 
 The [Release](.github/workflows/release.yml) workflow builds
-`--release --locked --bin agent_Kuibyshev` on `windows-latest` and
+`--release --locked --bin agent_Kuibysheff` on `windows-latest` and
 `ubuntu-latest`, then uploads the zips to a GitHub Release for that tag.
 
 ## Quick start
@@ -155,7 +159,7 @@ Copy-Item .env.example .env
 
 # Option C: explicit environment variable
 $env:POLZA_API_KEY = "your_api_key"
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config ./agent-config.local-demo.yaml `
   --settings-dir ./settings `
   --prompt "Summarize the attached README into out/summary.md" `
@@ -176,12 +180,12 @@ This run uses:
 - Built-in repository research tools (`local_tools.search_docs`, `local_tools.read_file`)
 - Built-in filesystem tools restricted to `./demo-home`
 - Agent behavior from the `./settings` directory
-- JSONL event logs and tracing output in `~/.agent-kuibyshev/logs` by default
+- JSONL event logs and tracing output in `~/.agent-kuibysheff/logs` by default
 
 Runtime limit overrides remain available:
 
 ```powershell
-cargo run --bin agent_Kuibyshev -- run <required arguments> `
+cargo run --bin agent_Kuibysheff -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
@@ -331,9 +335,9 @@ The CLI prints exactly one JSON document to stdout:
   },
   "stop_reason": "goal_reached",
   "logs": {
-    "ai_log": "~/.agent-kuibyshev/logs/ai_usage.jsonl",
-    "mcp_log": "~/.agent-kuibyshev/logs/mcp_usage.jsonl",
-    "system_log": "~/.agent-kuibyshev/logs/agent.trace.log",
+    "ai_log": "~/.agent-kuibysheff/logs/ai_usage.jsonl",
+    "mcp_log": "~/.agent-kuibysheff/logs/mcp_usage.jsonl",
+    "system_log": "~/.agent-kuibysheff/logs/agent.trace.log",
     "chat_log": null
   }
 }
@@ -346,7 +350,7 @@ and do not emit `RunOutput`.
 
 ## Logging
 
-By default the agent writes detailed logs under `~/.agent-kuibyshev/logs`:
+By default the agent writes detailed logs under `~/.agent-kuibysheff/logs`:
 
 | File | Content |
 |------|---------|
@@ -368,7 +372,7 @@ for a later implementation.
 Enable full chat history from the CLI:
 
 ```powershell
-cargo run --bin agent_Kuibyshev -- run ... --save-chat-history
+cargo run --bin agent_Kuibysheff -- run ... --save-chat-history
 ```
 
 Example:
@@ -380,7 +384,7 @@ logging:
   enable_chat_history: false
   sink:
     type: file
-    # path: "./custom-logs"   # optional; defaults to ~/.agent-kuibyshev/logs
+    # path: "./custom-logs"   # optional; defaults to ~/.agent-kuibysheff/logs
 ```
 
 ## Skills DSL

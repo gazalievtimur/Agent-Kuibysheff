@@ -332,7 +332,7 @@ access:
         $stdoutPath = Join-Path $homeDir "agent.stdout.json"
         $stderrPath = Join-Path $homeDir "agent.stderr.txt"
 
-        $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibyshev.exe"
+        $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibysheff.exe"
         $effectiveConfig = $runConfigPath
 
         $entry = [ordered]@{

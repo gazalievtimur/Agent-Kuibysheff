@@ -1,13 +1,13 @@
-# Kuibyshev VS Code extension
+# Kuibysheff VS Code extension
 
-Manage Kuibyshev agent parameters and the 1C ACP workflow from the sidebar.
+Manage Kuibysheff agent parameters and the 1C ACP workflow from the sidebar.
 
-This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host still talks ACP to `agent_Kuibyshev acp`. The extension configures YAML, syncs `acp.agents`, scaffolds `.kuibyshev/`, and runs prepare / promote / validate / approve via the existing PowerShell scripts.
+This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host still talks ACP to `agent_Kuibysheff acp`. The extension configures YAML, syncs `acp.agents`, scaffolds `.kuibysheff/`, and runs prepare / promote / validate / approve via the existing PowerShell scripts.
 
 ## Features
 
-- **Sidebar** — agents under `.kuibyshev/agents`, workflow stage status, quick actions
-- **Config editor** — provider, limits, MCP, access, logging (webview); Validate runs `agent_Kuibyshev check`
+- **Sidebar** — agents under `.kuibysheff/agents`, workflow stage status, quick actions
+- **Config editor** — provider, limits, MCP, access, logging (webview); Validate runs `agent_Kuibysheff check`
 - **Sync ACP** — writes `acp.agents` into `.vscode/settings.json`
 - **Scaffold** — wraps `scripts/1c-dev-scaffold-project.ps1`
 - **Workflow** — wraps `scripts/1c-dev-acp-prepare.ps1` (prepare / promote / validate / approve)
@@ -15,16 +15,16 @@ This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host 
 ## Requirements
 
 - Windows + PowerShell (same as current 1C workflow scripts)
-- `agent_Kuibyshev` on `PATH` (or set `kuibyshev.binaryPath`)
-- Kuibyshev install path in `kuibyshev.repoRoot` (scripts + templates)
+- `agent_Kuibysheff` on `PATH` (or set `kuibysheff.binaryPath`)
+- Kuibysheff install path in `kuibysheff.repoRoot` (scripts + templates)
 
 ## Settings
 
 | Setting | Description |
 |---------|-------------|
-| `kuibyshev.repoRoot` | Absolute path to the **Agent Kuibyshev** clone (with `scripts/…`), **not** the product folder |
-| `kuibyshev.binaryPath` | Binary name/path (default `agent_Kuibyshev`) |
-| `kuibyshev.defaultIssueKey` | Default issue key for Prepare |
+| `kuibysheff.repoRoot` | Absolute path to the **Agent Kuibysheff** clone (with `scripts/…`), **not** the product folder |
+| `kuibysheff.binaryPath` | Binary name/path (default `agent_Kuibysheff`) |
+| `kuibysheff.defaultIssueKey` | Default issue key for Prepare |
 
 ## Develop / run
 
@@ -36,17 +36,17 @@ npm install
 npm run compile
 ```
 
-Then in VS Code: **Run and Debug → Run Kuibyshev Extension** (F5). That launches an Extension Development Host with this package.
+Then in VS Code: **Run and Debug → Run Kuibysheff Extension** (F5). That launches an Extension Development Host with this package.
 
 Or install a local VSIX after `npx @vscode/vsce package` from `extensions/vscode`.
 
 ## Typical flow
 
 1. Open the **product** folder in VS Code (not necessarily this repo).
-2. Set `kuibyshev.repoRoot` to your Kuibyshev install.
-3. Command **Kuibyshev: Scaffold project** (or sidebar Actions).
+2. Set `kuibysheff.repoRoot` to your Kuibysheff install.
+3. Command **Kuibysheff: Scaffold project** (or sidebar Actions).
 4. Open an agent → edit provider / MCP / `workspace.root` → **Save** → **Validate**.
 5. **Prepare stage** → copy chat starter → chat with the matching ACP agent (`1c-analyst`, …).
 6. Promote / Validate / Approve plan as needed.
 
-See also [workflows/1c-dev/VSCODE.md](https://github.com/gybson63/Agent-Kuibyshev/blob/main/workflows/1c-dev/VSCODE.md).
+See also [workflows/1c-dev/VSCODE.md](https://github.com/gybson63/Agent-Kuibysheff/blob/main/workflows/1c-dev/VSCODE.md).

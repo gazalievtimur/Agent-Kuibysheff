@@ -95,7 +95,7 @@ access:
     )
     .expect("config");
 
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_agent_Kuibyshev"));
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_agent_Kuibysheff"));
     let mut child = Command::new(&bin)
         .args([
             "acp",
@@ -112,7 +112,7 @@ access:
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn agent_Kuibyshev acp");
+        .expect("spawn agent_Kuibysheff acp");
 
     let child_stdin = child.stdin.take().expect("child stdin");
     let child_stdout = child.stdout.take().expect("child stdout");

@@ -3,7 +3,7 @@ name = "sandbox-linux"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.86"
-description = "Linux namespace sandbox FFI for agent_Kuibyshev home.run"
+description = "Linux namespace sandbox FFI for agent_Kuibysheff home.run"
 license = "MIT"
 publish = false
 

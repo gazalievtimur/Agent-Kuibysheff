@@ -5,14 +5,14 @@ import {
   AGENT_PROFILES,
   artifactFlags,
   getWorkspaceRoot,
-  hasKuibyshev,
+  hasKuibysheff,
   listAgentIds,
   stageHome,
 } from "../paths";
 
 export type TreeNodeKind = "section" | "agent" | "action" | "info";
 
-export class KuibyshevTreeItem extends vscode.TreeItem {
+export class KuibysheffTreeItem extends vscode.TreeItem {
   constructor(
     public readonly label: string,
     public readonly kind: TreeNodeKind,
@@ -29,13 +29,13 @@ export class KuibyshevTreeItem extends vscode.TreeItem {
     if (kind === "agent" && agentId) {
       this.iconPath = new vscode.ThemeIcon("robot");
       this.command = {
-        command: "kuibyshev.editAgent",
+        command: "kuibysheff.editAgent",
         title: "Edit agent",
         arguments: [{ agentId }],
       };
       const configPath = path.join(
         getWorkspaceRoot() ?? "",
-        ".kuibyshev",
+        ".kuibysheff",
         "agents",
         agentId,
         "agent-config.yaml",
@@ -53,9 +53,9 @@ export class KuibyshevTreeItem extends vscode.TreeItem {
   }
 }
 
-export class AgentsTreeProvider implements vscode.TreeDataProvider<KuibyshevTreeItem> {
+export class AgentsTreeProvider implements vscode.TreeDataProvider<KuibysheffTreeItem> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<
-    KuibyshevTreeItem | undefined | void
+    KuibysheffTreeItem | undefined | void
   >();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -63,28 +63,28 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<KuibyshevTree
     this._onDidChangeTreeData.fire();
   }
 
-  getTreeItem(element: KuibyshevTreeItem): vscode.TreeItem {
+  getTreeItem(element: KuibysheffTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(element?: KuibyshevTreeItem): KuibyshevTreeItem[] {
+  getChildren(element?: KuibysheffTreeItem): KuibysheffTreeItem[] {
     const root = getWorkspaceRoot();
     if (!element) {
       if (!root) {
         return [
-          new KuibyshevTreeItem("Open a product folder workspace", "info"),
+          new KuibysheffTreeItem("Open a product folder workspace", "info"),
         ];
       }
-      if (!hasKuibyshev(root)) {
+      if (!hasKuibysheff(root)) {
         return [
-          new KuibyshevTreeItem("No .kuibyshev — run Scaffold", "info"),
-          new KuibyshevTreeItem("Scaffold project", "action", undefined, "kuibyshev.scaffold"),
+          new KuibysheffTreeItem("No .kuibysheff — run Scaffold", "info"),
+          new KuibysheffTreeItem("Scaffold project", "action", undefined, "kuibysheff.scaffold"),
         ];
       }
       return [
-        new KuibyshevTreeItem("Agents", "section"),
-        new KuibyshevTreeItem("Workflow", "section"),
-        new KuibyshevTreeItem("Actions", "section"),
+        new KuibysheffTreeItem("Agents", "section"),
+        new KuibysheffTreeItem("Workflow", "section"),
+        new KuibysheffTreeItem("Actions", "section"),
       ];
     }
 
@@ -95,26 +95,26 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<KuibyshevTree
     if (element.label === "Agents") {
       const ids = listAgentIds(root);
       if (!ids.length) {
-        return [new KuibyshevTreeItem("No agent profiles", "info")];
+        return [new KuibysheffTreeItem("No agent profiles", "info")];
       }
-      return ids.map((id) => new KuibyshevTreeItem(id, "agent", id));
+      return ids.map((id) => new KuibysheffTreeItem(id, "agent", id));
     }
 
     if (element.label === "Workflow") {
       const flags = artifactFlags(root);
-      const items: KuibyshevTreeItem[] = [];
+      const items: KuibysheffTreeItem[] = [];
       for (const profile of AGENT_PROFILES) {
         const home = stageHome(root, profile.stage);
         const ready = fs.existsSync(path.join(home, "stage_prompt.md"));
         items.push(
-          new KuibyshevTreeItem(
+          new KuibysheffTreeItem(
             `Stage ${profile.stage} (${profile.id}): ${ready ? "prepared" : "idle"}`,
             "info",
           ),
         );
       }
       items.push(
-        new KuibyshevTreeItem(
+        new KuibysheffTreeItem(
           `Artifacts: brief=${yn(flags.brief)} plan=${yn(flags.plan)} approved=${yn(flags.approved)} code=${yn(flags.code)} cfe=${yn(flags.cfe)}`,
           "info",
         ),
@@ -124,19 +124,19 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<KuibyshevTree
 
     if (element.label === "Actions") {
       return [
-        new KuibyshevTreeItem("Prepare stage", "action", undefined, "kuibyshev.prepare"),
-        new KuibyshevTreeItem("Promote", "action", undefined, "kuibyshev.promote"),
-        new KuibyshevTreeItem("Validate", "action", undefined, "kuibyshev.validate"),
-        new KuibyshevTreeItem(
+        new KuibysheffTreeItem("Prepare stage", "action", undefined, "kuibysheff.prepare"),
+        new KuibysheffTreeItem("Promote", "action", undefined, "kuibysheff.promote"),
+        new KuibysheffTreeItem("Validate", "action", undefined, "kuibysheff.validate"),
+        new KuibysheffTreeItem(
           "Promote + Validate",
           "action",
           undefined,
-          "kuibyshev.promoteAndValidate",
+          "kuibysheff.promoteAndValidate",
         ),
-        new KuibyshevTreeItem("Approve plan", "action", undefined, "kuibyshev.approvePlan"),
-        new KuibyshevTreeItem("Copy chat starter", "action", undefined, "kuibyshev.copyChatStarter"),
-        new KuibyshevTreeItem("Sync ACP agents", "action", undefined, "kuibyshev.syncAcp"),
-        new KuibyshevTreeItem("Scaffold project", "action", undefined, "kuibyshev.scaffold"),
+        new KuibysheffTreeItem("Approve plan", "action", undefined, "kuibysheff.approvePlan"),
+        new KuibysheffTreeItem("Copy chat starter", "action", undefined, "kuibysheff.copyChatStarter"),
+        new KuibysheffTreeItem("Sync ACP agents", "action", undefined, "kuibysheff.syncAcp"),
+        new KuibysheffTreeItem("Scaffold project", "action", undefined, "kuibysheff.scaffold"),
       ];
     }
 

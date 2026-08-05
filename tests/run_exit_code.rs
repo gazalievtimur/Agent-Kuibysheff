@@ -11,7 +11,7 @@ fn run_prints_error_json_and_exits_nonzero() {
     let missing_config = tmp.path().join("missing-config.yaml");
     let home = tmp.path().join("home");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibyshev"))
+    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
         .args([
             "run",
             "--config",
@@ -24,7 +24,7 @@ fn run_prints_error_json_and_exits_nonzero() {
             home.to_str().expect("utf-8 path"),
         ])
         .output()
-        .expect("spawn agent_Kuibyshev");
+        .expect("spawn agent_Kuibysheff");
 
     assert!(
         !output.status.success(),
@@ -46,7 +46,7 @@ fn check_keeps_its_own_exit_semantics() {
     let tmp = tempdir().expect("tempdir");
     let missing_config = tmp.path().join("missing-config.yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibyshev"))
+    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
         .args([
             "check",
             "--config",
@@ -56,7 +56,7 @@ fn check_keeps_its_own_exit_semantics() {
             "--skip-sandbox",
         ])
         .output()
-        .expect("spawn agent_Kuibyshev check");
+        .expect("spawn agent_Kuibysheff check");
 
     assert!(
         !output.status.success(),

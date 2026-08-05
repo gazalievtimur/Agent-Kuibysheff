@@ -1,6 +1,6 @@
-# Architecture of agent_Kuibyshev
+# Architecture of agent_Kuibysheff
 
-`agent_Kuibyshev` is a minimal, reliable CLI agent worker written in Rust. It is designed to be invoked by an external orchestrator, run a single task inside an isolated sandbox, and emit exactly one JSON result on stdout. This document describes the high-level architecture, module responsibilities, and security boundaries.
+`agent_Kuibysheff` is a minimal, reliable CLI agent worker written in Rust. It is designed to be invoked by an external orchestrator, run a single task inside an isolated sandbox, and emit exactly one JSON result on stdout. This document describes the high-level architecture, module responsibilities, and security boundaries.
 
 ## Goals
 
@@ -16,14 +16,14 @@ The repository is a Cargo workspace with three crates:
 
 | Crate | Path | Role |
 |-------|------|------|
-| `agent_Kuibyshev` | repository root | Main library and CLI binary. Forbids `unsafe_code` at the lint level. |
+| `agent_Kuibysheff` | repository root | Main library and CLI binary. Forbids `unsafe_code` at the lint level. |
 | `sandbox-linux` | `crates/sandbox-linux` | Linux namespace sandbox with `libc` FFI. Contains all Linux-specific `unsafe`. |
 | `sandbox-windows` | `crates/sandbox-windows` | Windows AppContainer sandbox with `windows-sys` FFI. Contains all Windows-specific `unsafe`. |
 
 ```mermaid
 flowchart TD
     subgraph workspace [Cargo workspace]
-        AGENT[agent_Kuibyshev]
+        AGENT[agent_Kuibysheff]
         LX[sandbox-linux]
         WX[sandbox-windows]
     end
@@ -98,12 +98,12 @@ flowchart TD
 
 ACP over stdio is the shared integration boundary for IDE hosts and for external
 messenger/mail bridges. VS Code owns the Agent Host Protocol (AHP) sessions
-server; Kuibyshev plugs in as an ACP agent. Bridges spawn the same `acp`
+server; Kuibysheff plugs in as an ACP agent. Bridges spawn the same `acp`
 subcommand with three separate pipes:
 
 ```text
-Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibyshev acp
-Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ agent_Kuibyshev acp
+Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibysheff acp
+Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ agent_Kuibysheff acp
 ```
 
 `src/acp/` handles initialize / session lifecycle / prompt turns and forwards
@@ -191,7 +191,7 @@ All `unsafe` code is isolated in the two sandbox crates. The root crate is compi
 
 ```mermaid
 flowchart TD
-    AGENT[agent_Kuibyshev crate no unsafe]
+    AGENT[agent_Kuibysheff crate no unsafe]
     RUNNER[SandboxRunner src/sandbox/mod.rs]
     NATIVE[native.rs adapters]
 

@@ -26,13 +26,13 @@ impl AppContainerProfile {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let name = format!("agent.kuibyshev.sb.{nanos}");
+        let name = format!("agent.kuibysheff.sb.{nanos}");
         Self::create(&name)
     }
 
     fn create(name: &str) -> Result<Self, SandboxWindowsError> {
         let wide_name = to_wide_null(name);
-        let wide_display = to_wide_null("agent_Kuibyshev sandbox");
+        let wide_display = to_wide_null("agent_Kuibysheff sandbox");
         let wide_desc = to_wide_null("Temporary AppContainer for home.run");
         let mut sid: PSID = ptr::null_mut();
 

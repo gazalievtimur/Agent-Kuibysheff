@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::request::SandboxLaunchRequest;
 
-pub(crate) const HELPER_ENV: &str = "AGENT_KUIBYSHEV_LINUX_SANDBOX_HELPER";
-pub(crate) const REQUEST_ENV: &str = "AGENT_KUIBYSHEV_LINUX_SANDBOX_REQUEST";
+pub(crate) const HELPER_ENV: &str = "AGENT_KUIBYSHEFF_LINUX_SANDBOX_HELPER";
+pub(crate) const REQUEST_ENV: &str = "AGENT_KUIBYSHEFF_LINUX_SANDBOX_REQUEST";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HelperRequest {

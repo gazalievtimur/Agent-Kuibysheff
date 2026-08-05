@@ -175,7 +175,7 @@ REPORT_TASKS_JSON='[]'
 echo "AoC eval run=$RUN_ID bank=$BANK_DIR tasks=${#TASK_LINES[@]}"
 echo "config=$CONFIG settings=$SETTINGS_DIR model=$PROVIDER_MODEL"
 
-AGENT_BIN="$REPO_ROOT/target/release/agent_Kuibyshev"
+AGENT_BIN="$REPO_ROOT/target/release/agent_Kuibysheff"
 if [[ ! -x "$AGENT_BIN" ]]; then
   echo "Release binary missing: $AGENT_BIN (run cargo build --release first)" >&2
   exit 1

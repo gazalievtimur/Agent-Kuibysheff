@@ -13,7 +13,7 @@ libc = "0.2"
 windows-sys = "0.59"
 
 [package]
-name = "agent_Kuibyshev"
+name = "agent_Kuibysheff"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
@@ -63,7 +63,7 @@ codegen-units = 1
 strip = true
 
 [[bin]]
-name = "agent_Kuibyshev"
+name = "agent_Kuibysheff"
 path = "src/main.rs"
 
 [[bin]]

@@ -21,10 +21,10 @@
       "default": ""
     },
     {
-      "id": "kuibyshevRoot",
+      "id": "kuibysheffRoot",
       "type": "promptString",
-      "description": "Absolute path to Agent Kuibyshev install (for prepare script)",
-      "default": "C:/Git/Agent Kuibyshev"
+      "description": "Absolute path to Agent Kuibysheff install (for prepare script)",
+      "default": "C:/Git/Agent Kuibysheff"
     }
   ],
   "tasks": [
@@ -37,11 +37,11 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${input:kuibyshevRoot}/scripts/1c-dev-acp-prepare.ps1",
+        "${input:kuibysheffRoot}/scripts/1c-dev-acp-prepare.ps1",
         "-ProjectRoot",
         "${workspaceFolder}",
         "-RepoRoot",
-        "${input:kuibyshevRoot}",
+        "${input:kuibysheffRoot}",
         "-IssueKey",
         "${input:1cIssueKey}",
         "-Stage",
@@ -67,7 +67,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${input:kuibyshevRoot}/scripts/1c-dev-acp-prepare.ps1",
+        "${input:kuibysheffRoot}/scripts/1c-dev-acp-prepare.ps1",
         "-ProjectRoot",
         "${workspaceFolder}",
         "-ApprovePlan"
@@ -90,7 +90,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${input:kuibyshevRoot}/scripts/1c-dev-acp-prepare.ps1",
+        "${input:kuibysheffRoot}/scripts/1c-dev-acp-prepare.ps1",
         "-ProjectRoot",
         "${workspaceFolder}",
         "-Stage",
@@ -115,7 +115,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${input:kuibyshevRoot}/scripts/1c-dev-acp-prepare.ps1",
+        "${input:kuibysheffRoot}/scripts/1c-dev-acp-prepare.ps1",
         "-ProjectRoot",
         "${workspaceFolder}",
         "-Stage",
@@ -140,7 +140,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${input:kuibyshevRoot}/scripts/1c-dev-acp-prepare.ps1",
+        "${input:kuibysheffRoot}/scripts/1c-dev-acp-prepare.ps1",
         "-ProjectRoot",
         "${workspaceFolder}",
         "-Stage",

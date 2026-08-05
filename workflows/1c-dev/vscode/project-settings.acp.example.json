@@ -1,7 +1,7 @@
 {
   "acp.agents": {
     "1c-intake": {
-      "command": "agent_Kuibyshev",
+      "command": "agent_Kuibysheff",
       "args": [
         "acp",
         "--project-root",
@@ -15,7 +15,7 @@
       ]
     },
     "1c-analyst": {
-      "command": "agent_Kuibyshev",
+      "command": "agent_Kuibysheff",
       "args": [
         "acp",
         "--project-root",
@@ -29,7 +29,7 @@
       ]
     },
     "1c-coder": {
-      "command": "agent_Kuibyshev",
+      "command": "agent_Kuibysheff",
       "args": [
         "acp",
         "--project-root",
@@ -43,7 +43,7 @@
       ]
     },
     "1c-implementer": {
-      "command": "agent_Kuibyshev",
+      "command": "agent_Kuibysheff",
       "args": [
         "acp",
         "--project-root",

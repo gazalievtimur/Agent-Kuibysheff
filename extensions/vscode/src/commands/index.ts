@@ -14,7 +14,7 @@ import {
   runPowerShellScript,
   scaffoldScript,
 } from "../process/runBinary";
-import { ensureRepoRoot, getDefaultIssueKey, isKuibyshevInstall } from "../settings";
+import { ensureRepoRoot, getDefaultIssueKey, isKuibysheffInstall } from "../settings";
 import { AgentsTreeProvider } from "../views/agentsTree";
 import { openAgentConfigEditor } from "../views/configWebview";
 
@@ -24,7 +24,7 @@ let sharedOutput: vscode.OutputChannel | undefined;
 
 function getOutput(): vscode.OutputChannel {
   if (!sharedOutput) {
-    sharedOutput = vscode.window.createOutputChannel("Kuibyshev");
+    sharedOutput = vscode.window.createOutputChannel("Kuibysheff");
   }
   return sharedOutput;
 }
@@ -50,7 +50,7 @@ async function pickAgentId(preferred?: string): Promise<string | undefined> {
   const ids = listAgentIds(root);
   if (!ids.length) {
     vscode.window.showWarningMessage(
-      "No agents under .kuibyshev/agents. Run Kuibyshev: Scaffold project.",
+      "No agents under .kuibysheff/agents. Run Kuibysheff: Scaffold project.",
     );
     return undefined;
   }
@@ -87,9 +87,9 @@ export function registerCommands(
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
   };
 
-  register("kuibyshev.refresh", () => tree.refresh());
+  register("kuibysheff.refresh", () => tree.refresh());
 
-  register("kuibyshev.scaffold", async () => {
+  register("kuibysheff.scaffold", async () => {
     const workspaceRoot = requireWorkspace();
     if (!workspaceRoot) {
       return;
@@ -98,15 +98,15 @@ export function registerCommands(
     if (!repoRoot) {
       return;
     }
-    if (!isKuibyshevInstall(repoRoot)) {
+    if (!isKuibysheffInstall(repoRoot)) {
       vscode.window.showErrorMessage(
-        `kuibyshev.repoRoot is not a Kuibyshev install: ${repoRoot}`,
+        `kuibysheff.repoRoot is not a Kuibysheff install: ${repoRoot}`,
       );
       return;
     }
 
     const force = await vscode.window.showWarningMessage(
-      "Scaffold .kuibyshev into this workspace?",
+      "Scaffold .kuibysheff into this workspace?",
       { modal: true },
       "Scaffold",
       "Force overwrite",
@@ -133,7 +133,7 @@ export function registerCommands(
 
     if (result.code !== 0) {
       vscode.window.showErrorMessage(
-        `Scaffold failed (exit ${result.code}). See Kuibyshev output.`,
+        `Scaffold failed (exit ${result.code}). See Kuibysheff output.`,
       );
       return;
     }
@@ -158,7 +158,7 @@ export function registerCommands(
     }
   });
 
-  register("kuibyshev.syncAcp", async () => {
+  register("kuibysheff.syncAcp", async () => {
     try {
       const result = await syncAcpAgents();
       tree.refresh();
@@ -170,7 +170,7 @@ export function registerCommands(
     }
   });
 
-  register("kuibyshev.editAgent", async (item?: unknown) => {
+  register("kuibysheff.editAgent", async (item?: unknown) => {
     const id = await pickAgentId(agentIdFromArg(item));
     if (!id) {
       return;
@@ -178,7 +178,7 @@ export function registerCommands(
     await openAgentConfigEditor(context, id);
   });
 
-  register("kuibyshev.openYaml", async (item?: unknown) => {
+  register("kuibysheff.openYaml", async (item?: unknown) => {
     const root = requireWorkspace();
     if (!root) {
       return;
@@ -189,7 +189,7 @@ export function registerCommands(
     }
     const file = path.join(
       root,
-      ".kuibyshev",
+      ".kuibysheff",
       "agents",
       id,
       "agent-config.yaml",
@@ -202,7 +202,7 @@ export function registerCommands(
     await vscode.window.showTextDocument(doc);
   });
 
-  register("kuibyshev.check", async (item?: unknown) => {
+  register("kuibysheff.check", async (item?: unknown) => {
     const root = requireWorkspace();
     if (!root) {
       return;
@@ -227,18 +227,18 @@ export function registerCommands(
       vscode.window.showInformationMessage(`Check OK: ${id}`);
     } else {
       vscode.window.showErrorMessage(
-        `Check failed for ${id}. See Kuibyshev output.`,
+        `Check failed for ${id}. See Kuibysheff output.`,
       );
     }
     tree.refresh();
   });
 
-  register("kuibyshev.prepare", async () => {
+  register("kuibysheff.prepare", async () => {
     await runPrepare({});
     tree.refresh();
   });
 
-  register("kuibyshev.promote", async () => {
+  register("kuibysheff.promote", async () => {
     const stage = await pickStageQuick("Promote stage");
     if (!stage) {
       return;
@@ -247,7 +247,7 @@ export function registerCommands(
     tree.refresh();
   });
 
-  register("kuibyshev.validate", async () => {
+  register("kuibysheff.validate", async () => {
     const stage = await pickStageQuick("Validate stage");
     if (!stage) {
       return;
@@ -256,7 +256,7 @@ export function registerCommands(
     tree.refresh();
   });
 
-  register("kuibyshev.promoteAndValidate", async () => {
+  register("kuibysheff.promoteAndValidate", async () => {
     const stage = await pickStageQuick("Promote and validate");
     if (!stage) {
       return;
@@ -265,12 +265,12 @@ export function registerCommands(
     tree.refresh();
   });
 
-  register("kuibyshev.approvePlan", async () => {
+  register("kuibysheff.approvePlan", async () => {
     await runPrepare({ approvePlan: true });
     tree.refresh();
   });
 
-  register("kuibyshev.copyChatStarter", async () => {
+  register("kuibysheff.copyChatStarter", async () => {
     const root = requireWorkspace();
     if (!root) {
       return;
@@ -370,7 +370,7 @@ async function runPrepare(options: {
   const result = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: "Kuibyshev workflow…",
+      title: "Kuibysheff workflow…",
       cancellable: false,
     },
     async () => runPowerShellScript(script, args, workspaceRoot),
@@ -382,7 +382,7 @@ async function runPrepare(options: {
 
   if (result.code !== 0) {
     vscode.window.showErrorMessage(
-      `Workflow failed (exit ${result.code}). See Kuibyshev output.`,
+      `Workflow failed (exit ${result.code}). See Kuibysheff output.`,
     );
     return;
   }

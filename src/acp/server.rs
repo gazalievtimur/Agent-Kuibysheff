@@ -1,4 +1,4 @@
-//! ACP stdio agent server backed by Kuibyshev `AgentEngine`.
+//! ACP stdio agent server backed by Kuibysheff `AgentEngine`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -77,7 +77,7 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
 
     Agent
         .builder()
-        .name("agent_Kuibyshev")
+        .name("agent_Kuibysheff")
         .on_receive_request(
             async move |req: InitializeRequest, responder, _cx| {
                 let version = env!("CARGO_PKG_VERSION");
@@ -85,8 +85,8 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
                     InitializeResponse::new(req.protocol_version)
                         .agent_capabilities(AgentCapabilities::new())
                         .agent_info(
-                            Implementation::new("agent_Kuibyshev", version)
-                                .title("agent_Kuibyshev"),
+                            Implementation::new("agent_Kuibysheff", version)
+                                .title("agent_Kuibysheff"),
                         ),
                 )
             },

@@ -1,11 +1,11 @@
-# 1С-воркфлоу в VS Code: проект + `.kuibyshev`
+# 1С-воркфлоу в VS Code: проект + `.kuibysheff`
 
-Открываете в VS Code **папку продукта** (например `C:\ПервыйБИТ\Первый.Гит\ЗУП`), а не репозиторий Kuibyshev. Настройки агентов (MCP, `workspace.root`, prompts) лежат в проекте и правятся под него. Ядро агента универсально и не знает про конкретные MCP.
+Открываете в VS Code **папку продукта** (например `C:\ПервыйБИТ\Первый.Гит\ЗУП`), а не репозиторий Kuibysheff. Настройки агентов (MCP, `workspace.root`, prompts) лежат в проекте и правятся под него. Ядро агента универсально и не знает про конкретные MCP.
 
 ```text
 ЗУП/                          ← VS Code workspace / --project-root
   src/cf/
-  .kuibyshev/
+  .kuibysheff/
     product.yaml
     agents/1c-{intake,analyst,coder,implementer}/
     runs/vscode-active/
@@ -18,18 +18,18 @@ CLI и ACP делят один флаг/контекст:
 --project-root <ЗУП>
 ```
 
-Относительные `--config` / `--settings-dir` / `--home` резолвятся как `{project}/.kuibyshev/<path>`.  
+Относительные `--config` / `--settings-dir` / `--home` резолвятся как `{project}/.kuibysheff/<path>`.  
 В ACP непустой `session/new` → `cwd` имеет приоритет над `--project-root`.
 
 ---
 
-## 1. Один раз: установить Kuibyshev
+## 1. Один раз: установить Kuibysheff
 
 ```powershell
 cd C:\Git
-git clone https://github.com/gybson63/Agent-Kuibyshev.git "Agent Kuibyshev"
-cd "Agent Kuibyshev"
-cargo build --release --bin agent_Kuibyshev
+git clone https://github.com/gybson63/Agent-Kuibysheff.git "Agent Kuibysheff"
+cd "Agent Kuibysheff"
+cargo build --release --bin agent_Kuibysheff
 # добавьте target\release в PATH
 ```
 
@@ -44,19 +44,19 @@ cargo build --release --bin agent_Kuibyshev
 В репозитории есть расширение [`extensions/vscode/`](../../extensions/vscode/) — sidebar для параметров агентов, scaffold и prepare/promote/approve/validate.
 
 ```powershell
-cd "C:\Git\Agent Kuibyshev\extensions\vscode"
+cd "C:\Git\Agent Kuibysheff\extensions\vscode"
 npm install
 npm run compile
 ```
 
-Запуск из репозитория Kuibyshev: **Run and Debug → Run Kuibyshev Extension** (F5), либо установите локальный `.vsix`.
+Запуск из репозитория Kuibysheff: **Run and Debug → Run Kuibysheff Extension** (F5), либо установите локальный `.vsix`.
 
 В настройках workspace продукта укажите:
 
-- `kuibyshev.repoRoot` — путь к установке Kuibyshev
-- `kuibyshev.binaryPath` — при необходимости (по умолчанию `agent_Kuibyshev` из PATH)
+- `kuibysheff.repoRoot` — путь к установке Kuibysheff
+- `kuibysheff.binaryPath` — при необходимости (по умолчанию `agent_Kuibysheff` из PATH)
 
-Дальше в sidebar **Kuibyshev**: Scaffold → Edit agent (provider/MCP/`workspace.root`) → Validate → Prepare stage → чат с ACP-агентом. Tasks в `.vscode/tasks.json` остаются запасным вариантом.
+Дальше в sidebar **Kuibysheff**: Scaffold → Edit agent (provider/MCP/`workspace.root`) → Validate → Prepare stage → чат с ACP-агентом. Tasks в `.vscode/tasks.json` остаются запасным вариантом.
 
 Подробности: [`extensions/vscode/README.md`](../../extensions/vscode/README.md).
 
@@ -67,7 +67,7 @@ npm run compile
 CLI (если без расширения):
 
 ```powershell
-cd "C:\Git\Agent Kuibyshev"
+cd "C:\Git\Agent Kuibysheff"
 .\scripts\1c-dev-scaffold-project.ps1 -ProjectRoot "C:\ПервыйБИТ\Первый.Гит\ЗУП"
 ```
 
@@ -75,11 +75,11 @@ cd "C:\Git\Agent Kuibyshev"
 
 | Путь | Назначение |
 |------|------------|
-| `.kuibyshev/agents/1c-*` | settings-dir + `agent-config.yaml` (копия из test-agents) |
-| `.kuibyshev/product.yaml` | пути продукта для prepare/оркестратора |
+| `.kuibysheff/agents/1c-*` | settings-dir + `agent-config.yaml` (копия из test-agents) |
+| `.kuibysheff/product.yaml` | пути продукта для prepare/оркестратора |
 | `.vscode/settings.json` | четыре ACP-агента с `--project-root ${workspaceFolder}` |
 | `.vscode/tasks.json` | prepare / promote / approve |
-| запись в `.gitignore` | `.kuibyshev/runs/` |
+| запись в `.gitignore` | `.kuibysheff/runs/` |
 
 Дальше **обязательно** отредактируйте в каждом `agents/*/agent-config.yaml`:
 
@@ -94,14 +94,14 @@ cd "C:\Git\Agent Kuibyshev"
 ## 3. Работа в VS Code
 
 1. File → Open Folder → папка ЗУП.
-2. Через расширение (**Kuibyshev** sidebar) или вручную: Prepare stage / Tasks / CLI.
+2. Через расширение (**Kuibysheff** sidebar) или вручную: Prepare stage / Tasks / CLI.
 3. ACP Client → агенты `1c-intake` / `1c-analyst` / `1c-coder` / `1c-implementer`.
 4. Prepare (расширение **Prepare stage**, Task **1c: prepare stage**, или CLI):
 
 ```powershell
-& "C:\Git\Agent Kuibyshev\scripts\1c-dev-acp-prepare.ps1" `
+& "C:\Git\Agent Kuibysheff\scripts\1c-dev-acp-prepare.ps1" `
   -ProjectRoot "C:\ПервыйБИТ\Первый.Гит\ЗУП" `
-  -RepoRoot "C:\Git\Agent Kuibyshev" `
+  -RepoRoot "C:\Git\Agent Kuibysheff" `
   -IssueKey PROJ-42 `
   -TaskFile "C:\ПервыйБИТ\Первый.Гит\ЗУП\PROJ-42\tz.md" `
   -Stage 2
@@ -115,7 +115,7 @@ Execute the stage instructions in the attached file stage_prompt.md (also under 
 
 6. Promote / validate → approve plan → stage 3 → 4.
 
-Homes: `.kuibyshev/runs/vscode-active/stageN/home`.  
+Homes: `.kuibysheff/runs/vscode-active/stageN/home`.  
 Apply/BuildCfe по-прежнему через `1c-dev-run.ps1 -ProjectRoot … -ApplyOut` / adapter.
 
 ---
@@ -123,7 +123,7 @@ Apply/BuildCfe по-прежнему через `1c-dev-run.ps1 -ProjectRoot …
 ## 4. CLI с `--project-root`
 
 ```powershell
-agent_Kuibyshev run `
+agent_Kuibysheff run `
   --project-root "C:\ПервыйБИТ\Первый.Гит\ЗУП" `
   --config agents/1c-analyst/agent-config.yaml `
   --settings-dir agents/1c-analyst `
@@ -131,7 +131,7 @@ agent_Kuibyshev run `
   --prompt "…"
 ```
 
-Эквивалент абсолютных путей под `.kuibyshev/…`.
+Эквивалент абсолютных путей под `.kuibysheff/…`.
 
 Оркестратор:
 
@@ -144,15 +144,15 @@ agent_Kuibyshev run `
   -Stage 2
 ```
 
-При наличии `.kuibyshev/agents` используются проектные профили; runs пишутся в `.kuibyshev/runs/`.
+При наличии `.kuibysheff/agents` используются проектные профили; runs пишутся в `.kuibysheff/runs/`.
 
 ---
 
 ## 5. Чеклист
 
-- [ ] `agent_Kuibyshev` в PATH
+- [ ] `agent_Kuibysheff` в PATH
 - [ ] Расширение собрано / запущено (или tasks.json как fallback)
-- [ ] `kuibyshev.repoRoot` указывает на установку Kuibyshev
+- [ ] `kuibysheff.repoRoot` указывает на установку Kuibysheff
 - [ ] Scaffold выполнен, `agent-config.yaml` поправлены под MCP/CF проекта
 - [ ] VS Code открыт на папке продукта
 - [ ] ACP видит четыре агента `1c-*`

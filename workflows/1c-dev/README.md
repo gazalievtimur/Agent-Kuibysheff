@@ -1,12 +1,12 @@
-# 1C development workflow (Agent Kuibyshev)
+# 1C development workflow (Agent Kuibysheff)
 
 **Установка на другом компьютере:** подробная пошаговая инструкция — [SETUP.md](SETUP.md).
 
-**VS Code (ACP):** открыть папку продукта 1С, scaffold `.kuibyshev/` —
+**VS Code (ACP):** открыть папку продукта 1С, scaffold `.kuibysheff/` —
 [VSCODE.md](VSCODE.md)
 (`scripts/1c-dev-scaffold-project.ps1`, `1c-dev-acp-prepare.ps1`).
 
-Four-stage external orchestrator around the stateless `agent_Kuibyshev` worker:
+Four-stage external orchestrator around the stateless `agent_Kuibysheff` worker:
 
 1. **1c-intake** — Jira/Confluence → `task_brief.md` (skipped with `-TaskFile`)
 2. **1c-analyst** — brief + CF research (+ SearXNG) → approvable plan
@@ -18,7 +18,7 @@ Human gate between plan and coder: `-ApprovePlan` or `artifacts/plan/APPROVED`.
 ## Quick start
 
 ```powershell
-# Preferred: product folder with .kuibyshev/ (after scaffold-project)
+# Preferred: product folder with .kuibysheff/ (after scaffold-project)
 .\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -Stage 1
 
 # Legacy: products/<id>.yaml in this repo + test-agents profiles

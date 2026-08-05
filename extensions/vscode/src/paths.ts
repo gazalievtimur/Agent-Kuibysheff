@@ -15,12 +15,12 @@ export function getWorkspaceRoot(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
-export function kuibyshevRoot(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".kuibyshev");
+export function kuibysheffRoot(workspaceRoot: string): string {
+  return path.join(workspaceRoot, ".kuibysheff");
 }
 
 export function agentsRoot(workspaceRoot: string): string {
-  return path.join(kuibyshevRoot(workspaceRoot), "agents");
+  return path.join(kuibysheffRoot(workspaceRoot), "agents");
 }
 
 export function agentDir(workspaceRoot: string, agentId: string): string {
@@ -36,7 +36,7 @@ export function agentSettingsDir(workspaceRoot: string, agentId: string): string
 }
 
 export function runsRoot(workspaceRoot: string): string {
-  return path.join(kuibyshevRoot(workspaceRoot), "runs", "vscode-active");
+  return path.join(kuibysheffRoot(workspaceRoot), "runs", "vscode-active");
 }
 
 export function artifactsRoot(workspaceRoot: string): string {
@@ -59,8 +59,8 @@ export function listAgentIds(workspaceRoot: string): string[] {
     .sort();
 }
 
-export function hasKuibyshev(workspaceRoot: string): boolean {
-  return fs.existsSync(kuibyshevRoot(workspaceRoot));
+export function hasKuibysheff(workspaceRoot: string): boolean {
+  return fs.existsSync(kuibysheffRoot(workspaceRoot));
 }
 
 export function profileForAgent(agentId: string) {

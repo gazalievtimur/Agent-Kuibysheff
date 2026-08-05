@@ -1,6 +1,6 @@
 # Further Fixes Plan
 
-Roadmap for remaining rust-skills improvements for `agent_Kuibyshev`.
+Roadmap for remaining rust-skills improvements for `agent_Kuibysheff`.
 
 **Last updated:** 2026-07-11
 
@@ -191,7 +191,7 @@ Current regex-based parser is brittle (nested braces, escaped quotes).
 
 | Item | Action |
 |------|--------|
-| Crate name `agent_Kuibyshev` | Rename to `agent-kuibyshev` (breaking; coordinate with consumers) |
+| Crate name `agent_Kuibysheff` | Rename to `agent-kuibysheff` (breaking; coordinate with consumers) |
 | Edition 2021 → 2024 | Evaluate `unsafe_op_in_unsafe_fn`, `unsafe` attribute changes |
 | CI | Add `cargo fmt --check`, `cargo clippy -- -D warnings`, MSRV pin job |
 | README | Document `RUST_LOG`, `allowed_tools` semantics, limits |

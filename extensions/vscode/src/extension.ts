@@ -5,12 +5,12 @@ import { AgentsTreeProvider } from "./views/agentsTree";
 export function activate(context: vscode.ExtensionContext): void {
   const tree = new AgentsTreeProvider();
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("kuibyshev.agents", tree),
+    vscode.window.registerTreeDataProvider("kuibysheff.agents", tree),
   );
 
   registerCommands(context, tree);
 
-  const watcher = vscode.workspace.createFileSystemWatcher("**/.kuibyshev/**");
+  const watcher = vscode.workspace.createFileSystemWatcher("**/.kuibysheff/**");
   watcher.onDidCreate(() => tree.refresh());
   watcher.onDidChange(() => tree.refresh());
   watcher.onDidDelete(() => tree.refresh());
