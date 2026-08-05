@@ -4,7 +4,7 @@ use crate::config::LoggingConfig;
 
 use super::LoggingError;
 
-const DEFAULT_LOG_SUBDIR: &str = ".agent-kuibyshev/logs";
+const DEFAULT_LOG_SUBDIR: &str = ".agent-kuibysheff/logs";
 
 /// Returns the default log directory under the user's home folder.
 ///
@@ -136,6 +136,6 @@ mod tests {
         std::env::set_var("USERPROFILE", dir.path());
 
         let log_dir = default_log_dir().expect("default log dir");
-        assert_eq!(log_dir, dir.path().join(".agent-kuibyshev/logs"));
+        assert_eq!(log_dir, dir.path().join(".agent-kuibysheff/logs"));
     }
 }

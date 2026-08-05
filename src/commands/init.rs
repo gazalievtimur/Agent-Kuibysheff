@@ -152,7 +152,7 @@ pub fn print_success(result: &InitResult) {
     println!();
     println!("Example run:");
     println!(
-        "  agent_Kuibyshev run \\\n    --config {} \\\n    --settings-dir {} \\\n    --prompt \"...\" \\\n    --home ./demo-home/{}",
+        "  agent_Kuibysheff run \\\n    --config {} \\\n    --settings-dir {} \\\n    --prompt \"...\" \\\n    --home ./demo-home/{}",
         config.display(),
         result.target_dir.display(),
         result.agent_id
@@ -415,7 +415,7 @@ mod tests {
         fs::write(target.join("master_prompt.md"), "stale").expect("mutate");
         run(&args("demo", target.clone(), true)).expect("force init");
         let contents = fs::read_to_string(target.join("master_prompt.md")).expect("read");
-        assert!(contents.contains("agent_Kuibyshev"));
+        assert!(contents.contains("agent_Kuibysheff"));
         assert!(!contents.contains("stale"));
     }
 

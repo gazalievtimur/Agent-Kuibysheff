@@ -30,8 +30,8 @@ try {
         throw "OPENAI_API_KEY is not set. Example: `$env:OPENAI_API_KEY = 'your_api_key'"
     }
 
-    Write-Host "Running agent_Kuibyshev with home: $HomePath"
-    cargo run --bin agent_Kuibyshev -- run `
+    Write-Host "Running agent_Kuibysheff with home: $HomePath"
+    cargo run --bin agent_Kuibysheff -- run `
         --config $ConfigPath `
         --settings-dir $SettingsDir `
         --prompt $Prompt `

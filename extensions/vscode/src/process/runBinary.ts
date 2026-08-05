@@ -39,15 +39,15 @@ function runProcess(
 
 export async function runAgentCheck(options: {
   workspaceRoot: string;
-  /** Path relative to `{workspace}/.kuibyshev/`, e.g. `agents/1c-analyst/agent-config.yaml`. */
+  /** Path relative to `{workspace}/.kuibysheff/`, e.g. `agents/1c-analyst/agent-config.yaml`. */
   configRelative: string;
-  /** Path relative to `{workspace}/.kuibyshev/`, e.g. `agents/1c-analyst`. */
+  /** Path relative to `{workspace}/.kuibysheff/`, e.g. `agents/1c-analyst`. */
   settingsDirRelative: string;
   skipProvider?: boolean;
   skipMcp?: boolean;
 }): Promise<RunResult> {
   const binary = getBinaryPath();
-  const kuib = path.join(options.workspaceRoot, ".kuibyshev");
+  const kuib = path.join(options.workspaceRoot, ".kuibysheff");
   const configAbs = path.join(kuib, options.configRelative);
   const settingsAbs = path.join(kuib, options.settingsDirRelative);
   const args = [

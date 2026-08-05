@@ -1,5 +1,5 @@
-use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
-use agent_Kuibyshev::logging::{default_log_dir, init_tracing, Loggers, LoggingError};
+use agent_Kuibysheff::config::{LogSinkConfig, LoggingConfig};
+use agent_Kuibysheff::logging::{default_log_dir, init_tracing, Loggers, LoggingError};
 
 #[tokio::test]
 async fn logging_pipeline_writes_trace_and_jsonl_files() {
@@ -58,11 +58,11 @@ async fn logging_pipeline_writes_trace_and_jsonl_files() {
 }
 
 #[test]
-fn default_log_dir_is_under_dot_agent_kuibyshev() {
+fn default_log_dir_is_under_dot_agent_kuibysheff() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::env::set_var("HOME", dir.path());
     std::env::set_var("USERPROFILE", dir.path());
 
     let log_dir = default_log_dir().expect("default log dir");
-    assert!(log_dir.ends_with(".agent-kuibyshev/logs"));
+    assert!(log_dir.ends_with(".agent-kuibysheff/logs"));
 }

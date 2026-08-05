@@ -4,7 +4,7 @@
   Prepare / promote / validate / approve for the VS Code ACP 1C workflow.
 
 .DESCRIPTION
-  Does not run the agent. Sets up {ProjectRoot}/.kuibyshev/runs/vscode-active/
+  Does not run the agent. Sets up {ProjectRoot}/.kuibysheff/runs/vscode-active/
   for ACP agents configured in the product's .vscode/settings.json.
 
   Modes:
@@ -33,7 +33,7 @@ param(
     [switch] $Validate,
     [switch] $RequireTz,
 
-    # Agent Kuibyshev install (prompts + adapters); default = parent of scripts/
+    # Agent Kuibysheff install (prompts + adapters); default = parent of scripts/
     [string] $RepoRoot = ""
 )
 
@@ -196,7 +196,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
     throw "ProjectRoot not found: $ProjectRoot"
 }
 
-$kuibRoot = Join-Path $ProjectRoot ".kuibyshev"
+$kuibRoot = Join-Path $ProjectRoot ".kuibysheff"
 $runDir = Join-Path $kuibRoot "runs\vscode-active"
 $artifacts = Join-Path $runDir "artifacts"
 $briefDir = Join-Path $artifacts "brief"
@@ -222,7 +222,7 @@ if (Test-Path -LiteralPath $activeMetaPath) {
     }
 }
 
-# Product yaml: project .kuibyshev/product.yaml, else workflows products/<Product>.yaml
+# Product yaml: project .kuibysheff/product.yaml, else workflows products/<Product>.yaml
 $productPath = Join-Path $kuibRoot "product.yaml"
 if (-not (Test-Path -LiteralPath $productPath -PathType Leaf)) {
     if ([string]::IsNullOrWhiteSpace($Product)) {
@@ -316,7 +316,7 @@ if ($Validate) {
 
 # --- Prepare ---
 if (-not (Test-Path -LiteralPath $productPath -PathType Leaf)) {
-    throw "Product config not found: $productPath (scaffold .kuibyshev/product.yaml or pass products/<id>.yaml via -Product)"
+    throw "Product config not found: $productPath (scaffold .kuibysheff/product.yaml or pass products/<id>.yaml via -Product)"
 }
 
 if ($skipIntake -and $Stage -eq "1") {

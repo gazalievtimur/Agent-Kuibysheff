@@ -74,8 +74,8 @@ def resolve_agent_binary(repo_root: Path, override: Optional[Path] = None) -> Pa
         return path
     release = repo_root / "target" / "release"
     candidates = [
-        release / "agent_Kuibyshev.exe",
-        release / "agent_Kuibyshev",
+        release / "agent_Kuibysheff.exe",
+        release / "agent_Kuibysheff",
     ]
     for candidate in candidates:
         if candidate.is_file():

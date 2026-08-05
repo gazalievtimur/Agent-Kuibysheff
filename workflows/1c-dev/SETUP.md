@@ -1,6 +1,6 @@
 # Как собрать линию 1С-воркфлоу на другом компьютере
 
-Пошаговая установка конвейера **intake → analyst → coder → implementer** на базе Agent Kuibyshev. Целевая ОС для полного цикла (Designer / CFE) — **Windows**. Linux/WSL подойдёт для этапов 1–3 без `-BuildCfe`, если MCP и пути настроены.
+Пошаговая установка конвейера **intake → analyst → coder → implementer** на базе Agent Kuibysheff. Целевая ОС для полного цикла (Designer / CFE) — **Windows**. Linux/WSL подойдёт для этапов 1–3 без `-BuildCfe`, если MCP и пути настроены.
 
 Краткий обзор этапов и CLI: [README.md](README.md).
 
@@ -12,7 +12,7 @@
 
 | Компонент | Назначение |
 |-----------|------------|
-| Репозиторий Agent Kuibyshev | CLI-воркер + оркестратор `scripts/1c-dev-run.ps1` (+ VS Code: scaffold `.kuibyshev` в папке продукта — [VSCODE.md](VSCODE.md)) |
+| Репозиторий Agent Kuibysheff | CLI-воркер + оркестратор `scripts/1c-dev-run.ps1` (+ VS Code: scaffold `.kuibysheff` в папке продукта — [VSCODE.md](VSCODE.md)) |
 | 4 профиля агентов | `test-agents/1c-{intake,analyst,coder,implementer}/` |
 | Адаптер продукта | `workflows/1c-dev/products/<id>.yaml` (из `*.yaml.example`) |
 | LLM API | OpenAI-compatible `/chat/completions` |
@@ -37,7 +37,7 @@
 - Доступ в интернет к LLM API и (для intake) к Jira/Confluence
 - Один из вариантов бинарника агента:
   - Rust toolchain (MSRV **1.86+**) и `cargo build --release`, **или**
-  - готовый `agent_Kuibyshev` с [GitHub Releases](https://github.com/gybson63/Agent-Kuibyshev/releases)
+  - готовый `agent_Kuibysheff` с [GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases)
 
 ### Для этапа 1 (Jira/Confluence)
 
@@ -65,25 +65,25 @@
 ```powershell
 # Каталог на ваш вкус
 cd C:\Git
-git clone https://github.com/gybson63/Agent-Kuibyshev.git "Agent Kuibyshev"
-cd "Agent Kuibyshev"
+git clone https://github.com/gybson63/Agent-Kuibysheff.git "Agent Kuibysheff"
+cd "Agent Kuibysheff"
 
 # Вариант A: собрать из исходников
-cargo build --release --bin agent_Kuibyshev
+cargo build --release --bin agent_Kuibysheff
 
 # Вариант B: положить готовый exe куда угодно и передавать -AgentBin
-# .\scripts\1c-dev-run.ps1 ... -AgentBin C:\tools\agent_Kuibyshev.exe
+# .\scripts\1c-dev-run.ps1 ... -AgentBin C:\tools\agent_Kuibysheff.exe
 ```
 
 Проверка:
 
 ```powershell
-.\target\release\agent_Kuibyshev.exe --help
+.\target\release\agent_Kuibysheff.exe --help
 # или
-cargo run --bin agent_Kuibyshev -- --help
+cargo run --bin agent_Kuibysheff -- --help
 ```
 
-Оркестратор сам подхватит `target\release\agent_Kuibyshev.exe`, иначе `target\debug\...`, иначе вызовет `cargo`.
+Оркестратор сам подхватит `target\release\agent_Kuibysheff.exe`, иначе `target\debug\...`, иначе вызовет `cargo`.
 
 ---
 
@@ -127,7 +127,7 @@ provider:
 Файлы `agent-config.example.yaml` содержат **плейсхолдеры путей**. На новом ПК:
 
 ```powershell
-cd "C:\Git\Agent Kuibyshev"
+cd "C:\Git\Agent Kuibysheff"
 foreach ($a in @("1c-intake","1c-analyst","1c-coder","1c-implementer")) {
   Copy-Item ".\test-agents\$a\agent-config.example.yaml" `
             ".\test-agents\$a\agent-config.local.yaml"
@@ -235,7 +235,7 @@ CONFLUENCE_PERSONAL_TOKEN=...
 ```powershell
 $env:JIRA_URL = "..."
 # ... остальные env
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config .\test-agents\1c-intake\agent-config.local.yaml `
   --settings-dir .\test-agents\1c-intake `
   --prompt "Собери первичную информацию по задаче PROJ-123" `
@@ -330,14 +330,14 @@ docker run -d --name mcp-searxng -p 3000:3000 `
 
 ## 12. Первый прогон (рекомендуемый порядок)
 
-Рабочая директория — **корень репозитория** Agent Kuibyshev.
+Рабочая директория — **корень репозитория** Agent Kuibysheff.
 
 ### 12.1. Без Jira — от файла задачи
 
 Создайте файл ТЗ, например `D:\tmp\task.md`, затем:
 
 ```powershell
-cd "C:\Git\Agent Kuibyshev"
+cd "C:\Git\Agent Kuibysheff"
 
 .\scripts\1c-dev-run.ps1 `
   -Product demo `

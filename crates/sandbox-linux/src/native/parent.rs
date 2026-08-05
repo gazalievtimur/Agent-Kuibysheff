@@ -19,7 +19,7 @@ pub fn run_via_helper(
     })?;
 
     let mut req_file = tempfile::Builder::new()
-        .prefix("agent-kuibyshev-sandbox-")
+        .prefix("agent-kuibysheff-sandbox-")
         .suffix(".json")
         .tempfile()
         .map_err(|err| {

@@ -27,11 +27,11 @@ mcp: []
 #       Authorization: "Bearer REPLACE_WITH_STATIC_TOKEN"   # or use auth: below for OAuth 2.1
 #     timeout_ms: 20000
 #     auth:
-#       client_id: "agent-kuibyshev"
+#       client_id: "agent-kuibysheff"
 #       client_secret_env: "MCP_REMOTE_CLIENT_SECRET"
 #       scopes: ["mcp:tools"]
 #       redirect_port: 0
-#       token_store: "~/.agent-kuibyshev/mcp-tokens/remote.json"
+#       token_store: "~/.agent-kuibysheff/mcp-tokens/remote.json"
 
 limits:
   max_iterations: 10
@@ -42,7 +42,7 @@ logging:
   enable_ai_log: true
   enable_mcp_log: true
   enable_chat_history: false
-  # Optional legacy override. When omitted, logs go to ~/.agent-kuibyshev/logs.
+  # Optional legacy override. When omitted, logs go to ~/.agent-kuibysheff/logs.
   # output_dir: "./logs"
   sink:
     type: file

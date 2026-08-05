@@ -40,8 +40,8 @@ export async function openAgentConfigEditor(
   }
 
   const panel = vscode.window.createWebviewPanel(
-    "kuibyshevAgentConfig",
-    `Kuibyshev: ${agentId}`,
+    "kuibysheffAgentConfig",
+    `Kuibysheff: ${agentId}`,
     vscode.ViewColumn.One,
     {
       enableScripts: true,

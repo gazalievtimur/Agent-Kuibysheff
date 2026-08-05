@@ -1,4 +1,4 @@
-//! Map Kuibyshev engine events / stop reasons onto ACP schema types.
+//! Map Kuibysheff engine events / stop reasons onto ACP schema types.
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall,
@@ -8,7 +8,7 @@ use agent_client_protocol::schema::v1::{
 use crate::agent::AgentEvent;
 use crate::output::StopReason;
 
-/// Convert a Kuibyshev [`StopReason`] into an ACP prompt stop reason.
+/// Convert a Kuibysheff [`StopReason`] into an ACP prompt stop reason.
 #[must_use]
 pub fn map_stop_reason(stop: StopReason, cancelled: bool) -> AcpStopReason {
     if cancelled {

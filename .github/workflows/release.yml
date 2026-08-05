@@ -51,7 +51,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release --locked --bin agent_Kuibyshev
+        run: cargo build --release --locked --bin agent_Kuibysheff
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -59,9 +59,9 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME
           $target = "${{ matrix.target }}"
-          $stem = "agent_Kuibyshev-$tag-$target"
+          $stem = "agent_Kuibysheff-$tag-$target"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/release/agent_Kuibyshev.exe" "dist/$stem.exe"
+          Copy-Item "target/release/agent_Kuibysheff.exe" "dist/$stem.exe"
           Compress-Archive -Path "dist/$stem.exe" -DestinationPath "dist/$stem.zip" -Force
           Remove-Item "dist/$stem.exe"
           $hash = (Get-FileHash "dist/$stem.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -74,9 +74,9 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           target="${{ matrix.target }}"
-          stem="agent_Kuibyshev-${tag}-${target}"
+          stem="agent_Kuibysheff-${tag}-${target}"
           mkdir -p dist
-          cp "target/release/agent_Kuibyshev" "dist/${stem}"
+          cp "target/release/agent_Kuibysheff" "dist/${stem}"
           (
             cd dist
             zip -q "${stem}.zip" "${stem}"
@@ -87,7 +87,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: agent_Kuibyshev-${{ matrix.target }}
+          name: agent_Kuibysheff-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

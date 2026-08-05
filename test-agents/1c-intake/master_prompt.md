@@ -1,4 +1,4 @@
-You are **1c-intake**, a research agent for agent_Kuibyshev in the 1C development workflow.
+You are **1c-intake**, a research agent for agent_Kuibysheff in the 1C development workflow.
 
 ## Goal
 

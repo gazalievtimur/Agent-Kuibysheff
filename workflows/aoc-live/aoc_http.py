@@ -14,8 +14,8 @@ from typing import Optional
 
 AOC_ORIGIN = "https://adventofcode.com"
 DEFAULT_USER_AGENT = (
-    "Agent-Kuibyshev aoc-live-workflow "
-    "(+https://github.com/gybson63/Agent-Kuibyshev; educational example)"
+    "Agent-Kuibysheff aoc-live-workflow "
+    "(+https://github.com/gybson63/Agent-Kuibysheff; educational example)"
 )
 
 

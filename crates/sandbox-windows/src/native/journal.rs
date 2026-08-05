@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::native::profile::delete_profile_name;
 
 fn journal_dir() -> PathBuf {
-    std::env::temp_dir().join("agent-kuibyshev-sandbox-journal")
+    std::env::temp_dir().join("agent-kuibysheff-sandbox-journal")
 }
 
 /// Records a live profile name so a future process can delete it after a crash.

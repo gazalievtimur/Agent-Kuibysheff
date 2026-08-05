@@ -20,7 +20,7 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config .\test-agents\1c-intake\agent-config.example.yaml `
   --settings-dir .\test-agents\1c-intake `
   --prompt "Собери первичную информацию по задаче PROJ-123" `

@@ -1,7 +1,7 @@
-# Live AoC workflow example (Agent Kuibyshev ACP)
+# Live AoC workflow example (Agent Kuibysheff ACP)
 
 Demo of an **external singleton orchestrator** that speaks ACP over stdio to a
-long-lived `agent_Kuibyshev acp` process, while talking to the real
+long-lived `agent_Kuibysheff acp` process, while talking to the real
 [Advent of Code](https://adventofcode.com/) site.
 
 Unlike the local regression harness (`scripts/aoc-eval.*`), this workflow:
@@ -21,7 +21,7 @@ aoc-singleton.py  ──HTTP──►  adventofcode.com  (fetch / submit)
         │
         │ ACP stdio (long-lived)
         ▼
-agent_Kuibyshev acp  ──MCP──►  mcp-aoc-tasks.js  (one-task bank)
+agent_Kuibysheff acp  ──MCP──►  mcp-aoc-tasks.js  (one-task bank)
         │
         └── home.run (python solution.py)
 ```
@@ -47,7 +47,7 @@ workflows/aoc-live/
 |------|--------|
 | `AOC_SESSION` | Session cookie from adventofcode.com (browser DevTools → Cookies) |
 | Provider API key | From base config (`OPENAI_API_KEY` / `POLZA_API_KEY` / …); load via `.env` |
-| `cargo build --release` | Produces `target/release/agent_Kuibyshev` |
+| `cargo build --release` | Produces `target/release/agent_Kuibysheff` |
 | Node.js | For `mcp-aoc-tasks.js` |
 | Python 3.10+ | Orchestrator + sandboxed `home.run` |
 | `pip install -r workflows/aoc-live/requirements.txt` | ACP Python SDK |
@@ -87,7 +87,7 @@ python workflows/aoc-live/aoc-singleton.py --year 2024 --day 1 --part 1
 | `--config` | `test-agents/referent/agent-config.aoc.example.yaml` | Provider template |
 | `--settings-dir` | `test-agents/referent` | Agent profile |
 | `--home-root` | `workflows/aoc-live/runs` | Artifact root |
-| `--agent-bin` | `target/release/agent_Kuibyshev[.exe]` | Override binary |
+| `--agent-bin` | `target/release/agent_Kuibysheff[.exe]` | Override binary |
 | `-v` | off | Debug logs (includes drained ACP stderr) |
 
 Only **one** singleton process may run at a time (`runs/.aoc-singleton.lock`).

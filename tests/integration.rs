@@ -5,21 +5,21 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use agent_Kuibyshev::access::{
+use agent_Kuibysheff::access::{
     CanonicalRoot, EffectiveToolPolicy, HomeFsPolicy, ProgramAlias, QualifiedTool,
     ResolvedAccessPolicy, ResolvedProgramPolicy, WorkspaceFsPolicy,
 };
-use agent_Kuibyshev::agent::{AgentEngine, AgentRunRequest, RunCancel};
-use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
-use agent_Kuibyshev::limits::{LimitsConfig, TokenUsage};
-use agent_Kuibyshev::logging::Loggers;
-use agent_Kuibyshev::output::StopReason;
-use agent_Kuibyshev::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
-use agent_Kuibyshev::tool_api::ToolExecutor;
-use agent_Kuibyshev::tools::fs_home::HomeFs;
-use agent_Kuibyshev::tools::local_tools::LocalTools;
-use agent_Kuibyshev::tools::ToolError;
-use agent_Kuibyshev::tools::{CompositeToolExecutor, PolicyToolExecutor};
+use agent_Kuibysheff::agent::{AgentEngine, AgentRunRequest, RunCancel};
+use agent_Kuibysheff::config::{LogSinkConfig, LoggingConfig};
+use agent_Kuibysheff::limits::{LimitsConfig, TokenUsage};
+use agent_Kuibysheff::logging::Loggers;
+use agent_Kuibysheff::output::StopReason;
+use agent_Kuibysheff::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
+use agent_Kuibysheff::tool_api::ToolExecutor;
+use agent_Kuibysheff::tools::fs_home::HomeFs;
+use agent_Kuibysheff::tools::local_tools::LocalTools;
+use agent_Kuibysheff::tools::ToolError;
+use agent_Kuibysheff::tools::{CompositeToolExecutor, PolicyToolExecutor};
 
 struct FakeModel {
     responses: Mutex<VecDeque<ModelResponse>>,
@@ -57,16 +57,16 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         system_prompt: "system".to_string(),
         input_files_context: String::new(),
         limits,
-        history: agent_Kuibyshev::config::ProviderHistoryConfig::default(),
+        history: agent_Kuibysheff::config::ProviderHistoryConfig::default(),
         cancel: RunCancel::new(),
-        events: agent_Kuibyshev::agent::AgentEventTx::noop(),
+        events: agent_Kuibysheff::agent::AgentEventTx::noop(),
     }
 }
 
 async fn make_tools_with_runner(
     dir: &Path,
     home_policy: HomeFsPolicy,
-    runner: Arc<agent_Kuibyshev::sandbox::SandboxRunner>,
+    runner: Arc<agent_Kuibysheff::sandbox::SandboxRunner>,
 ) -> Arc<CompositeToolExecutor> {
     let home = HomeFs::new(dir, home_policy, runner, RunCancel::new())
         .await
@@ -85,7 +85,7 @@ async fn make_legacy_tools(dir: &Path) -> Arc<CompositeToolExecutor> {
     make_tools_with_runner(
         dir,
         HomeFsPolicy::legacy(),
-        Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default()),
+        Arc::new(agent_Kuibysheff::sandbox::SandboxRunner::platform_default()),
     )
     .await
 }
@@ -204,7 +204,7 @@ async fn engine_emits_thought_message_and_tool_events() {
             max_duration_sec: 60,
         },
     );
-    req.events = agent_Kuibyshev::agent::AgentEventTx::from_sender(tx);
+    req.events = agent_Kuibysheff::agent::AgentEventTx::from_sender(tx);
 
     let engine = AgentEngine::new(Arc::new(model), Arc::new(FakeTools), Loggers::default());
     let output = engine.run(req).await;
@@ -217,28 +217,28 @@ async fn engine_emits_thought_message_and_tool_events() {
 
     assert!(
         events.iter().any(
-            |e| matches!(e, agent_Kuibyshev::agent::AgentEvent::Thought(t) if t == "call echo")
+            |e| matches!(e, agent_Kuibysheff::agent::AgentEvent::Thought(t) if t == "call echo")
         ),
         "missing thought: {events:?}"
     );
     assert!(
         events.iter().any(|e| matches!(
             e,
-            agent_Kuibyshev::agent::AgentEvent::ToolStart { tool, .. } if tool == "echo"
+            agent_Kuibysheff::agent::AgentEvent::ToolStart { tool, .. } if tool == "echo"
         )),
         "missing tool start: {events:?}"
     );
     assert!(
         events.iter().any(|e| matches!(
             e,
-            agent_Kuibyshev::agent::AgentEvent::ToolFinish { ok: true, .. }
+            agent_Kuibysheff::agent::AgentEvent::ToolFinish { ok: true, .. }
         )),
         "missing tool finish: {events:?}"
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, agent_Kuibyshev::agent::AgentEvent::Message(m) if m == "ok")),
+            .any(|e| matches!(e, agent_Kuibysheff::agent::AgentEvent::Message(m) if m == "ok")),
         "missing message: {events:?}"
     );
 }
@@ -363,12 +363,12 @@ async fn denied_tool_is_returned_as_tool_result_error() {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tokio::test]
 async fn model_can_home_run_via_native_sandbox() {
-    use agent_Kuibyshev::access::{
+    use agent_Kuibysheff::access::{
         resolve_access_policy, AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig,
         RunPolicyConfig, ToolsPolicyConfig,
     };
 
-    let runner = Arc::new(agent_Kuibyshev::sandbox::SandboxRunner::platform_default());
+    let runner = Arc::new(agent_Kuibysheff::sandbox::SandboxRunner::platform_default());
     if runner.probe().is_err() {
         return;
     }

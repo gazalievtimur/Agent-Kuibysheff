@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Scaffold .kuibyshev/ agents + product.yaml into a 1C product folder.
+  Scaffold .kuibysheff/ agents + product.yaml into a 1C product folder.
 #>
 param(
     [Parameter(Mandatory = $true)][string] $ProjectRoot,
@@ -22,7 +22,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
     throw "ProjectRoot not found: $ProjectRoot"
 }
 
-$kuib = Join-Path $ProjectRoot ".kuibyshev"
+$kuib = Join-Path $ProjectRoot ".kuibysheff"
 $agentsRoot = Join-Path $kuib "agents"
 $runsRoot = Join-Path $kuib "runs"
 New-Item -ItemType Directory -Force -Path $agentsRoot, $runsRoot | Out-Null
@@ -75,14 +75,14 @@ if ((-not (Test-Path -LiteralPath $productDst)) -or $Force) {
     Write-Host "Wrote $productDst"
 }
 
-$giSrc = Join-Path $RepoRoot "workflows\1c-dev\vscode\gitignore.kuibyshev.example"
+$giSrc = Join-Path $RepoRoot "workflows\1c-dev\vscode\gitignore.kuibysheff.example"
 $giDst = Join-Path $ProjectRoot ".gitignore"
 $giSnippet = Get-Content -LiteralPath $giSrc -Raw -Encoding UTF8
 if (Test-Path -LiteralPath $giDst) {
     $existing = Get-Content -LiteralPath $giDst -Raw -Encoding UTF8
-    if ($existing -notmatch '\.kuibyshev/runs') {
+    if ($existing -notmatch '\.kuibysheff/runs') {
         Add-Content -LiteralPath $giDst -Value "`n$giSnippet" -Encoding UTF8
-        Write-Host "Appended .kuibyshev/runs to $giDst"
+        Write-Host "Appended .kuibysheff/runs to $giDst"
     }
 } else {
     Set-Content -LiteralPath $giDst -Value $giSnippet.TrimEnd() -Encoding UTF8
@@ -111,6 +111,6 @@ if ((-not (Test-Path -LiteralPath $tasksDst)) -or $Force) {
 Write-Host ""
 Write-Host "Next:"
 Write-Host "  1. Edit product.yaml and agents/*/agent-config.yaml (MCP paths, workspace.root)."
-Write-Host "  2. Ensure agent_Kuibyshev is on PATH."
+Write-Host "  2. Ensure agent_Kuibysheff is on PATH."
 Write-Host "  3. Open the project folder in VS Code and connect ACP agents 1c-intake .. 1c-implementer."
 exit 0

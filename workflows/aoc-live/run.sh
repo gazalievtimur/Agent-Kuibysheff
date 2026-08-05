@@ -25,7 +25,7 @@ Options:
   --max-attempts N     Full solve/submit iterations (default: 5, cap 5)
   --config PATH        Base agent config template
   --settings-dir PATH  Agent settings directory
-  --agent-bin PATH     Path to agent_Kuibyshev binary
+  --agent-bin PATH     Path to agent_Kuibysheff binary
   --repo-root PATH     Repository root (default: auto)
   -v, --verbose        Debug logging
   -h, --help           Show help

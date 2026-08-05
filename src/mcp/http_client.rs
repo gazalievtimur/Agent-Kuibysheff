@@ -175,7 +175,7 @@ impl McpHttpClient {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
-                "name": "agent_Kuibyshev",
+                "name": "agent_Kuibysheff",
                 "version": "0.1.0"
             }
         });
@@ -262,7 +262,7 @@ impl McpHttpClient {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
-                "name": "agent_Kuibyshev",
+                "name": "agent_Kuibysheff",
                 "version": "0.1.0"
             }
         });

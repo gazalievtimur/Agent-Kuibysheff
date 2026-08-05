@@ -477,7 +477,7 @@ impl McpStdioClient {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
-                "name": "agent_Kuibyshev",
+                "name": "agent_Kuibysheff",
                 "version": "0.1.0"
             }
         });

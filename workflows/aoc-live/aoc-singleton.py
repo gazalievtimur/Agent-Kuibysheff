@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Live Advent of Code solver orchestrator over Kuibyshev ACP stdio.
+"""Live Advent of Code solver orchestrator over Kuibysheff ACP stdio.
 
 Workflow example: download puzzle + input from adventofcode.com, drive a
-long-lived `agent_Kuibyshev acp` child through up to 5 solve/submit iterations,
+long-lived `agent_Kuibysheff acp` child through up to 5 solve/submit iterations,
 and retry with AoC feedback when the answer is wrong.
 
 Usage (from repo root):
@@ -420,7 +420,7 @@ async def _run_locked(
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     repo_guess = WORKFLOW_DIR.parent.parent
     parser = argparse.ArgumentParser(
-        description="Live AoC singleton orchestrator over agent_Kuibyshev ACP"
+        description="Live AoC singleton orchestrator over agent_Kuibysheff ACP"
     )
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--day", type=int, required=True)
@@ -452,7 +452,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=str(repo_guess),
         help="Repository root (for binary, mcp-aoc-tasks.js, .env)",
     )
-    parser.add_argument("--agent-bin", default="", help="Path to agent_Kuibyshev binary")
+    parser.add_argument("--agent-bin", default="", help="Path to agent_Kuibysheff binary")
     parser.add_argument(
         "-v",
         "--verbose",

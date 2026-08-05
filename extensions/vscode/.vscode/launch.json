@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Kuibyshev Extension",
+      "name": "Run Kuibysheff Extension",
       "type": "extensionHost",
       "request": "launch",
       "args": [
@@ -11,7 +11,7 @@
       "outFiles": [
         "${workspaceFolder}/extensions/vscode/dist/**/*.js"
       ],
-      "preLaunchTask": "kuibyshev-extension: compile"
+      "preLaunchTask": "kuibysheff-extension: compile"
     }
   ]
 }

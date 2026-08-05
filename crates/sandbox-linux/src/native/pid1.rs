@@ -40,7 +40,7 @@ fn pid1_try(
     // Wait until parent finished uid/gid maps.
     wait_for_start_barrier(start_pipe_read)?;
 
-    let scratch = PathBuf::from(format!("/tmp/agent-kuibyshev-sb-{}", {
+    let scratch = PathBuf::from(format!("/tmp/agent-kuibysheff-sb-{}", {
         // SAFETY: getpid is always safe; used only to build a unique scratch path name.
         unsafe { libc::getpid() }
     }));

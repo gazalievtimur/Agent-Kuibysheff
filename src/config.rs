@@ -1058,7 +1058,7 @@ mcp:
     headers:
       X-Test: one
     auth:
-      client_id: agent-kuibyshev
+      client_id: agent-kuibysheff
       scopes: [mcp:tools]
       redirect_port: 0
       token_store: ./tokens.json
@@ -1072,7 +1072,7 @@ access:
                 assert_eq!(http.url, "https://mcp.example.com/mcp");
                 assert_eq!(http.headers.get("X-Test").map(String::as_str), Some("one"));
                 let auth = http.auth.as_ref().expect("auth");
-                assert_eq!(auth.client_id.as_deref(), Some("agent-kuibyshev"));
+                assert_eq!(auth.client_id.as_deref(), Some("agent-kuibysheff"));
             }
             McpTransport::Stdio(_) => panic!("expected http"),
         }

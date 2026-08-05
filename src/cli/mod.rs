@@ -13,9 +13,9 @@ pub use init::InitArgs;
 /// Top-level CLI.
 #[derive(Debug, Parser)]
 #[command(
-    name = "agent_Kuibyshev",
+    name = "agent_Kuibysheff",
     version,
-    about = "agent_Kuibyshev CLI worker and agent tooling",
+    about = "agent_Kuibysheff CLI worker and agent tooling",
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -51,7 +51,7 @@ pub struct RunArgs {
     pub home: PathBuf,
 
     /// Project root (e.g. 1C product folder). Relative `--config` /
-    /// `--settings-dir` / `--home` resolve under `{project-root}/.kuibyshev/`.
+    /// `--settings-dir` / `--home` resolve under `{project-root}/.kuibysheff/`.
     #[arg(long, value_name = "DIR")]
     pub project_root: Option<PathBuf>,
 
@@ -86,7 +86,7 @@ pub struct AcpArgs {
 
     /// Fallback project root when the ACP client does not send session `cwd`.
     /// Relative `--config` / `--settings-dir` / `--home` resolve under
-    /// `{project-root}/.kuibyshev/` (session `cwd` wins when non-empty).
+    /// `{project-root}/.kuibysheff/` (session `cwd` wins when non-empty).
     #[arg(long, value_name = "DIR")]
     pub project_root: Option<PathBuf>,
 

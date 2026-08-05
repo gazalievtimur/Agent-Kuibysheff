@@ -15,7 +15,7 @@ external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
 ## Invocation
 
 ```text
-agent_Kuibyshev run \
+agent_Kuibysheff run \
   --config <FILE> \
   --settings-dir <DIR> \
   --prompt <TEXT> \
@@ -40,10 +40,10 @@ agent_Kuibyshev run \
   creates it when necessary.
 - `--project-root` (optional) is a product/workspace directory. When set,
   relative `--config`, `--settings-dir`, and `--home` resolve under
-  `{project-root}/.kuibyshev/`. Absolute paths are unchanged. The worker does
+  `{project-root}/.kuibysheff/`. Absolute paths are unchanged. The worker does
   not rewrite MCP args or `access.filesystem.workspace` from this flag;
   per-project MCP and workspace paths belong in the project's agent config
-  (typically under `.kuibyshev/agents/`).
+  (typically under `.kuibysheff/agents/`).
 
 `limits.*` stop the run (iterations / cumulative token budget / wall clock).
 Wall-clock expiry cancels in-flight provider/MCP waits cooperatively and is
@@ -72,19 +72,19 @@ human-readable text and use process exit codes — except `acp`, which speaks
 JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
 
 ```text
-agent_Kuibyshev help
-agent_Kuibyshev help init
-agent_Kuibyshev help check
-agent_Kuibyshev help acp
-agent_Kuibyshev --help
+agent_Kuibysheff help
+agent_Kuibysheff help init
+agent_Kuibysheff help check
+agent_Kuibysheff help acp
+agent_Kuibysheff --help
 
-agent_Kuibyshev init <agent-id> [--path DIR] [--force] [-i|--interactive]
+agent_Kuibysheff init <agent-id> [--path DIR] [--force] [-i|--interactive]
 
-agent_Kuibyshev check --config <FILE> \
+agent_Kuibysheff check --config <FILE> \
   [--settings-dir <DIR>] \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
 
-agent_Kuibyshev acp \
+agent_Kuibysheff acp \
   --config <FILE> \
   --settings-dir <DIR> \
   --home <DIR> \
@@ -117,19 +117,19 @@ Exit code `0` only when every probe is `ok` or intentionally `skip`.
 `acp` starts an [Agent Client Protocol](https://agentclientprotocol.com/)
 agent on **stdio**. This is the shared integration boundary for IDE hosts and
 for external applications (messengers, email, bots) that speak ACP over pipes.
-Kuibyshev does **not** embed Telegram/email/Slack clients or credentials; those
+Kuibysheff does **not** embed Telegram/email/Slack clients or credentials; those
 stay in the external bridge process.
 
 IDE layering (VS Code):
 
 ```text
-VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
+VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibysheff acp
 ```
 
 External bridge layering:
 
 ```text
-Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibyshev acp
+Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibysheff acp
 ```
 
 #### Stream contract
@@ -151,12 +151,12 @@ Rules for bridge authors:
   not keep chat history across prompts. The bridge must attach any thread/context
   it needs inside the prompt text (or via `--files` / home `in/` prepared outside).
 - Messenger/mail tokens, webhooks, and user identity mapping belong only in the
-  bridge — never in Kuibyshev config.
+  bridge — never in Kuibysheff config.
 
 Minimal spawn sketch (pseudo-Rust):
 
 ```rust
-let mut child = Command::new("agent_Kuibyshev")
+let mut child = Command::new("agent_Kuibysheff")
     .args(["acp", "--config", cfg, "--settings-dir", settings, "--home", home])
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
@@ -167,7 +167,7 @@ let mut child = Command::new("agent_Kuibyshev")
 
 #### Protocol notes
 
-- Kuibyshev does **not** implement an AHP host; VS Code already owns that.
+- Kuibysheff does **not** implement an AHP host; VS Code already owns that.
 - The official AHP Rust crates (`ahp` / `ahp-ws`) are **clients** to a host and
   are not used here.
 - Protocol version: ACP schema **v1** via `agent-client-protocol` 2.x
@@ -177,7 +177,7 @@ let mut child = Command::new("agent_Kuibyshev")
   MCP, `AgentEngine`). Deliverables still land under `--home`.
 - `session/new` supplies `cwd`. Effective project root is non-empty session
   `cwd`, else CLI `--project-root`. Relative config/settings/home paths resolve
-  under `{project-root}/.kuibyshev/` the same way as `run`.
+  under `{project-root}/.kuibysheff/` the same way as `run`.
 - Fail-closed `access` is unchanged; policy denials surface as tool errors.
 - `init_tracing` is idempotent for the same log directory inside one process so
   sequential prompts do not panic; switching log directories mid-process is rejected.
@@ -188,7 +188,7 @@ workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
 ```json
 "acp.agents": {
   "1c-analyst": {
-    "command": "agent_Kuibyshev",
+    "command": "agent_Kuibysheff",
     "args": [
       "acp",
       "--project-root", "${workspaceFolder}",
@@ -403,7 +403,7 @@ outer container remains optional defense-in-depth.
   outside the home filesystem sandbox and must be reviewed by the
   orchestrator/operator.
 - Configured logging paths are an explicit exception to the home-only side
-  effect rule. By default they live under `~/.agent-kuibyshev/logs` on the host
+  effect rule. By default they live under `~/.agent-kuibysheff/logs` on the host
   running the agent, not inside `--home`.
 - `RunOutput.logs.system_log` points to the append-only tracing file when
   logging is initialized.

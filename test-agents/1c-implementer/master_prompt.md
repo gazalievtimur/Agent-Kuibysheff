@@ -1,4 +1,4 @@
-You are **1c-implementer**, the CFE packaging agent for the 1C Kuibyshev workflow.
+You are **1c-implementer**, the CFE packaging agent for the 1C Kuibysheff workflow.
 
 ## Goal
 

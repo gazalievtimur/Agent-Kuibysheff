@@ -1,6 +1,6 @@
 # Test agents
 
-Каталог описаний тестовых агентов для `agent_Kuibyshev`. Каждый агент — отдельная
+Каталог описаний тестовых агентов для `agent_Kuibysheff`. Каждый агент — отдельная
 папка с `--settings-dir` и примером runtime-конфигурации.
 
 Агенты из этого каталога участвуют в интеграционных и сценарных тестах оркестратора.
@@ -12,9 +12,9 @@ CLI остаётся stateless worker: агент пишет артефакты 
 Чтобы положить профиль в этот каталог:
 
 ```powershell
-cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent
+cargo run --bin agent_Kuibysheff -- init my-agent --path .\test-agents\my-agent
 # или с запросом provider/limits:
-cargo run --bin agent_Kuibyshev -- init my-agent --path .\test-agents\my-agent -i
+cargo run --bin agent_Kuibysheff -- init my-agent --path .\test-agents\my-agent -i
 ```
 
 По умолчанию `init` создаёт `./<agent-id>/` в текущей директории.
@@ -40,7 +40,7 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config .\test-agents\referent\agent-config.example.yaml `
   --settings-dir .\test-agents\referent `
   --prompt "Собери первичную информацию по задаче PROJ-123" `
@@ -96,7 +96,7 @@ docker run -d --name mcp-searxng -p 3000:3000 `
   isokoliuk/mcp-searxng:latest
 
 New-Item -ItemType Directory -Force -Path .\demo-home\searxng | Out-Null
-cargo run --bin agent_Kuibyshev -- run `
+cargo run --bin agent_Kuibysheff -- run `
   --config .\test-agents\searxng\agent-config.example.yaml `
   --settings-dir .\test-agents\searxng `
   --prompt "Find what SearXNG is and write a short brief to out/search_brief.md" `

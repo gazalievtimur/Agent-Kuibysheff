@@ -534,7 +534,7 @@ impl McpOAuth {
 
     async fn dynamic_register(&self, registration_endpoint: &str) -> Result<ResolvedClient, Error> {
         let body = serde_json::json!({
-            "client_name": "agent_Kuibyshev",
+            "client_name": "agent_Kuibysheff",
             "redirect_uris": ["http://127.0.0.1/callback"],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],

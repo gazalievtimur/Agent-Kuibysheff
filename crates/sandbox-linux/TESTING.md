@@ -60,22 +60,22 @@ interactively on the machine.
 
 ## Sync from Windows (dev machine)
 
-Repo path contains a space (`Agent Kuibyshev`). Prefer extracting to a path
+Repo path contains a space (`Agent Kuibysheff`). Prefer extracting to a path
 **without** spaces on the Linux host.
 
 PowerShell (from the Windows checkout):
 
 ```powershell
-$dest = "$env:TEMP\agent-kuibyshev-linux.tgz"
+$dest = "$env:TEMP\agent-kuibysheff-linux.tgz"
 tar -czf $dest --exclude=target --exclude=.git --exclude=src/.code-index --exclude=.env `
-  -C "C:\Git" "Agent Kuibyshev"
-scp -o BatchMode=yes $dest ubuntu-laptop:/tmp/agent-kuibyshev-linux.tgz
+  -C "C:\Git" "Agent Kuibysheff"
+scp -o BatchMode=yes $dest ubuntu-laptop:/tmp/agent-kuibysheff-linux.tgz
 ssh -o BatchMode=yes ubuntu-laptop @"
 export PATH=`$HOME/.cargo/bin:`$PATH
-rm -rf `$HOME/src/agent-kuibyshev-test
-tar -xzf /tmp/agent-kuibyshev-linux.tgz -C /tmp
-mv '/tmp/Agent Kuibyshev' `$HOME/src/agent-kuibyshev-test
-cd `$HOME/src/agent-kuibyshev-test
+rm -rf `$HOME/src/agent-kuibysheff-test
+tar -xzf /tmp/agent-kuibysheff-linux.tgz -C /tmp
+mv '/tmp/Agent Kuibysheff' `$HOME/src/agent-kuibysheff-test
+cd `$HOME/src/agent-kuibysheff-test
 cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
 "@
 ```
@@ -93,7 +93,7 @@ Notes:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-cd ~/src/agent-kuibyshev-test   # or current sync dir
+cd ~/src/agent-kuibysheff-test   # or current sync dir
 cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
 ```
 
@@ -103,7 +103,7 @@ Same live-agent gate as Windows `scripts/aoc-regression.ps1`, but as bash:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-cd ~/src/agent-kuibyshev-test
+cd ~/src/agent-kuibysheff-test
 chmod +x ./scripts/*.sh
 cp -Rn ./local/aoc-bank.example ./local/aoc-bank   # if bank missing
 # Provide API key via .env / agent-config.local.yaml / POLZA_API_KEY
@@ -145,7 +145,7 @@ Grants passed into OS sandboxes must be **absolute** paths under `--home`
 Keep these in mind when debugging regressions:
 
 1. **Helper re-exec** — `LinuxSandbox::run` re-execs `current_exe` with
-   `AGENT_KUIBYSHEV_LINUX_SANDBOX_HELPER`. Test binaries must enter helper mode
+   `AGENT_KUIBYSHEFF_LINUX_SANDBOX_HELPER`. Test binaries must enter helper mode
    via `.init_array` → `try_run_helper()` in `lib.rs` (otherwise the harness
    recurses / hangs).
 2. **Uid map failure** — kill the clone child via pidfd before releasing the

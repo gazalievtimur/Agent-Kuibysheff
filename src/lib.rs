@@ -1,4 +1,4 @@
-//! Library API for the `agent_Kuibyshev` worker.
+//! Library API for the `agent_Kuibysheff` worker.
 //!
 //! # Stable surface
 //!

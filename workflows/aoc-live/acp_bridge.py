@@ -1,4 +1,4 @@
-"""ACP stdio client bridge for a long-lived agent_Kuibyshev process."""
+"""ACP stdio client bridge for a long-lived agent_Kuibysheff process."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class _CollectingClient(Client):
         self, session_id: Any, tool_call: Any, options: Any, **kwargs: Any
     ) -> dict[str, Any]:
         del session_id, tool_call, options, kwargs
-        # Kuibyshev does not solicit ACP permissions for tools; refuse if asked.
+        # Kuibysheff does not solicit ACP permissions for tools; refuse if asked.
         return {"outcome": {"outcome": "cancelled"}}
 
 
@@ -71,7 +71,7 @@ def _content_text(update: Any) -> Optional[str]:
 
 
 class AcpAgentSession:
-    """Owns one long-lived `agent_Kuibyshev acp` child and one ACP session."""
+    """Owns one long-lived `agent_Kuibysheff acp` child and one ACP session."""
 
     def __init__(
         self,
