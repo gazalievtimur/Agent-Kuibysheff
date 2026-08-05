@@ -450,3 +450,12 @@ cargo test -p sandbox-windows --test appcontainer
 # On Linux (see crates/sandbox-linux/TESTING.md):
 # cargo test -p sandbox-linux --test namespaces -- --test-threads=1
 ```
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE)
+for copyright. Contributions are under the same terms; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
+trademark use beyond reasonable attribution of origin.
