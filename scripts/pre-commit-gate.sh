@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # CI-parity gate used by git pre-commit / Cursor hooks.
 #
-# Mirrors the fast CI jobs:
+# Mirrors the fast CI jobs, plus local supply-chain:
 #   - cargo fmt --all -- --check
 #   - cargo clippy --workspace --all-targets -- -D warnings
+#   - cargo deny check (skip with --skip-deny / SKIP_DENY=1)
 #   - cargo test --workspace
 #   - cargo +nightly miri test -p sandbox-linux --lib (Linux; skip with --skip-miri)
 #
@@ -12,6 +13,7 @@ set -euo pipefail
 
 SKIP_MIRI_FLAG=0
 SKIP_TESTS=0
+SKIP_DENY_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,8 +25,12 @@ while [[ $# -gt 0 ]]; do
       SKIP_TESTS=1
       shift
       ;;
+    --skip-deny|-SkipDeny)
+      SKIP_DENY_FLAG=1
+      shift
+      ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,14p' "$0"
       exit 0
       ;;
     *)
@@ -55,6 +61,16 @@ step "cargo fmt --all -- --check" \
 
 step "cargo clippy --workspace --all-targets -- -D warnings" \
   cargo clippy --workspace --all-targets -- -D warnings
+
+if [[ "$SKIP_DENY_FLAG" -eq 1 || "${SKIP_DENY:-}" == "1" ]]; then
+  echo "==> Skipping cargo deny (--skip-deny / SKIP_DENY=1)"
+else
+  if ! cargo deny --version >/dev/null 2>&1; then
+    echo "cargo-deny is not installed. Install with: cargo install --locked cargo-deny" >&2
+    exit 1
+  fi
+  step "cargo deny check" cargo deny check
+fi
 
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
   step "cargo test --workspace" \

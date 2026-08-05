@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Git pre-commit: run CI-parity gate (fmt, clippy, tests; miri on Linux).
+# Git pre-commit: run CI-parity gate
+#   (fmt, clippy, cargo deny, tests; miri on Linux).
 #
 # Enable once per clone:
 #   git config core.hooksPath .githooks
@@ -16,11 +17,24 @@ if [[ -n "${SKIP_PRECOMMIT:-}" && "${SKIP_PRECOMMIT}" == "1" ]]; then
   exit 0
 fi
 
+# On Windows (Git Bash / MSYS), prefer PowerShell so `cargo` / `cargo-deny`
+# from the user PATH (e.g. %USERPROFILE%\.cargo\bin) are visible.
+uname_s="$(uname -s 2>/dev/null || echo unknown)"
+case "$uname_s" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v pwsh >/dev/null 2>&1; then
+      exec pwsh -NoProfile -File "$ROOT/scripts/pre-commit-gate.ps1"
+    fi
+    if command -v powershell >/dev/null 2>&1; then
+      exec powershell -NoProfile -File "$ROOT/scripts/pre-commit-gate.ps1"
+    fi
+    ;;
+esac
+
 if command -v bash >/dev/null 2>&1 && [[ -x "$ROOT/scripts/pre-commit-gate.sh" || -f "$ROOT/scripts/pre-commit-gate.sh" ]]; then
   exec bash "$ROOT/scripts/pre-commit-gate.sh"
 fi
 
-# Fallback for environments without bash gate executable bit.
 if command -v pwsh >/dev/null 2>&1; then
   exec pwsh -NoProfile -File "$ROOT/scripts/pre-commit-gate.ps1"
 fi
