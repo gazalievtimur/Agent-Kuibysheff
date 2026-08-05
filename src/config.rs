@@ -46,6 +46,8 @@ pub struct AppConfig {
     pub provider: ProviderConfig,
     #[serde(default)]
     pub mcp: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub event_mcp: crate::event_mcp::EventMcpConfig,
     pub limits: LimitsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -568,6 +570,10 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
         }
     }
 
+    cfg.event_mcp
+        .validate_shape()
+        .map_err(ConfigError::Validation)?;
+
     validate_access_config(
         cfg.access.as_ref(),
         cfg.mcp.iter().map(|server| server.name.as_str()),
@@ -601,6 +607,7 @@ mod tests {
                     env: HashMap::new(),
                 }),
             }],
+            event_mcp: crate::event_mcp::EventMcpConfig::default(),
             limits: LimitsConfig {
                 max_iterations: 5,
                 max_tokens: 500,

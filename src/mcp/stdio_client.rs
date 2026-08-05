@@ -163,6 +163,45 @@ impl McpRegistry {
         }
     }
 
+    /// Calls a discovered MCP tool for an Event-MCP pipeline without recording payload bodies.
+    pub(crate) async fn call_event_handler(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, Error> {
+        self.call_discovered_tool(server, tool, arguments).await
+    }
+
+    async fn call_discovered_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, Error> {
+        let handle = self
+            .servers
+            .get(server)
+            .ok_or_else(|| Error::UnknownServer(server.to_string()))?;
+        if !handle.tools.contains(tool) {
+            return Err(Error::UnknownTool {
+                server: server.to_string(),
+                tool: tool.to_string(),
+            });
+        }
+
+        handle
+            .client
+            .request(
+                "tools/call",
+                json!({
+                    "name": tool,
+                    "arguments": arguments,
+                }),
+            )
+            .await
+    }
+
     /// Test helper: registry with one server whose every request returns `result`.
     #[cfg(test)]
     fn with_stub_server(
@@ -358,28 +397,8 @@ impl ToolExecutor for McpRegistry {
         tracing::Span::current().record("server", server);
         tracing::Span::current().record("tool", tool);
 
-        let handle = self
-            .servers
-            .get(server)
-            .ok_or_else(|| ToolError::from(Error::UnknownServer(server.to_string())))?;
-        if !handle.tools.contains(tool) {
-            return Err(ToolError::from(Error::UnknownTool {
-                server: server.to_string(),
-                tool: tool.to_string(),
-            }));
-        }
-
         let arguments_for_log = self.logger.as_ref().map(|_| arguments.clone());
-        let result = handle
-            .client
-            .request(
-                "tools/call",
-                json!({
-                    "name": tool,
-                    "arguments": arguments,
-                }),
-            )
-            .await?;
+        let result = self.call_discovered_tool(server, tool, arguments).await?;
 
         // Runtime audit is soft: tools/call already succeeded; never map sink
         // failures to ToolError (would look like a tool failure to the model).

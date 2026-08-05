@@ -60,6 +60,8 @@ flowchart TD
     SKILLS --> POLICY
     CONFIG -->|MCP servers| MCP[mcp/]
     MCP -->|discovered tools| POLICY
+    CONFIG -->|ordered event bindings| EVENTMCP[event_mcp/]
+    MCP -->|standard tools/call| EVENTMCP
 
     HOMEFS -->|sandbox| SANDBOX[sandbox/]
     SANDBOX -->|platform backend| NATIVE[sandbox/native.rs]
@@ -69,6 +71,7 @@ flowchart TD
     CONFIG -->|provider| PROVIDER[provider/openai_compat.rs]
     POLICY -->|ToolExecutor| AGENT[agent/loop]
     PROVIDER -->|ModelClient| AGENT
+    EVENTMCP -->|PipelineEvents| AGENT
     CONTEXT --> AGENT
 
     AGENT -->|RunOutput| OUTPUT[output.rs]
@@ -130,6 +133,10 @@ this crate.
 - `src/mcp/stdio_client.rs` — MCP over stdio (`pub(crate)` module; `McpRegistry` re-exported): server lifecycle, `tools/list`, `tools/call`, JSON-RPC actor, stderr drain, JSONL logging.
 - `src/mcp/http_client.rs` — MCP over Streamable HTTP (`pub(crate)`).
 - `src/mcp/oauth.rs` / `sse.rs` — OAuth and SSE parsing (`pub(crate)`).
+- `src/event_mcp/` — ordered synchronous middleware over standard MCP `tools/call`. Explicit
+  event bindings are compiled after tool discovery and run independently from model-selected tool
+  policy. The MVP exposes `context.before_model`, `model.after_response`, and
+  `run.before_output`; see `docs/EVENT_MCP.md` for the versioned envelope and chain semantics.
 - `src/provider/openai_compat.rs` — OpenAI-compatible `/chat/completions` client with retries (`pub(crate)`).
 - `src/provider/mod.rs` — `ModelClient` trait and shared provider types.
 - `src/lib.rs` — curated public API; see crate rustdoc for the stable vs `pub(crate)` split.
@@ -150,12 +157,13 @@ this crate.
 
 ## Trait-based layering
 
-The agent crate is built around three object-safe traits, all wrapped in `Arc<dyn ...>` for testability and composition:
+The agent crate is built around four object-safe traits, all wrapped in `Arc<dyn ...>` for testability and composition:
 
 | Trait | Responsibility | Implementations |
 |-------|--------------|-----------------|
 | `ModelClient` | Send chat messages to the LLM and return a completion. | `OpenAiCompatClient` |
 | `ToolExecutor` | Dispatch a tool call by `server` and `tool` name and return a JSON result. | `CompositeToolExecutor`, `PolicyToolExecutor`, `McpRegistry` |
+| `PipelineEvents` | Transform versioned payloads through ordered Event-MCP chains. | `EventMcpDispatcher`, `NoopPipelineEvents` |
 | `SandboxBackend` | Run a single payload inside the OS sandbox and return stdout/stderr/exit. | `NativeLinuxBackend`, `NativeWindowsBackend`, `UnavailableBackend`, `MockBackend` |
 
 ```mermaid
@@ -163,6 +171,7 @@ flowchart LR
     subgraph traits [Traits]
         MC[ModelClient]
         TE[ToolExecutor]
+        PI[PipelineEvents]
         SB[SandboxBackend]
     end
 
@@ -171,6 +180,8 @@ flowchart LR
         CE[CompositeToolExecutor]
         PE[PolicyToolExecutor]
         MR[McpRegistry]
+        EM[EventMcpDispatcher]
+        NE[NoopPipelineEvents]
         NL[NativeLinuxBackend]
         NW[NativeWindowsBackend]
         UB[UnavailableBackend]
@@ -180,6 +191,8 @@ flowchart LR
     TE --> CE
     TE --> PE
     TE --> MR
+    PI --> EM
+    PI --> NE
     SB --> NL
     SB --> NW
     SB --> UB

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
@@ -10,6 +11,7 @@ use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
 use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
 use crate::config::ProviderHistoryConfig;
+use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEvents};
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
 use crate::output::{RunOutput, StopReason, UsageReport};
@@ -26,6 +28,8 @@ pub enum AgentError {
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
     Logging(#[from] LoggingError),
+    #[error("Event-MCP failure: {0}")]
+    EventMcp(#[from] EventMcpError),
 }
 
 #[derive(Clone)]
@@ -45,6 +49,7 @@ pub struct AgentRunRequest {
 pub struct AgentEngine {
     model: Arc<dyn ModelClient>,
     tools: Arc<dyn ToolExecutor>,
+    pipeline_events: Arc<dyn PipelineEvents>,
     loggers: Loggers,
 }
 
@@ -57,8 +62,16 @@ impl AgentEngine {
         Self {
             model,
             tools,
+            pipeline_events: Arc::new(NoopPipelineEvents),
             loggers,
         }
+    }
+
+    /// Attaches an information-flow event pipeline to this engine.
+    #[must_use]
+    pub fn with_pipeline_events(mut self, pipeline_events: Arc<dyn PipelineEvents>) -> Self {
+        self.pipeline_events = pipeline_events;
+        self
     }
 
     pub async fn run(&self, request: AgentRunRequest) -> RunOutput {
@@ -130,6 +143,37 @@ impl AgentEngine {
             metrics.begin_iteration();
             let iteration = metrics.iterations();
 
+            let provider_snapshot = if self
+                .pipeline_events
+                .has_handlers(EventStage::ContextBeforeModel)
+            {
+                let transformed = self
+                    .pipeline_events
+                    .dispatch(
+                        EventStage::ContextBeforeModel,
+                        json!({ "messages": &messages }),
+                        Some(iteration),
+                        cancel.token(),
+                    )
+                    .await;
+                let transformed = match transformed {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((err.into(), build_usage_report(&metrics)));
+                    }
+                };
+                match decode_context_before_model(&messages, transformed) {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((err.into(), build_usage_report(&metrics)));
+                    }
+                }
+            } else {
+                None
+            };
+            let provider_messages = provider_snapshot.as_deref().unwrap_or(&messages);
             let completion = tokio::select! {
                 biased;
                 () = cancel.token().cancelled() => {
@@ -142,9 +186,9 @@ impl AgentEngine {
                     );
                     break;
                 }
-                completion = self.model.complete(&messages) => completion,
+                completion = self.model.complete(provider_messages) => completion,
             };
-            let completion = match completion {
+            let mut completion = match completion {
                 Ok(completion) => completion,
                 Err(err) => {
                     self.loggers.persist_chat_history(&full_history, None).await;
@@ -152,6 +196,34 @@ impl AgentEngine {
                 }
             };
             metrics.add_tokens(completion.usage);
+            if self
+                .pipeline_events
+                .has_handlers(EventStage::ModelAfterResponse)
+            {
+                let transformed = self
+                    .pipeline_events
+                    .dispatch(
+                        EventStage::ModelAfterResponse,
+                        json!({ "content": completion.content }),
+                        Some(iteration),
+                        cancel.token(),
+                    )
+                    .await;
+                let transformed = match transformed {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((err.into(), build_usage_report(&metrics)));
+                    }
+                };
+                completion.content = match decode_model_after_response(transformed) {
+                    Ok(content) => content,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((err.into(), build_usage_report(&metrics)));
+                    }
+                };
+            }
             if metrics.tokens_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_tokens".to_string();
                 stop_reason = StopReason::LimitReached;
@@ -485,9 +557,6 @@ impl AgentEngine {
                     .result
                     .unwrap_or("Agent marked done without explicit result".to_string());
                 stop_reason = StopReason::GoalReached;
-                if !final_result.is_empty() {
-                    events.emit(AgentEvent::Message(final_result.clone()));
-                }
                 if !diag.home_run_ok {
                     warn!(
                         iterations = iteration,
@@ -504,10 +573,41 @@ impl AgentEngine {
             prune_message_history(&mut messages, &history);
         }
 
+        if !final_result.is_empty()
+            && !cancel.is_cancelled()
+            && self
+                .pipeline_events
+                .has_handlers(EventStage::RunBeforeOutput)
+        {
+            let transformed = self
+                .pipeline_events
+                .dispatch(
+                    EventStage::RunBeforeOutput,
+                    json!({ "result": final_result }),
+                    None,
+                    cancel.token(),
+                )
+                .await;
+            let transformed = match transformed {
+                Ok(payload) => payload,
+                Err(err) => {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err((err.into(), build_usage_report(&metrics)));
+                }
+            };
+            final_result = match decode_run_before_output(transformed) {
+                Ok(result) => result,
+                Err(err) => {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err((err.into(), build_usage_report(&metrics)));
+                }
+            };
+        }
+
         self.emit_run_summary(&diag, &stop_reason, &final_result)
             .await;
 
-        if stop_reason != StopReason::GoalReached && !final_result.is_empty() {
+        if !final_result.is_empty() {
             events.emit(AgentEvent::Message(final_result.clone()));
         }
 
@@ -589,6 +689,76 @@ struct RunDiagnostics {
     tools_executed: u32,
     home_write_ok: bool,
     home_run_ok: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextBeforeModelPayload {
+    messages: Vec<ChatMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelAfterResponsePayload {
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunBeforeOutputPayload {
+    result: String,
+}
+
+fn decode_context_before_model(
+    canonical: &[ChatMessage],
+    payload: Value,
+) -> Result<Vec<ChatMessage>, EventMcpError> {
+    let transformed: ContextBeforeModelPayload =
+        serde_json::from_value(payload).map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: error.to_string(),
+        })?;
+    let Some(original_system) = canonical.first() else {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "canonical message list is empty".to_string(),
+        });
+    };
+    let Some(transformed_system) = transformed.messages.first() else {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "messages must not be empty".to_string(),
+        });
+    };
+    if !matches!(original_system.role, ChatRole::System)
+        || !matches!(transformed_system.role, ChatRole::System)
+        || transformed_system.content != original_system.content
+    {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "the original system message must remain the first message unchanged"
+                .to_string(),
+        });
+    }
+    Ok(transformed.messages)
+}
+
+fn decode_model_after_response(payload: Value) -> Result<String, EventMcpError> {
+    serde_json::from_value::<ModelAfterResponsePayload>(payload)
+        .map(|value| value.content)
+        .map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::ModelAfterResponse,
+            reason: error.to_string(),
+        })
+}
+
+fn decode_run_before_output(payload: Value) -> Result<String, EventMcpError> {
+    serde_json::from_value::<RunBeforeOutputPayload>(payload)
+        .map(|value| value.result)
+        .map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::RunBeforeOutput,
+            reason: error.to_string(),
+        })
 }
 
 fn build_user_message(
@@ -741,6 +911,80 @@ mod tests {
         }
     }
 
+    struct RecordingProvider {
+        responses: Vec<String>,
+        calls: AtomicUsize,
+        seen_messages: std::sync::Mutex<Vec<Vec<ChatMessage>>>,
+    }
+
+    #[async_trait]
+    impl ModelClient for RecordingProvider {
+        async fn complete(
+            &self,
+            messages: &[ChatMessage],
+        ) -> Result<ModelResponse, crate::provider::Error> {
+            self.seen_messages
+                .lock()
+                .expect("seen messages")
+                .push(messages.to_vec());
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let content = self
+                .responses
+                .get(call)
+                .cloned()
+                .ok_or(crate::provider::Error::EmptyChoices)?;
+            Ok(ModelResponse {
+                content,
+                usage: test_usage(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct TransformingPipeline {
+        context_inputs: std::sync::Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl PipelineEvents for TransformingPipeline {
+        fn has_handlers(&self, _event: EventStage) -> bool {
+            true
+        }
+
+        async fn dispatch(
+            &self,
+            event: EventStage,
+            mut payload: Value,
+            iteration: Option<u32>,
+            _cancel: &tokio_util::sync::CancellationToken,
+        ) -> Result<Value, EventMcpError> {
+            match event {
+                EventStage::ContextBeforeModel => {
+                    self.context_inputs
+                        .lock()
+                        .expect("context inputs")
+                        .push(payload.clone());
+                    payload["messages"][1]["content"] = json!("COMPRESSED");
+                    Ok(payload)
+                }
+                EventStage::ModelAfterResponse => {
+                    let done = iteration == Some(2);
+                    Ok(json!({
+                        "content": json!({
+                            "done": done,
+                            "thought": "repaired",
+                            "tool_calls": [],
+                            "result": done.then_some("answer")
+                        }).to_string()
+                    }))
+                }
+                EventStage::RunBeforeOutput => Ok(json!({
+                    "result": format!("formatted: {}", payload["result"].as_str().unwrap_or(""))
+                })),
+            }
+        }
+    }
+
     struct NoopTools;
 
     #[async_trait]
@@ -815,6 +1059,46 @@ mod tests {
         assert!(message.contains("read-only context"));
         assert!(message.contains("input.rs"));
         assert!(message.contains("home.read"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_transforms_provider_snapshot_response_and_final_output() {
+        let provider = Arc::new(RecordingProvider {
+            responses: vec!["invalid first".to_string(), "invalid second".to_string()],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let pipeline = Arc::new(TransformingPipeline::default());
+        let engine = AgentEngine::new(provider.clone(), Arc::new(NoopTools), Loggers::default())
+            .with_pipeline_events(pipeline.clone());
+
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "formatted: answer");
+
+        let seen = provider.seen_messages.lock().expect("seen messages");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0][1].content.as_ref(), "COMPRESSED");
+        assert_eq!(seen[1][1].content.as_ref(), "COMPRESSED");
+
+        let context_inputs = pipeline.context_inputs.lock().expect("context inputs");
+        assert_eq!(context_inputs.len(), 2);
+        let second_canonical_user = context_inputs[1]["messages"][1]["content"]
+            .as_str()
+            .expect("canonical user content");
+        assert!(second_canonical_user.contains("Goal: test"));
+        assert_ne!(second_canonical_user, "COMPRESSED");
     }
 
     #[tokio::test]

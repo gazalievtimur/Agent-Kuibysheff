@@ -10,6 +10,7 @@ Minimal and reliable CLI agent worker in Rust.
   files, and an isolated home workspace.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
+- Can also invoke MCP tools as ordered Event-MCP middleware around context and response stages.
 - Enforces hard stop limits: iterations, tokens, and max duration.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
@@ -347,6 +348,77 @@ Process exit for `run`: `0` when `stop_reason` is `goal_reached` or
 `limit_reached`; non-zero when `stop_reason` is `error` (JSON is still printed
 on stdout). Management commands (`init`, `check`) keep their own exit semantics
 and do not emit `RunOutput`.
+
+## Event-MCP middleware
+
+Event-MCP connects MCP servers to the agent's information flow, not only to
+model-selected tool calls. It uses the standard MCP `tools/call` method: an MCP
+server exposes a handler as an ordinary tool, and the agent invokes that tool at
+an explicitly configured pipeline stage. No custom transport or JSON-RPC method
+is required.
+
+Several handlers may subscribe to the same event. They run sequentially in the
+order listed in the configuration, regardless of MCP server connection order.
+Each handler receives the last valid payload, so a transformation made by one
+handler becomes the input of the next:
+
+```yaml
+mcp:
+  - name: security
+    transport: stdio
+    command: "security-mcp"
+  - name: context
+    transport: http
+    url: "https://mcp.example.com/mcp"
+
+event_mcp:
+  events:
+    context.before_model:
+      handlers:
+        - id: redact-secrets
+          target: security.redact
+          timeout_ms: 3000
+          on_error: abort
+        - id: compact-history
+          target: context.compact
+          timeout_ms: 5000
+          on_error: continue
+```
+
+The MVP provides three transformation stages:
+
+- `context.before_model` receives a snapshot of chat messages immediately
+  before each provider request. The transformed snapshot is sent to the model,
+  while canonical chat history remains unchanged.
+- `model.after_response` receives provider text before audit logging and JSON
+  directive parsing. It can validate or repair model output.
+- `run.before_output` receives the final result before it is emitted to ACP or
+  placed in `RunOutput`. It can validate or format the user-facing response.
+
+Handlers return an MCP `CallToolResult`. The preferred result is
+`structuredContent` containing one of:
+
+```json
+{ "action": "pass" }
+{ "action": "replace", "payload": {} }
+{ "action": "reject", "reason": "validation failed" }
+```
+
+`pass` preserves the current payload, `replace` passes the supplied payload to
+the next handler, and `reject` stops the chain and fails the run. A timeout,
+transport failure, or malformed result follows the handler's `on_error` policy:
+`continue` keeps the last valid payload, while `abort` fails the run.
+Cancellation always stops the chain.
+
+Bindings are validated after MCP tool discovery. Configuring a handler is an
+explicit trust grant to send that event payload to its MCP server, but it does
+not add the tool to the model's skills/tool allowlist. Event audit records
+contain stage, target, sizes, duration, and outcome—not prompt or response
+bodies.
+
+The complete versioned envelope, payload schemas, security boundary, and future
+`run.input` OCR/vision extension are documented in
+[docs/EVENT_MCP.md](docs/EVENT_MCP.md).
 
 ## Logging
 

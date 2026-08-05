@@ -21,6 +21,7 @@ use crate::cli::{AcpArgs, Cli, Commands, RunArgs};
 use crate::commands;
 use crate::config::{apply_limit_overrides, load_config, load_dotenv, validate, AppConfig};
 use crate::context::build_input_files_context;
+use crate::event_mcp::EventMcpDispatcher;
 use crate::logging::{init_tracing, resolve_base_dir, Loggers};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
@@ -259,17 +260,21 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             )
         })?;
 
-    let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone(), run_cancel.token().clone())
-        .await
-        .context("connecting MCP servers")?;
+    let mcp = Arc::new(
+        McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone(), run_cancel.token().clone())
+            .await
+            .context("connecting MCP servers")?,
+    );
     let mcp_tools = parse_tool_list(mcp.available_tools())
         .map_err(|reason| anyhow::anyhow!("parsing MCP tool names: {reason}"))?;
     let effective = EffectiveToolPolicy::compile(&access_policy, &skills_allowed, mcp_tools);
+    let pipeline_events = EventMcpDispatcher::new(&cfg.event_mcp, mcp.clone(), loggers.mcp.clone())
+        .context("compiling Event-MCP handlers")?;
 
     let provider =
         OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
     let tools = PolicyToolExecutor::new(
-        Arc::new(CompositeToolExecutor::new(home, local_tools, Arc::new(mcp))),
+        Arc::new(CompositeToolExecutor::new(home, local_tools, mcp)),
         effective.clone(),
     );
 
@@ -294,7 +299,8 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         "starting agent run"
     );
 
-    let engine = AgentEngine::new(Arc::new(provider), Arc::new(tools), loggers);
+    let engine = AgentEngine::new(Arc::new(provider), Arc::new(tools), loggers)
+        .with_pipeline_events(Arc::new(pipeline_events));
     Ok(engine
         .run(AgentRunRequest {
             prompt: args.prompt,

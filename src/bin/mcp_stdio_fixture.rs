@@ -3,6 +3,7 @@
 //! Modes (first CLI arg):
 //! - (default) speak NDJSON and answer `initialize` / `tools/list`
 //! - `content-length` reply to the first JSON-RPC request with LSP-style framing
+//! - `event` expose an `event_transform` tool that appends its handler id to payload.trace
 //! - `hang` ignore stdin and sleep forever (for kill-path tests)
 //!
 //! Optional env `MCP_FIXTURE_ALIVE_FILE`: create this path on start and remove it on clean exit.
@@ -41,12 +42,13 @@ fn main() {
         Some("hang") => loop {
             thread::sleep(Duration::from_secs(3600));
         },
-        Some("content-length") => serve(true),
-        _ => serve(false),
+        Some("content-length") => serve(true, false),
+        Some("event") => serve(false, true),
+        _ => serve(false, false),
     }
 }
 
-fn serve(content_length_mode: bool) {
+fn serve(content_length_mode: bool, event_mode: bool) {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut used_content_length = false;
@@ -84,16 +86,18 @@ fn serve(content_length_mode: bool) {
                     "version": "0.1.0"
                 }
             }),
-            "tools/list" => json!({
+            "tools/list" if event_mode => json!({
                 "tools": [{
-                    "name": "echo",
-                    "description": "fixture echo tool",
+                    "name": "event_transform",
+                    "description": "append fixture handler id to payload.trace",
                     "inputSchema": {
                         "type": "object",
                         "properties": {}
                     }
                 }]
             }),
+            "tools/list" => tools_list_result(),
+            "tools/call" if event_mode => event_tool_result(&msg),
             _ => {
                 write_error(
                     &mut stdout,
@@ -118,6 +122,47 @@ fn serve(content_length_mode: bool) {
             write_ndjson(&mut stdout, &response);
         }
     }
+}
+
+fn tools_list_result() -> Value {
+    json!({
+        "tools": [{
+            "name": "echo",
+            "description": "fixture echo tool",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }]
+    })
+}
+
+fn event_tool_result(request: &Value) -> Value {
+    let handler_id =
+        std::env::var("MCP_FIXTURE_HANDLER_ID").unwrap_or_else(|_| "fixture".to_string());
+    let mut payload = request
+        .pointer("/params/arguments/payload")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let trace = payload.as_object_mut().and_then(|object| {
+        object
+            .entry("trace")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+    });
+    if let Some(trace) = trace {
+        trace.push(json!(handler_id));
+    }
+    json!({
+        "content": [{
+            "type": "text",
+            "text": "event transformed"
+        }],
+        "structuredContent": {
+            "action": "replace",
+            "payload": payload
+        }
+    })
 }
 
 fn write_ndjson(stdout: &mut impl Write, msg: &Value) {
