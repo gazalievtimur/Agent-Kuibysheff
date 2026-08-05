@@ -143,7 +143,7 @@ The [Release](.github/workflows/release.yml) workflow builds
 ## Quick start
 
 Prerequisites:
-- Rust toolchain (`cargo`), MSRV **1.86**
+- Rust toolchain (`cargo`), MSRV **1.88**
 - Or a prebuilt binary from [Releases](#releases)
 
 PowerShell commands:
@@ -440,7 +440,7 @@ names must be qualified `server.tool` (bare names are rejected). See
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-cargo +1.86.0 check --workspace
+cargo +1.88.0 check --workspace
 ```
 
 Platform suites (do not silently skip on the matching OS):

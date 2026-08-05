@@ -1,10 +1,35 @@
+use std::ffi::{OsStr, OsString};
+
 use agent_Kuibysheff::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibysheff::logging::{default_log_dir, init_tracing, Loggers, LoggingError};
+
+/// Restores an environment variable to its previous value on drop.
+struct EnvRestore {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvRestore {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 #[tokio::test]
 async fn logging_pipeline_writes_trace_and_jsonl_files() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("AGENT_LOG_DIR", dir.path());
+    let _log_dir = EnvRestore::set("AGENT_LOG_DIR", dir.path());
 
     let config = LoggingConfig {
         enable_ai_log: true,
@@ -55,13 +80,16 @@ async fn logging_pipeline_writes_trace_and_jsonl_files() {
 
     let trace_contents = std::fs::read_to_string(trace_path).expect("trace");
     assert!(trace_contents.contains("integration trace line"));
+
+    // Explicit shutdown avoids Drop's 5s drain timeout on the runtime thread.
+    loggers.shutdown().await;
 }
 
 #[test]
 fn default_log_dir_is_under_dot_agent_kuibysheff() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("HOME", dir.path());
-    std::env::set_var("USERPROFILE", dir.path());
+    let _home = EnvRestore::set("HOME", dir.path());
+    let _userprofile = EnvRestore::set("USERPROFILE", dir.path());
 
     let log_dir = default_log_dir().expect("default log dir");
     assert!(log_dir.ends_with(".agent-kuibysheff/logs"));

@@ -162,6 +162,7 @@
   "scripts": {
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
+    "test": "node --test test/*.test.mjs",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --no-dependencies"
   },
