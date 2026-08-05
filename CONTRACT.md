@@ -112,15 +112,60 @@ directory) without running the agent loop. It reports pass/fail for:
 
 Exit code `0` only when every probe is `ok` or intentionally `skip`.
 
-### ACP (IDE / VS Code)
+### ACP (IDE, messengers, mail bridges)
 
 `acp` starts an [Agent Client Protocol](https://agentclientprotocol.com/)
-agent on **stdio** so an IDE host can drive sessions. This is the agent-backend
-role in Microsoft’s layering:
+agent on **stdio**. This is the shared integration boundary for IDE hosts and
+for external applications (messengers, email, bots) that speak ACP over pipes.
+Kuibyshev does **not** embed Telegram/email/Slack clients or credentials; those
+stay in the external bridge process.
+
+IDE layering (VS Code):
 
 ```text
 VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
 ```
+
+External bridge layering:
+
+```text
+Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibyshev acp
+```
+
+#### Stream contract
+
+| Stream | Content |
+|--------|---------|
+| **stdin** | ACP JSON-RPC requests/notifications from the host or bridge only |
+| **stdout** | ACP JSON-RPC responses/notifications only (no `RunOutput`, no logs) |
+| **stderr** | Diagnostics (`tracing`, startup errors). Must be drained on a separate pipe so a full stderr buffer cannot stall the child |
+
+Rules for bridge authors:
+
+- Spawn with three separate pipes (do not merge stdout and stderr).
+- Keep **one long-lived process per agent configuration** (`--config` /
+  `--settings-dir` / `--home`); do not restart for every chat message.
+- On stdin EOF the agent exits; restart the process if the bridge needs another
+  session after exit.
+- Each `session/prompt` is **stateless** relative to prior turns: the engine does
+  not keep chat history across prompts. The bridge must attach any thread/context
+  it needs inside the prompt text (or via `--files` / home `in/` prepared outside).
+- Messenger/mail tokens, webhooks, and user identity mapping belong only in the
+  bridge — never in Kuibyshev config.
+
+Minimal spawn sketch (pseudo-Rust):
+
+```rust
+let mut child = Command::new("agent_Kuibyshev")
+    .args(["acp", "--config", cfg, "--settings-dir", settings, "--home", home])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped()) // drain concurrently
+    .spawn()?;
+// Speak ACP over child.stdin / child.stdout (e.g. agent-client-protocol::ByteStreams).
+```
+
+#### Protocol notes
 
 - Kuibyshev does **not** implement an AHP host; VS Code already owns that.
 - The official AHP Rust crates (`ahp` / `ahp-ws`) are **clients** to a host and
@@ -128,13 +173,14 @@ VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibyshev acp
 - Protocol version: ACP schema **v1** via `agent-client-protocol` 2.x
   (`InitializeRequest` / `session/new` / `session/prompt` / `session/cancel` /
   `session/update`).
-- Stdio is reserved for JSON-RPC; logs go to configured file sinks / stderr.
 - Each `session/prompt` runs the same worker wiring as `run` (access, sandbox,
   MCP, `AgentEngine`). Deliverables still land under `--home`.
 - `session/new` supplies `cwd`. Effective project root is non-empty session
   `cwd`, else CLI `--project-root`. Relative config/settings/home paths resolve
   under `{project-root}/.kuibyshev/` the same way as `run`.
 - Fail-closed `access` is unchanged; policy denials surface as tool errors.
+- `init_tracing` is idempotent for the same log directory inside one process so
+  sequential prompts do not panic; switching log directories mid-process is rejected.
 
 Example VS Code ACP Client settings when the **product folder** is the
 workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
@@ -154,8 +200,10 @@ workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
 }
 ```
 
-`run` remains the orchestrator contract. Multi-agent IDE flows register one ACP
-agent per profile; stage handoff and the plan gate stay outside the Rust binary.
+`run` remains the one-shot orchestrator contract (single `RunOutput` JSON on
+stdout). Multi-agent IDE or bridge flows register one ACP process per profile;
+stage handoff, chat thread mapping, and the plan gate stay outside the Rust
+binary.
 
 ## Access policy (fail-closed)
 

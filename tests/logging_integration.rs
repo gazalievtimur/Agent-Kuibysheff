@@ -1,5 +1,5 @@
 use agent_Kuibyshev::config::{LogSinkConfig, LoggingConfig};
-use agent_Kuibyshev::logging::{default_log_dir, init_tracing, Loggers};
+use agent_Kuibyshev::logging::{default_log_dir, init_tracing, Loggers, LoggingError};
 
 #[tokio::test]
 async fn logging_pipeline_writes_trace_and_jsonl_files() {
@@ -15,6 +15,21 @@ async fn logging_pipeline_writes_trace_and_jsonl_files() {
     };
 
     let trace_path = init_tracing(dir.path()).expect("tracing");
+    // Long-lived ACP processes call init_tracing once per session/prompt; same path must
+    // stay idempotent and must not panic on a second install attempt.
+    let again = init_tracing(dir.path()).expect("idempotent tracing");
+    assert_eq!(trace_path, again);
+
+    let other = tempfile::tempdir().expect("other tempdir");
+    let switched = init_tracing(other.path());
+    assert!(
+        matches!(
+            switched,
+            Err(LoggingError::TracingAlreadyInitialized { .. })
+        ),
+        "expected TracingAlreadyInitialized, got {switched:?}"
+    );
+
     let loggers = Loggers::from_config(&config).await.expect("loggers");
 
     if let Some(ai) = &loggers.ai {

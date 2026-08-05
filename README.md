@@ -64,10 +64,10 @@ Probes the provider API key/HTTP endpoint, each MCP server, access paths and
 programs, logging dir, optional settings files, and the OS sandbox when
 `home.run` programs are configured. Exit code is non-zero if any probe fails.
 
-### VS Code / ACP
+### VS Code / ACP / external bridges
 
-To use this agent from VS Code (or another ACP client), run the ACP stdio
-server instead of one-shot `run`:
+To use this agent from VS Code, a messenger bridge, or another ACP client, run
+the ACP stdio server instead of one-shot `run`:
 
 ```text
 agent_Kuibyshev acp \
@@ -76,6 +76,11 @@ agent_Kuibyshev acp \
   --home <DIR> \
   [--project-root <DIR>]
 ```
+
+**Stream rules:** `stdin`/`stdout` are ACP JSON-RPC only; put diagnostics on a
+separate `stderr` pipe and drain it. Prefer one long-lived process per config.
+Each `session/prompt` is independent — the bridge owns chat/mail thread history.
+Messenger and email credentials stay in the external app, not in this binary.
 
 VS Code’s Agent Host speaks AHP to the UI; Kuibyshev is the ACP backend.
 For **1C products**, open the product folder as the workspace, scaffold
@@ -87,7 +92,8 @@ For **1C products**, open the product folder as the workspace, scaffold
 [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
 Extension README: [extensions/vscode/README.md](extensions/vscode/README.md).
 
-See [CONTRACT.md](CONTRACT.md) for the full ACP notes.
+See [CONTRACT.md](CONTRACT.md#acp-ide-messengers-mail-bridges) for the full ACP
+bridge contract.
 
 ## Releases
 
