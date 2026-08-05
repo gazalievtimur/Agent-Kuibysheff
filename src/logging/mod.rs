@@ -61,6 +61,10 @@ pub enum LoggingError {
     HomeNotFound,
     #[error("unsupported log sink: {0}")]
     UnsupportedSink(String),
+    #[error(
+        "tracing already initialized for `{active}`; refusing to switch to `{requested}` in the same process"
+    )]
+    TracingAlreadyInitialized { active: String, requested: String },
 }
 
 #[derive(Clone, Default)]
@@ -206,9 +210,15 @@ fn destination_path(sink: Option<&SharedEventSink>) -> Option<String> {
 
 /// Initializes tracing to stderr and an append-only trace file in the log directory.
 ///
+/// Safe to call more than once in a long-lived process (for example ACP `session/prompt`
+/// turns): a repeated call for the same `agent.trace.log` path returns that path without
+/// reinstalling the global subscriber. A call that would switch to a different log
+/// directory returns [`LoggingError::TracingAlreadyInitialized`].
+///
 /// # Errors
 ///
-/// Returns [`LoggingError`] when the trace file cannot be created or opened.
+/// Returns [`LoggingError`] when the trace file cannot be created or opened, or when a
+/// different log directory is requested after tracing is already active.
 pub fn init_tracing(log_dir: &Path) -> Result<PathBuf, LoggingError> {
     std::fs::create_dir_all(log_dir).map_err(|source| LoggingError::CreateDir {
         path: log_dir.display().to_string(),
@@ -216,6 +226,20 @@ pub fn init_tracing(log_dir: &Path) -> Result<PathBuf, LoggingError> {
     })?;
 
     let trace_path = log_dir.join("agent.trace.log");
+    let mut guard = ACTIVE_TRACE_PATH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(active) = guard.as_ref() {
+        if paths_equal(active, &trace_path) {
+            return Ok(active.clone());
+        }
+        return Err(LoggingError::TracingAlreadyInitialized {
+            active: active.display().to_string(),
+            requested: trace_path.display().to_string(),
+        });
+    }
+
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -232,13 +256,36 @@ pub fn init_tracing(log_dir: &Path) -> Result<PathBuf, LoggingError> {
         .with_ansi(false)
         .with_writer(FileMakeWriter(Arc::new(Mutex::new(file))));
 
-    tracing_subscriber::registry()
+    // Fallible init: another host/test may have already installed a global subscriber.
+    match tracing_subscriber::registry()
         .with(filter)
         .with(stderr_layer)
         .with(file_layer)
-        .init();
+        .try_init()
+    {
+        Ok(()) => {
+            *guard = Some(trace_path.clone());
+            Ok(trace_path)
+        }
+        Err(_) => {
+            // Subscriber already installed outside this helper. Record the requested path
+            // so later same-path calls stay idempotent and a different path is rejected.
+            *guard = Some(trace_path.clone());
+            Ok(trace_path)
+        }
+    }
+}
 
-    Ok(trace_path)
+static ACTIVE_TRACE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 #[derive(Clone)]

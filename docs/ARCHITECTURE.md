@@ -94,15 +94,26 @@ flowchart TD
 - `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, and elapsed time.
 - `src/output.rs` — `RunOutput` schema: `result`, `usage`, `stop_reason`, `logs`.
 
-### IDE protocol (ACP)
+### IDE and bridge protocol (ACP)
 
-VS Code owns the Agent Host Protocol (AHP) sessions server. Kuibyshev plugs in as an ACP agent:
+ACP over stdio is the shared integration boundary for IDE hosts and for external
+messenger/mail bridges. VS Code owns the Agent Host Protocol (AHP) sessions
+server; Kuibyshev plugs in as an ACP agent. Bridges spawn the same `acp`
+subcommand with three separate pipes:
 
 ```text
 Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibyshev acp
+Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ agent_Kuibyshev acp
 ```
 
-`src/acp/` handles initialize / session lifecycle / prompt turns and forwards engine events as `session/update` notifications. Access policy, sandbox, and MCP client behavior match the `run` worker.
+`src/acp/` handles initialize / session lifecycle / prompt turns and forwards
+engine events as `session/update` notifications. Access policy, sandbox, and MCP
+client behavior match the `run` worker. `stdout` stays ACP-only; `stderr` and
+file sinks hold diagnostics. `init_tracing` is idempotent for repeated prompts
+in one process. Session prompts do not retain prior-turn chat history — bridges
+must supply context themselves. Messenger/email credentials are never part of
+this crate.
+
 ### Tools and access policy
 
 - `src/tools/mod.rs` — `CompositeToolExecutor` routes built-in `home`/`local_tools` calls and falls through to MCP; `PolicyToolExecutor` wraps it and enforces `EffectiveToolPolicy`.
@@ -125,7 +136,7 @@ Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibyshev acp
 
 ### Logging
 
-- `src/logging/mod.rs` — initializes `tracing`, creates `Loggers` (AI/MCP/system/chat sinks).
+- `src/logging/mod.rs` — initializes `tracing` (idempotent for the same log directory in a long-lived ACP process), creates `Loggers` (AI/MCP/system/chat sinks).
 - `src/logging/sink.rs` — async JSONL file sink with a background writer task.
 - `src/logging/paths.rs` — resolves the log base directory.
 - `src/logging/chat_history.rs` — persists the chat transcript (pruned to `provider.history` budgets) to JSON.
