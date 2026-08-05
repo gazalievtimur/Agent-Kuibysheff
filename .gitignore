@@ -20,6 +20,10 @@ agent-config.local.yaml
 /workflows/1c-dev/runs/*
 !/workflows/1c-dev/runs/.gitkeep
 
+# Live AoC ACP workflow run homes (not committed)
+/workflows/aoc-live/runs/*
+!/workflows/aoc-live/runs/.gitkeep
+
 # Local product adapter paths (keep *.yaml.example in git)
 /workflows/1c-dev/products/*.yaml
 !/workflows/1c-dev/products/*.yaml.example

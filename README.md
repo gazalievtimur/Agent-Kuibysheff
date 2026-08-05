@@ -27,6 +27,10 @@ and `scripts/1c-dev-run.ps1`. To drive the same four stages from **VS Code via
 ACP** (human switches agents; prepare/promote helper), see
 [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md).
 
+For a **live Advent of Code** example that speaks ACP stdio from a Python
+singleton (download puzzle → agent solve → submit → retry ≤5), see
+[workflows/aoc-live/README.md](workflows/aoc-live/README.md).
+
 ## Inputs
 
 Worker (`run`):
