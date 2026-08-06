@@ -2,11 +2,15 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::billing::Money;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LimitsConfig {
     pub max_iterations: u32,
     pub max_tokens: u64,
     pub max_duration_sec: u64,
+    #[serde(default)]
+    pub max_cost: Option<Money>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Default)]
@@ -119,6 +123,7 @@ mod tests {
             max_iterations: 1,
             max_tokens: 1000,
             max_duration_sec: 100,
+            max_cost: None,
         };
         let mut metrics = RunMetrics::new();
         assert!(metrics.pre_step_check(&limits).is_ok());
@@ -135,6 +140,7 @@ mod tests {
             max_iterations: 100,
             max_tokens: 10,
             max_duration_sec: 100,
+            max_cost: None,
         };
         let mut metrics = RunMetrics::new();
         metrics.add_tokens(TokenUsage {

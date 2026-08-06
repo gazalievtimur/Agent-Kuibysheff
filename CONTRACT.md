@@ -22,13 +22,16 @@ agent_Kuibysheff run \
   --home <DIR> \
   [--project-root <DIR>] \
   [--files <PATH>...] \
+  [--run-id ID] \
   [--max-iterations N] \
   [--max-tokens N] \
-  [--max-duration-sec N]
+  [--max-duration-sec N] \
+  [--max-cost CURRENCY:AMOUNT]
 ```
 
 - `--config` contains provider (including optional `provider.history` context
-  pruning), MCP, limits, logging, and required `access` policy configuration.
+  pruning), billing, MCP, limits, logging, and required `access` policy
+  configuration.
 - `--settings-dir` contains `master_prompt.md`, `skills.dsl`, and optional
   `rules.md`.
 - `--prompt` is the task for one run.
@@ -45,7 +48,8 @@ agent_Kuibysheff run \
   per-project MCP and workspace paths belong in the project's agent config
   (typically under `.kuibysheff/agents/`).
 
-`limits.*` stop the run (iterations / cumulative token budget / wall clock).
+`limits.*` stop the run (iterations / cumulative token budget / wall clock /
+optional exact-decimal monetary budget).
 Wall-clock expiry cancels in-flight provider/MCP waits cooperatively and is
 reported as `stop_reason: "limit_reached"` (same as other limit hits). Tool
 side effects that already started may still finish.
@@ -55,6 +59,11 @@ newest `max_tail_messages` turns are kept, and the whole window is capped at
 `max_chars` UTF-8 characters. Defaults are `30` / `200000`. These knobs belong
 with the model because larger context windows need a larger working history;
 they are independent of `limits.max_tokens`.
+`billing` resolves each physical provider attempt through configured
+provider-reported, MCP, and catalog sources. `RunOutput.usage.cost` is always
+present; missing prices are `partial`/`unavailable`, never zero. `max_cost` is
+fail-soft when any attempt is unpriced and can overshoot by one completed
+provider request. The full contract is in [docs/BILLING.md](docs/BILLING.md).
 
 The `run` process prints exactly one JSON `RunOutput` document to stdout. A
 run-level failure is represented by `stop_reason: "error"` and an error message
@@ -64,6 +73,9 @@ Serialize failure of `RunOutput` likewise prints a minimal error JSON and exits
 non-zero. Policy denials and sandbox unavailability are returned as tool-result
 errors (for example `PolicyDenied`, `SandboxUnavailable`) without performing
 the side effect.
+`RunOutput.run_id` is generated per prompt unless `--run-id` supplies an
+orchestrator identity. Per-attempt provider request IDs, usage, source,
+precision, and amount are nested under `usage.cost.requests`.
 
 ### Management commands
 
@@ -91,6 +103,7 @@ agent_Kuibysheff acp \
   [--max-iterations N] \
   [--max-tokens N] \
   [--max-duration-sec N] \
+  [--max-cost CURRENCY:AMOUNT] \
   [--save-chat-history]
 ```
 
@@ -105,6 +118,7 @@ directory) without running the agent loop. It reports pass/fail for:
 - config load and schema validation (including resolved `access` host paths)
 - provider API key resolution and HTTP reachability (`GET {base_url}/models`)
 - each configured MCP server (connect + `tools/list`)
+- local pricing catalog validity and configured billing MCP target discovery
 - `access.run` program executables and required `inherit_env` variables
 - OS sandbox availability when programs are configured
 - logging base directory resolution
@@ -139,6 +153,10 @@ Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibysh
 | **stdin** | ACP JSON-RPC requests/notifications from the host or bridge only |
 | **stdout** | ACP JSON-RPC responses/notifications only (no `RunOutput`, no logs) |
 | **stderr** | Diagnostics (`tracing`, startup errors). Must be drained on a separate pipe so a full stderr buffer cannot stall the child |
+
+Each completed ACP prompt emits a final agent message with token count and
+known cost (or `unavailable`) because ACP v1 `PromptResponse` has no standard
+usage field.
 
 Rules for bridge authors:
 

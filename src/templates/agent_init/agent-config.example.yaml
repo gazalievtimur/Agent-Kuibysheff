@@ -20,10 +20,23 @@ mcp: []
 #     args: ["-y", "mcp-server"]
 #     timeout_ms: 20000
 
+billing:
+  provider_id: "openai"
+  currency: "USD"
+  source_order: ["provider_reported", "mcp", "catalog"]
+  provider_reported:
+    unit: "USD"
+    json_pointers: ["/usage/cost", "/usage/response_cost/total_cost"]
+    headers: ["x-litellm-response-cost"]
+  # catalog_path: "./pricing.yaml"
+  # mcp: { target: "pricing.calculate_cost", timeout_ms: 5000 }
+  on_unpriced: continue
+
 limits:
   max_iterations: 10
   max_tokens: 15000
   max_duration_sec: 120
+  # max_cost: { amount: "1.00", currency: "USD" }
 
 logging:
   enable_ai_log: true

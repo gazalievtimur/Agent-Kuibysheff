@@ -24,7 +24,7 @@ impl ChatHistoryRecord {
     #[must_use]
     pub fn new(messages: Vec<ChatMessage>) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             messages,
             result: None,
             stop_reason: None,

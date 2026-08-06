@@ -7,7 +7,7 @@ sandbox-linux = { path = "crates/sandbox-linux" }
 sandbox-windows = { path = "crates/sandbox-windows" }
 thiserror = "2"
 serde = "1"
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 tempfile = "3"
 libc = "0.2"
 windows-sys = "0.59"
@@ -42,6 +42,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sandbox-linux = { workspace = true }
+rust_decimal = { version = "1.42.1", features = ["serde"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 sandbox-windows = { workspace = true }

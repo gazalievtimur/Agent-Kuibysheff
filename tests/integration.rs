@@ -10,11 +10,18 @@ use agent_Kuibysheff::access::{
     ResolvedAccessPolicy, ResolvedProgramPolicy, WorkspaceFsPolicy,
 };
 use agent_Kuibysheff::agent::{AgentEngine, AgentRunRequest, RunCancel};
+use agent_Kuibysheff::billing::{
+    parse_decimal, BillableMetric, CostResolverChain, Money, ProviderAttemptAccounting,
+    ProviderReportedCostResolver, ReportedCost,
+};
 use agent_Kuibysheff::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibysheff::limits::{LimitsConfig, TokenUsage};
 use agent_Kuibysheff::logging::Loggers;
 use agent_Kuibysheff::output::StopReason;
-use agent_Kuibysheff::provider::{ChatMessage, Error as ProviderError, ModelClient, ModelResponse};
+use agent_Kuibysheff::provider::{
+    AccountedModelResponse, AccountedProviderError, ChatMessage, Error as ProviderError,
+    ModelClient, ModelResponse,
+};
 use agent_Kuibysheff::tool_api::ToolExecutor;
 use agent_Kuibysheff::tools::fs_home::HomeFs;
 use agent_Kuibysheff::tools::local_tools::LocalTools;
@@ -23,6 +30,63 @@ use agent_Kuibysheff::tools::{CompositeToolExecutor, PolicyToolExecutor};
 
 struct FakeModel {
     responses: Mutex<VecDeque<ModelResponse>>,
+}
+
+struct PricedModel {
+    response: Mutex<Option<ModelResponse>>,
+}
+
+#[async_trait]
+impl ModelClient for PricedModel {
+    async fn complete(&self, _messages: &[ChatMessage]) -> Result<ModelResponse, ProviderError> {
+        self.response
+            .lock()
+            .await
+            .take()
+            .ok_or(ProviderError::EmptyChoices)
+    }
+
+    async fn complete_accounted(
+        &self,
+        _messages: &[ChatMessage],
+    ) -> Result<AccountedModelResponse, AccountedProviderError> {
+        let response = self
+            .response
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| AccountedProviderError {
+                error: ProviderError::EmptyChoices,
+                attempts: Vec::new(),
+            })?;
+        let usage = response.usage;
+        Ok(AccountedModelResponse {
+            response,
+            attempts: vec![ProviderAttemptAccounting {
+                attempt: 1,
+                provider_id: "fixture".to_string(),
+                requested_model: "cheap".to_string(),
+                resolved_model: None,
+                service_tier: None,
+                request_id: Some("req-priced".to_string()),
+                http_status: Some(200),
+                occurred_at_ms: 1,
+                usage_reported: true,
+                usage,
+                billable_metrics: BTreeMap::from([
+                    (BillableMetric::InputTokens, usage.prompt_tokens),
+                    (BillableMetric::OutputTokens, usage.completion_tokens),
+                ]),
+                reported_cost: Some(ReportedCost {
+                    amount: parse_decimal("0.00000894").expect("decimal"),
+                    unit: Some("USD".to_string()),
+                    source: "provider_fixture".to_string(),
+                    details: BTreeMap::new(),
+                }),
+                error: None,
+            }],
+        })
+    }
 }
 
 #[async_trait]
@@ -61,6 +125,23 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         cancel: RunCancel::new(),
         events: agent_Kuibysheff::agent::AgentEventTx::noop(),
     }
+}
+
+fn priced_engine(response: ModelResponse) -> AgentEngine {
+    let resolver = ProviderReportedCostResolver::new("USD", Some("USD".to_string()))
+        .expect("reported resolver");
+    AgentEngine::new(
+        Arc::new(PricedModel {
+            response: Mutex::new(Some(response)),
+        }),
+        Arc::new(FakeTools),
+        Loggers::default(),
+    )
+    .with_billing(
+        Arc::new(CostResolverChain::new(vec![Arc::new(resolver)])),
+        "USD",
+        "run-priced",
+    )
 }
 
 async fn make_tools_with_runner(
@@ -160,6 +241,7 @@ async fn run_finishes_when_model_marks_done() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -168,6 +250,79 @@ async fn run_finishes_when_model_marks_done() {
     assert_eq!(output.result, "task completed");
     assert_eq!(output.usage.iterations, 1);
     assert_eq!(output.usage.total_tokens, 7);
+}
+
+#[tokio::test]
+async fn final_output_contains_exact_per_request_cost() {
+    let engine = priced_engine(ModelResponse {
+        content: r#"{"done":true,"thought":"done","tool_calls":[],"result":"priced"}"#.to_string(),
+        usage: TokenUsage {
+            prompt_tokens: 4,
+            completion_tokens: 3,
+            total_tokens: 7,
+        },
+    });
+    let output = engine
+        .run(request(
+            "priced",
+            LimitsConfig {
+                max_iterations: 3,
+                max_tokens: 100,
+                max_duration_sec: 60,
+                max_cost: None,
+            },
+        ))
+        .await;
+
+    assert_eq!(output.run_id, "run-priced");
+    assert_eq!(
+        output
+            .usage
+            .cost
+            .known_total
+            .as_ref()
+            .expect("known total")
+            .amount
+            .to_string(),
+        "0.00000894"
+    );
+    assert_eq!(output.usage.cost.requests.len(), 1);
+    assert_eq!(
+        output.usage.cost.requests[0]
+            .amount
+            .as_ref()
+            .expect("request amount")
+            .amount
+            .to_string(),
+        "0.00000894"
+    );
+}
+
+#[tokio::test]
+async fn max_cost_stops_after_charged_request() {
+    let engine = priced_engine(ModelResponse {
+        content: r#"{"done":false,"thought":"continue","tool_calls":[],"result":null}"#.to_string(),
+        usage: TokenUsage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        },
+    });
+    let output = engine
+        .run(request(
+            "priced",
+            LimitsConfig {
+                max_iterations: 3,
+                max_tokens: 100,
+                max_duration_sec: 60,
+                max_cost: Some(Money::parse("0.00000894", "USD").expect("limit")),
+            },
+        ))
+        .await;
+
+    assert_eq!(output.stop_reason, StopReason::LimitReached);
+    assert!(output.result.contains("max_cost"), "{}", output.result);
+    assert_eq!(output.usage.cost.budget_status, "limit_reached");
 }
 
 #[tokio::test]
@@ -202,6 +357,7 @@ async fn engine_emits_thought_message_and_tool_events() {
             max_iterations: 5,
             max_tokens: 100,
             max_duration_sec: 60,
+            max_cost: None,
         },
     );
     req.events = agent_Kuibysheff::agent::AgentEventTx::from_sender(tx);
@@ -276,6 +432,7 @@ async fn run_stops_on_iteration_limit() {
                 max_iterations: 2,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -345,6 +502,7 @@ async fn model_can_write_an_artifact_inside_home() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -383,6 +541,7 @@ async fn denied_tool_is_returned_as_tool_result_error() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -462,6 +621,7 @@ async fn model_can_home_run_via_native_sandbox() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -494,6 +654,7 @@ async fn run_retries_after_invalid_model_json() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;
@@ -536,6 +697,7 @@ async fn run_saves_full_chat_history_when_enabled() {
                 max_iterations: 3,
                 max_tokens: 100,
                 max_duration_sec: 60,
+                max_cost: None,
             },
         ))
         .await;

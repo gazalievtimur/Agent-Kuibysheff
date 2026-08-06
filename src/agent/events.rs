@@ -3,6 +3,8 @@
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::output::UsageReport;
+
 /// Progress event emitted during an agent turn.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -10,6 +12,8 @@ pub enum AgentEvent {
     Thought(String),
     /// Final or intermediate user-visible message text.
     Message(String),
+    /// Host-owned token and monetary usage summary for the completed turn.
+    UsageSummary(UsageReport),
     /// A tool invocation is about to start.
     ToolStart {
         id: String,

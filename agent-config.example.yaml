@@ -33,10 +33,46 @@ mcp: []
 #       redirect_port: 0
 #       token_store: "~/.agent-kuibysheff/mcp-tokens/remote.json"
 
+# Optional ordered MCP middleware. Each target must be exposed by one of the MCP servers above.
+# The output of one handler becomes the input of the next handler in list order.
+event_mcp:
+  events: {}
+# Example (replace the empty mapping above):
+# event_mcp:
+#   events:
+#     context.before_model:
+#       handlers:
+#         - id: redact-secrets
+#           target: local.redact
+#           timeout_ms: 3000
+#           on_error: abort
+#         - id: compact-history
+#           target: remote.compact
+#           timeout_ms: 5000
+#           on_error: continue
+
+billing:
+  provider_id: "openai"
+  currency: "USD"
+  source_order: ["provider_reported", "mcp", "catalog"]
+  provider_reported:
+    # Required before a unit-less `usage.cost` or response-cost header can be aggregated.
+    unit: "USD"
+    json_pointers: ["/usage/cost", "/usage/response_cost/total_cost"]
+    headers: ["x-litellm-response-cost"]
+  # catalog_path: "./pricing.yaml"  # versioned local fallback; relative to this config
+  # Optional dedicated MCP server/tool from `mcp:` above. Its connection is fail-soft
+  # and the server is not exposed to the model or Event-MCP.
+  # mcp:
+  #   target: "pricing.calculate_cost"
+  #   timeout_ms: 5000
+  on_unpriced: continue
+
 limits:
   max_iterations: 10
   max_tokens: 15000
   max_duration_sec: 120
+  # max_cost: { amount: "1.00", currency: "USD" }
 
 logging:
   enable_ai_log: true

@@ -1,6 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
@@ -9,7 +10,9 @@ use super::directive::{approx_json_object_count, content_preview, parse_directiv
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
 use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
+use crate::billing::{BillingError, CostResolverChain, RunCostReport, RunCostTracker};
 use crate::config::ProviderHistoryConfig;
+use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEvents};
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
 use crate::output::{RunOutput, StopReason, UsageReport};
@@ -26,6 +29,10 @@ pub enum AgentError {
     DirectiveDecode(#[from] serde_json::Error),
     #[error("internal logging failure: {0}")]
     Logging(#[from] LoggingError),
+    #[error("Event-MCP failure: {0}")]
+    EventMcp(#[from] EventMcpError),
+    #[error("billing failure: {0}")]
+    Billing(#[from] BillingError),
 }
 
 #[derive(Clone)]
@@ -45,6 +52,10 @@ pub struct AgentRunRequest {
 pub struct AgentEngine {
     model: Arc<dyn ModelClient>,
     tools: Arc<dyn ToolExecutor>,
+    pipeline_events: Arc<dyn PipelineEvents>,
+    billing_resolver: Arc<CostResolverChain>,
+    billing_currency: String,
+    run_id: String,
     loggers: Loggers,
 }
 
@@ -57,8 +68,33 @@ impl AgentEngine {
         Self {
             model,
             tools,
+            pipeline_events: Arc::new(NoopPipelineEvents),
+            billing_resolver: Arc::new(CostResolverChain::default()),
+            billing_currency: "USD".to_string(),
+            run_id: generate_run_id(),
             loggers,
         }
+    }
+
+    /// Attaches an information-flow event pipeline to this engine.
+    #[must_use]
+    pub fn with_pipeline_events(mut self, pipeline_events: Arc<dyn PipelineEvents>) -> Self {
+        self.pipeline_events = pipeline_events;
+        self
+    }
+
+    /// Attaches the host-owned cost resolver and run identity.
+    #[must_use]
+    pub fn with_billing(
+        mut self,
+        resolver: Arc<CostResolverChain>,
+        currency: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> Self {
+        self.billing_resolver = resolver;
+        self.billing_currency = currency.into();
+        self.run_id = run_id.into();
+        self
     }
 
     pub async fn run(&self, request: AgentRunRequest) -> RunOutput {
@@ -67,6 +103,7 @@ impl AgentEngine {
         match result {
             Ok(out) => out,
             Err((err, usage)) => RunOutput {
+                run_id: self.run_id.clone(),
                 result: err.to_string(),
                 usage,
                 stop_reason: StopReason::Error,
@@ -99,6 +136,15 @@ impl AgentEngine {
         ];
         let mut full_history = messages.clone();
         let mut metrics = RunMetrics::new();
+        let mut cost_tracker =
+            RunCostTracker::new(self.billing_currency.clone(), limits.max_cost.clone()).map_err(
+                |error| {
+                    (
+                        error.into(),
+                        build_usage_report(&metrics, RunCostReport::default()),
+                    )
+                },
+            )?;
         let mut final_result = String::new();
         let mut stop_reason = StopReason::LimitReached;
         let mut diag = RunDiagnostics::default();
@@ -119,6 +165,11 @@ impl AgentEngine {
             ) {
                 break;
             }
+            if cost_tracker.limit_hit() {
+                final_result = "Execution stopped due to limit: max_cost".to_string();
+                stop_reason = StopReason::LimitReached;
+                break;
+            }
             match metrics.pre_step_check(&limits) {
                 Ok(()) => {}
                 Err(limit) => {
@@ -130,7 +181,44 @@ impl AgentEngine {
             metrics.begin_iteration();
             let iteration = metrics.iterations();
 
-            let completion = tokio::select! {
+            let provider_snapshot = if self
+                .pipeline_events
+                .has_handlers(EventStage::ContextBeforeModel)
+            {
+                let transformed = self
+                    .pipeline_events
+                    .dispatch(
+                        EventStage::ContextBeforeModel,
+                        json!({ "messages": &messages }),
+                        Some(iteration),
+                        cancel.token(),
+                    )
+                    .await;
+                let transformed = match transformed {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
+                    }
+                };
+                match decode_context_before_model(&messages, transformed) {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+            let provider_messages = provider_snapshot.as_deref().unwrap_or(&messages);
+            let accounted = tokio::select! {
                 biased;
                 () = cancel.token().cancelled() => {
                     set_cancel_or_duration_stop(
@@ -142,18 +230,109 @@ impl AgentEngine {
                     );
                     break;
                 }
-                completion = self.model.complete(&messages) => completion,
+                completion = self.model.complete_accounted(provider_messages) => completion,
             };
-            let completion = match completion {
-                Ok(completion) => completion,
-                Err(err) => {
+            let (mut completion, attempts) = match accounted {
+                Ok(accounted) => (accounted.response, accounted.attempts),
+                Err(failure) => {
+                    let cost_start = cost_tracker.report().requests.len();
+                    for attempt in &failure.attempts {
+                        let resolution = self.billing_resolver.resolve(attempt).await;
+                        cost_tracker.record(iteration, attempt, resolution);
+                    }
+                    let report = cost_tracker.report();
+                    let attempt_costs = &report.requests[cost_start..];
+                    if let Some(ai_log) = &self.loggers.ai {
+                        if let Err(error) = ai_log
+                            .write_event(
+                                "ai_provider_failure",
+                                json!({
+                                    "run_id": self.run_id,
+                                    "iteration": iteration,
+                                    "attempts": failure.attempts,
+                                    "costs": attempt_costs,
+                                }),
+                            )
+                            .await
+                        {
+                            warn!(iteration, error = ?error, "AI provider failure audit write failed");
+                        }
+                    }
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((err.into(), build_usage_report(&metrics)));
+                    return Err((failure.error.into(), build_usage_report(&metrics, report)));
                 }
             };
+            let cost_start = cost_tracker.report().requests.len();
+            for attempt in &attempts {
+                let resolution = self.billing_resolver.resolve(attempt).await;
+                cost_tracker.record(iteration, attempt, resolution);
+            }
             metrics.add_tokens(completion.usage);
+            if self
+                .pipeline_events
+                .has_handlers(EventStage::ModelAfterResponse)
+            {
+                let transformed = self
+                    .pipeline_events
+                    .dispatch(
+                        EventStage::ModelAfterResponse,
+                        json!({ "content": completion.content }),
+                        Some(iteration),
+                        cancel.token(),
+                    )
+                    .await;
+                let transformed = match transformed {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
+                    }
+                };
+                completion.content = match decode_model_after_response(transformed) {
+                    Ok(content) => content,
+                    Err(err) => {
+                        self.loggers.persist_chat_history(&full_history, None).await;
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
+                    }
+                };
+            }
+            let current_cost_report = cost_tracker.report();
+            let attempt_costs = &current_cost_report.requests[cost_start..];
+            if let Some(ai_log) = &self.loggers.ai {
+                if let Err(err) = ai_log
+                    .write_event(
+                        "ai_completion",
+                        json!({
+                            "run_id": self.run_id,
+                            "iteration": iteration,
+                            "content": completion.content,
+                            "usage": completion.usage,
+                            "provider_attempts": attempts,
+                            "costs": attempt_costs,
+                        }),
+                    )
+                    .await
+                {
+                    warn!(
+                        iteration,
+                        error = ?err,
+                        "AI audit log write failed after successful completion; continuing run"
+                    );
+                }
+            }
             if metrics.tokens_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_tokens".to_string();
+                stop_reason = StopReason::LimitReached;
+                break;
+            }
+            if cost_tracker.limit_hit() {
+                final_result = "Execution stopped due to limit: max_cost".to_string();
                 stop_reason = StopReason::LimitReached;
                 break;
             }
@@ -168,26 +347,6 @@ impl AgentEngine {
                 &mut stop_reason,
             ) {
                 break;
-            }
-
-            if let Some(ai_log) = &self.loggers.ai {
-                if let Err(err) = ai_log
-                    .write_event(
-                        "ai_completion",
-                        json!({
-                            "iteration": iteration,
-                            "content": completion.content,
-                            "usage": completion.usage,
-                        }),
-                    )
-                    .await
-                {
-                    warn!(
-                        iteration,
-                        error = ?err,
-                        "AI audit log write failed after successful completion; continuing run"
-                    );
-                }
             }
 
             let directive = match parse_directive(&completion.content) {
@@ -485,9 +644,6 @@ impl AgentEngine {
                     .result
                     .unwrap_or("Agent marked done without explicit result".to_string());
                 stop_reason = StopReason::GoalReached;
-                if !final_result.is_empty() {
-                    events.emit(AgentEvent::Message(final_result.clone()));
-                }
                 if !diag.home_run_ok {
                     warn!(
                         iterations = iteration,
@@ -504,15 +660,54 @@ impl AgentEngine {
             prune_message_history(&mut messages, &history);
         }
 
-        self.emit_run_summary(&diag, &stop_reason, &final_result)
+        if !final_result.is_empty()
+            && !cancel.is_cancelled()
+            && self
+                .pipeline_events
+                .has_handlers(EventStage::RunBeforeOutput)
+        {
+            let transformed = self
+                .pipeline_events
+                .dispatch(
+                    EventStage::RunBeforeOutput,
+                    json!({ "result": final_result }),
+                    None,
+                    cancel.token(),
+                )
+                .await;
+            let transformed = match transformed {
+                Ok(payload) => payload,
+                Err(err) => {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err((
+                        err.into(),
+                        build_usage_report(&metrics, cost_tracker.report()),
+                    ));
+                }
+            };
+            final_result = match decode_run_before_output(transformed) {
+                Ok(result) => result,
+                Err(err) => {
+                    self.loggers.persist_chat_history(&full_history, None).await;
+                    return Err((
+                        err.into(),
+                        build_usage_report(&metrics, cost_tracker.report()),
+                    ));
+                }
+            };
+        }
+
+        let final_cost_report = cost_tracker.report();
+        self.emit_run_summary(&diag, &stop_reason, &final_result, &final_cost_report)
             .await;
 
-        if stop_reason != StopReason::GoalReached && !final_result.is_empty() {
+        if !final_result.is_empty() {
             events.emit(AgentEvent::Message(final_result.clone()));
         }
 
         let tokens = metrics.tokens();
         let output = RunOutput {
+            run_id: self.run_id.clone(),
             result: final_result,
             usage: UsageReport {
                 iterations: metrics.iterations(),
@@ -520,10 +715,12 @@ impl AgentEngine {
                 completion_tokens: tokens.completion_tokens,
                 total_tokens: tokens.total_tokens,
                 elapsed_ms: metrics.elapsed_ms(),
+                cost: final_cost_report,
             },
             stop_reason,
             logs: self.loggers.report(),
         };
+        events.emit(AgentEvent::UsageSummary(output.usage.clone()));
         self.loggers
             .persist_chat_history(&full_history, Some(&output))
             .await;
@@ -545,6 +742,7 @@ impl AgentEngine {
         diag: &RunDiagnostics,
         stop_reason: &StopReason,
         final_result: &str,
+        cost: &RunCostReport,
     ) {
         let done_without_home_run = *stop_reason == StopReason::GoalReached && !diag.home_run_ok;
         let stop_reason_name = stop_reason_name(stop_reason);
@@ -566,6 +764,7 @@ impl AgentEngine {
             .write_event(
                 "run_summary",
                 json!({
+                    "run_id": self.run_id,
                     "stop_reason": stop_reason_name,
                     "result_len": final_result.len(),
                     "parse_failures": diag.parse_failures,
@@ -574,6 +773,7 @@ impl AgentEngine {
                     "home_run_ok": diag.home_run_ok,
                     "done_without_home_run": done_without_home_run,
                     "audit_write_failed": audit_write_failed,
+                    "cost": cost,
                 }),
             )
             .await
@@ -589,6 +789,76 @@ struct RunDiagnostics {
     tools_executed: u32,
     home_write_ok: bool,
     home_run_ok: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextBeforeModelPayload {
+    messages: Vec<ChatMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelAfterResponsePayload {
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunBeforeOutputPayload {
+    result: String,
+}
+
+fn decode_context_before_model(
+    canonical: &[ChatMessage],
+    payload: Value,
+) -> Result<Vec<ChatMessage>, EventMcpError> {
+    let transformed: ContextBeforeModelPayload =
+        serde_json::from_value(payload).map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: error.to_string(),
+        })?;
+    let Some(original_system) = canonical.first() else {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "canonical message list is empty".to_string(),
+        });
+    };
+    let Some(transformed_system) = transformed.messages.first() else {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "messages must not be empty".to_string(),
+        });
+    };
+    if !matches!(original_system.role, ChatRole::System)
+        || !matches!(transformed_system.role, ChatRole::System)
+        || transformed_system.content != original_system.content
+    {
+        return Err(EventMcpError::InvalidPayload {
+            event: EventStage::ContextBeforeModel,
+            reason: "the original system message must remain the first message unchanged"
+                .to_string(),
+        });
+    }
+    Ok(transformed.messages)
+}
+
+fn decode_model_after_response(payload: Value) -> Result<String, EventMcpError> {
+    serde_json::from_value::<ModelAfterResponsePayload>(payload)
+        .map(|value| value.content)
+        .map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::ModelAfterResponse,
+            reason: error.to_string(),
+        })
+}
+
+fn decode_run_before_output(payload: Value) -> Result<String, EventMcpError> {
+    serde_json::from_value::<RunBeforeOutputPayload>(payload)
+        .map(|value| value.result)
+        .map_err(|error| EventMcpError::InvalidPayload {
+            event: EventStage::RunBeforeOutput,
+            reason: error.to_string(),
+        })
 }
 
 fn build_user_message(
@@ -615,7 +885,7 @@ fn limit_name(limit: LimitExceeded) -> &'static str {
     }
 }
 
-fn build_usage_report(metrics: &RunMetrics) -> UsageReport {
+fn build_usage_report(metrics: &RunMetrics, cost: RunCostReport) -> UsageReport {
     let tokens = metrics.tokens();
     UsageReport {
         iterations: metrics.iterations(),
@@ -623,7 +893,15 @@ fn build_usage_report(metrics: &RunMetrics) -> UsageReport {
         completion_tokens: tokens.completion_tokens,
         total_tokens: tokens.total_tokens,
         elapsed_ms: metrics.elapsed_ms(),
+        cost,
     }
+}
+
+fn generate_run_id() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {
@@ -741,6 +1019,80 @@ mod tests {
         }
     }
 
+    struct RecordingProvider {
+        responses: Vec<String>,
+        calls: AtomicUsize,
+        seen_messages: std::sync::Mutex<Vec<Vec<ChatMessage>>>,
+    }
+
+    #[async_trait]
+    impl ModelClient for RecordingProvider {
+        async fn complete(
+            &self,
+            messages: &[ChatMessage],
+        ) -> Result<ModelResponse, crate::provider::Error> {
+            self.seen_messages
+                .lock()
+                .expect("seen messages")
+                .push(messages.to_vec());
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let content = self
+                .responses
+                .get(call)
+                .cloned()
+                .ok_or(crate::provider::Error::EmptyChoices)?;
+            Ok(ModelResponse {
+                content,
+                usage: test_usage(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct TransformingPipeline {
+        context_inputs: std::sync::Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl PipelineEvents for TransformingPipeline {
+        fn has_handlers(&self, _event: EventStage) -> bool {
+            true
+        }
+
+        async fn dispatch(
+            &self,
+            event: EventStage,
+            mut payload: Value,
+            iteration: Option<u32>,
+            _cancel: &tokio_util::sync::CancellationToken,
+        ) -> Result<Value, EventMcpError> {
+            match event {
+                EventStage::ContextBeforeModel => {
+                    self.context_inputs
+                        .lock()
+                        .expect("context inputs")
+                        .push(payload.clone());
+                    payload["messages"][1]["content"] = json!("COMPRESSED");
+                    Ok(payload)
+                }
+                EventStage::ModelAfterResponse => {
+                    let done = iteration == Some(2);
+                    Ok(json!({
+                        "content": json!({
+                            "done": done,
+                            "thought": "repaired",
+                            "tool_calls": [],
+                            "result": done.then_some("answer")
+                        }).to_string()
+                    }))
+                }
+                EventStage::RunBeforeOutput => Ok(json!({
+                    "result": format!("formatted: {}", payload["result"].as_str().unwrap_or(""))
+                })),
+            }
+        }
+    }
+
     struct NoopTools;
 
     #[async_trait]
@@ -796,6 +1148,7 @@ mod tests {
             max_iterations: 10,
             max_tokens: 1_000,
             max_duration_sec: 100,
+            max_cost: None,
         }
     }
 
@@ -815,6 +1168,46 @@ mod tests {
         assert!(message.contains("read-only context"));
         assert!(message.contains("input.rs"));
         assert!(message.contains("home.read"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_transforms_provider_snapshot_response_and_final_output() {
+        let provider = Arc::new(RecordingProvider {
+            responses: vec!["invalid first".to_string(), "invalid second".to_string()],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let pipeline = Arc::new(TransformingPipeline::default());
+        let engine = AgentEngine::new(provider.clone(), Arc::new(NoopTools), Loggers::default())
+            .with_pipeline_events(pipeline.clone());
+
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "test".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "formatted: answer");
+
+        let seen = provider.seen_messages.lock().expect("seen messages");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0][1].content.as_ref(), "COMPRESSED");
+        assert_eq!(seen[1][1].content.as_ref(), "COMPRESSED");
+
+        let context_inputs = pipeline.context_inputs.lock().expect("context inputs");
+        assert_eq!(context_inputs.len(), 2);
+        let second_canonical_user = context_inputs[1]["messages"][1]["content"]
+            .as_str()
+            .expect("canonical user content");
+        assert!(second_canonical_user.contains("Goal: test"));
+        assert_ne!(second_canonical_user, "COMPRESSED");
     }
 
     #[tokio::test]
@@ -1037,6 +1430,7 @@ mod tests {
                     max_iterations: 10,
                     max_tokens: 1_000,
                     max_duration_sec: 1,
+                    max_cost: None,
                 },
                 history: test_history(),
                 cancel: RunCancel::new(),
@@ -1128,6 +1522,7 @@ mod tests {
                     max_iterations: 10,
                     max_tokens: 1_000,
                     max_duration_sec: 60,
+                    max_cost: None,
                 },
                 history: test_history(),
                 cancel,
@@ -1145,6 +1540,7 @@ mod tests {
                         saw_cancelled_tool_finish = true;
                     }
                 }
+                AgentEvent::UsageSummary(_) => {}
                 AgentEvent::Thought(_) | AgentEvent::Message(_) => {}
             }
         }

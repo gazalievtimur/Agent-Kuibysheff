@@ -7,6 +7,7 @@
 //! - [`agent`] / [`output`] — run types (`AgentEngine`, `AgentRunRequest`, `RunOutput`, …)
 //! - [`config`] / [`limits`] / [`access`] — configuration and policy types
 //! - [`tool_api`] / [`tools`] — tool execution traits and policy wrappers
+//! - [`event_mcp`] — ordered information-flow hooks backed by MCP tools
 //! - [`provider`] — `ModelClient` and chat types (not concrete HTTP adapters)
 //! - [`sandbox`] — `SandboxBackend` / `SandboxRunner` abstractions
 //! - [`logging`] — `Loggers` and path helpers
@@ -31,7 +32,9 @@ pub mod app;
 pub mod access;
 pub(crate) mod acp;
 pub mod agent;
+pub mod billing;
 pub mod config;
+pub mod event_mcp;
 pub mod limits;
 pub mod logging;
 pub mod mcp;
@@ -52,6 +55,7 @@ pub(crate) mod skills;
 /// Common stable re-exports for library consumers and integration tests.
 pub mod prelude {
     pub use crate::agent::{AgentEngine, AgentEvent, AgentEventTx, AgentRunRequest, RunCancel};
+    pub use crate::event_mcp::{EventStage, PipelineEvents};
     pub use crate::mcp::{Error as McpError, McpRegistry};
     pub use crate::output::{RunOutput, StopReason};
     pub use crate::provider::ModelClient;

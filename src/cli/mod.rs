@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::billing::Money;
+
 pub use check::CheckArgs;
 pub use init::InitArgs;
 
@@ -47,6 +49,10 @@ pub struct RunArgs {
     #[arg(long, value_name = "TEXT")]
     pub prompt: String,
 
+    /// Optional orchestrator-supplied run identifier for invoice reconciliation.
+    #[arg(long, value_name = "ID")]
+    pub run_id: Option<String>,
+
     #[arg(long, value_name = "DIR")]
     pub home: PathBuf,
 
@@ -66,6 +72,10 @@ pub struct RunArgs {
 
     #[arg(long)]
     pub max_duration_sec: Option<u64>,
+
+    /// Override the monetary run limit (`CURRENCY:AMOUNT`, for example `USD:1.00`).
+    #[arg(long, value_name = "CURRENCY:AMOUNT")]
+    pub max_cost: Option<Money>,
 
     /// Persist the full unpruned chat transcript for this run.
     #[arg(long)]
@@ -98,6 +108,10 @@ pub struct AcpArgs {
 
     #[arg(long)]
     pub max_duration_sec: Option<u64>,
+
+    /// Override the monetary per-prompt limit (`CURRENCY:AMOUNT`).
+    #[arg(long, value_name = "CURRENCY:AMOUNT")]
+    pub max_cost: Option<Money>,
 
     /// Persist the full unpruned chat transcript for each prompt turn.
     #[arg(long)]
@@ -158,6 +172,34 @@ mod tests {
             panic!("expected Run");
         };
         assert!(args.save_chat_history);
+    }
+
+    #[test]
+    fn parses_run_id_and_exact_max_cost() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "run",
+            "--config",
+            "config.yaml",
+            "--settings-dir",
+            "settings",
+            "--prompt",
+            "do work",
+            "--run-id",
+            "invoice-row-42",
+            "--home",
+            "home",
+            "--max-cost",
+            "USD:0.00000894",
+        ])
+        .expect("parse args");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected Run");
+        };
+        assert_eq!(args.run_id.as_deref(), Some("invoice-row-42"));
+        let max_cost = args.max_cost.expect("max cost");
+        assert_eq!(max_cost.amount.to_string(), "0.00000894");
+        assert_eq!(max_cost.currency, "USD");
     }
 
     #[test]

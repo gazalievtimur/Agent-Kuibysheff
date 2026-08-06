@@ -39,6 +39,8 @@ fn run_prints_error_json_and_exits_nonzero() {
     });
     assert_eq!(json["stop_reason"], "error");
     assert!(json["result"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(json["run_id"].as_str().is_some());
+    assert_eq!(json["usage"]["cost"]["status"], "unavailable");
 }
 
 #[test]

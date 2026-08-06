@@ -10,11 +10,13 @@ Minimal and reliable CLI agent worker in Rust.
   files, and an isolated home workspace.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
+- Can also invoke MCP tools as ordered Event-MCP middleware around context and response stages.
 - Enforces hard stop limits: iterations, tokens, and max duration.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
   Windows AppContainer) with no network.
-- Produces a final JSON result with usage stats and optional AI/MCP logs.
+- Produces a final JSON result with per-request token/cost accounting, exact
+  decimal totals, and optional AI/MCP logs.
 
 The CLI is a worker, not an orchestrator. It never applies generated files to a
 target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface an
@@ -42,7 +44,9 @@ agent_Kuibysheff run \
   --prompt <TEXT> \
   --home <DIR> \
   [--project-root <DIR>] \
-  [--files <PATH>...]
+  [--files <PATH>...] \
+  [--run-id <ID>] \
+  [--max-cost <CURRENCY:AMOUNT>]
 ```
 
 With `--project-root`, relative `--config` / `--settings-dir` / `--home` resolve
@@ -193,6 +197,11 @@ Model context-window pruning is configured under `provider.history` (defaults
 `max_tail_messages: 30`, `max_chars: 200000`). Raise these for long-context
 models; they are independent of `limits.max_tokens` (the run stop budget).
 
+Exact cost accounting is configured under `billing`; `limits.max_cost` or
+`--max-cost USD:1.00` adds a fail-soft monetary stop budget. Provider-reported
+cost, an optional dedicated MCP calculator, and a versioned local catalog can be
+ordered as pricing sources. See [docs/BILLING.md](docs/BILLING.md).
+
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
 (including the required `access` policy),
 [`settings/`](settings/) for the settings layout,
@@ -339,13 +348,22 @@ The CLI prints exactly one JSON document to stdout:
 
 ```json
 {
+  "run_id": "run-...",
   "result": "final result text",
   "usage": {
     "iterations": 4,
     "prompt_tokens": 1234,
     "completion_tokens": 567,
     "total_tokens": 1801,
-    "elapsed_ms": 42120
+    "elapsed_ms": 42120,
+    "cost": {
+      "status": "complete",
+      "known_total": { "amount": "0.004812", "currency": "USD" },
+      "priced_requests": 4,
+      "unpriced_requests": 0,
+      "budget_status": "not_configured",
+      "requests": []
+    }
   },
   "stop_reason": "goal_reached",
   "logs": {
@@ -362,6 +380,77 @@ Process exit for `run`: `0` when `stop_reason` is `goal_reached` or
 on stdout). Management commands (`init`, `check`) keep their own exit semantics
 and do not emit `RunOutput`.
 
+## Event-MCP middleware
+
+Event-MCP connects MCP servers to the agent's information flow, not only to
+model-selected tool calls. It uses the standard MCP `tools/call` method: an MCP
+server exposes a handler as an ordinary tool, and the agent invokes that tool at
+an explicitly configured pipeline stage. No custom transport or JSON-RPC method
+is required.
+
+Several handlers may subscribe to the same event. They run sequentially in the
+order listed in the configuration, regardless of MCP server connection order.
+Each handler receives the last valid payload, so a transformation made by one
+handler becomes the input of the next:
+
+```yaml
+mcp:
+  - name: security
+    transport: stdio
+    command: "security-mcp"
+  - name: context
+    transport: http
+    url: "https://mcp.example.com/mcp"
+
+event_mcp:
+  events:
+    context.before_model:
+      handlers:
+        - id: redact-secrets
+          target: security.redact
+          timeout_ms: 3000
+          on_error: abort
+        - id: compact-history
+          target: context.compact
+          timeout_ms: 5000
+          on_error: continue
+```
+
+The MVP provides three transformation stages:
+
+- `context.before_model` receives a snapshot of chat messages immediately
+  before each provider request. The transformed snapshot is sent to the model,
+  while canonical chat history remains unchanged.
+- `model.after_response` receives provider text before audit logging and JSON
+  directive parsing. It can validate or repair model output.
+- `run.before_output` receives the final result before it is emitted to ACP or
+  placed in `RunOutput`. It can validate or format the user-facing response.
+
+Handlers return an MCP `CallToolResult`. The preferred result is
+`structuredContent` containing one of:
+
+```json
+{ "action": "pass" }
+{ "action": "replace", "payload": {} }
+{ "action": "reject", "reason": "validation failed" }
+```
+
+`pass` preserves the current payload, `replace` passes the supplied payload to
+the next handler, and `reject` stops the chain and fails the run. A timeout,
+transport failure, or malformed result follows the handler's `on_error` policy:
+`continue` keeps the last valid payload, while `abort` fails the run.
+Cancellation always stops the chain.
+
+Bindings are validated after MCP tool discovery. Configuring a handler is an
+explicit trust grant to send that event payload to its MCP server, but it does
+not add the tool to the model's skills/tool allowlist. Event audit records
+contain stage, target, sizes, duration, and outcome—not prompt or response
+bodies.
+
+The complete versioned envelope, payload schemas, security boundary, and future
+`run.input` OCR/vision extension are documented in
+[docs/EVENT_MCP.md](docs/EVENT_MCP.md).
+
 ## Logging
 
 By default the agent writes detailed logs under `~/.agent-kuibysheff/logs`:
@@ -369,7 +458,7 @@ By default the agent writes detailed logs under `~/.agent-kuibysheff/logs`:
 | File | Content |
 |------|---------|
 | `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
-| `ai_usage.jsonl` | Structured AI completion events (when `enable_ai_log: true`) |
+| `ai_usage.jsonl` | Structured AI completion, provider-attempt, token, and cost events (when `enable_ai_log: true`) |
 | `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
 | `chat_history.json` | Chat transcript pruned to the same `provider.history` budgets as the model window (when `enable_chat_history: true` or `--save-chat-history`) |
 

@@ -60,6 +60,8 @@ flowchart TD
     SKILLS --> POLICY
     CONFIG -->|MCP servers| MCP[mcp/]
     MCP -->|discovered tools| POLICY
+    CONFIG -->|ordered event bindings| EVENTMCP[event_mcp/]
+    MCP -->|standard tools/call| EVENTMCP
 
     HOMEFS -->|sandbox| SANDBOX[sandbox/]
     SANDBOX -->|platform backend| NATIVE[sandbox/native.rs]
@@ -69,6 +71,7 @@ flowchart TD
     CONFIG -->|provider| PROVIDER[provider/openai_compat.rs]
     POLICY -->|ToolExecutor| AGENT[agent/loop]
     PROVIDER -->|ModelClient| AGENT
+    EVENTMCP -->|PipelineEvents| AGENT
     CONTEXT --> AGENT
 
     AGENT -->|RunOutput| OUTPUT[output.rs]
@@ -89,10 +92,11 @@ flowchart TD
 
 ### Agent core
 
-- `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/duration limits, prunes message history using `provider.history` (`history`), emits optional `AgentEvent` progress (`events`), and returns `RunOutput`.
+- `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, prices every physical attempt, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/cost/duration limits, prunes message history using `provider.history` (`history`), emits optional `AgentEvent` progress (`events`), and returns `RunOutput`.
 - `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming (no-op for CLI `run`).
-- `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, and elapsed time.
-- `src/output.rs` — `RunOutput` schema: `result`, `usage`, `stop_reason`, `logs`.
+- `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, optional exact monetary budget, and elapsed time.
+- `src/billing/` — exact decimal money, normalized billable meters, per-attempt ledger, resolver chain, versioned local catalog, and optional host-owned MCP calculator.
+- `src/output.rs` — `RunOutput` schema: `run_id`, `result`, token/per-request cost `usage`, `stop_reason`, `logs`.
 
 ### IDE and bridge protocol (ACP)
 
@@ -130,8 +134,12 @@ this crate.
 - `src/mcp/stdio_client.rs` — MCP over stdio (`pub(crate)` module; `McpRegistry` re-exported): server lifecycle, `tools/list`, `tools/call`, JSON-RPC actor, stderr drain, JSONL logging.
 - `src/mcp/http_client.rs` — MCP over Streamable HTTP (`pub(crate)`).
 - `src/mcp/oauth.rs` / `sse.rs` — OAuth and SSE parsing (`pub(crate)`).
-- `src/provider/openai_compat.rs` — OpenAI-compatible `/chat/completions` client with retries (`pub(crate)`).
-- `src/provider/mod.rs` — `ModelClient` trait and shared provider types.
+- `src/event_mcp/` — ordered synchronous middleware over standard MCP `tools/call`. Explicit
+  event bindings are compiled after tool discovery and run independently from model-selected tool
+  policy. The MVP exposes `context.before_model`, `model.after_response`, and
+  `run.before_output`; see `docs/EVENT_MCP.md` for the versioned envelope and chain semantics.
+- `src/provider/openai_compat.rs` — OpenAI-compatible `/chat/completions` client with retries and accounting for body/header cost, cache/reasoning meters, model/tier, request IDs, and failed attempts (`pub(crate)`).
+- `src/provider/mod.rs` — `ModelClient` trait and shared provider types; the default `complete_accounted` method preserves compatibility with existing clients.
 - `src/lib.rs` — curated public API; see crate rustdoc for the stable vs `pub(crate)` split.
 
 ### Logging
@@ -150,12 +158,14 @@ this crate.
 
 ## Trait-based layering
 
-The agent crate is built around three object-safe traits, all wrapped in `Arc<dyn ...>` for testability and composition:
+The agent crate is built around object-safe traits, all wrapped in `Arc<dyn ...>` for testability and composition:
 
 | Trait | Responsibility | Implementations |
 |-------|--------------|-----------------|
 | `ModelClient` | Send chat messages to the LLM and return a completion. | `OpenAiCompatClient` |
 | `ToolExecutor` | Dispatch a tool call by `server` and `tool` name and return a JSON result. | `CompositeToolExecutor`, `PolicyToolExecutor`, `McpRegistry` |
+| `PipelineEvents` | Transform versioned payloads through ordered Event-MCP chains. | `EventMcpDispatcher`, `NoopPipelineEvents` |
+| `CostResolver` | Resolve one provider attempt to exact/estimated money or an explicit unpriced reason. | provider-reported, local catalog, optional MCP, unavailable placeholder |
 | `SandboxBackend` | Run a single payload inside the OS sandbox and return stdout/stderr/exit. | `NativeLinuxBackend`, `NativeWindowsBackend`, `UnavailableBackend`, `MockBackend` |
 
 ```mermaid
@@ -163,6 +173,8 @@ flowchart LR
     subgraph traits [Traits]
         MC[ModelClient]
         TE[ToolExecutor]
+        PI[PipelineEvents]
+        CR[CostResolver]
         SB[SandboxBackend]
     end
 
@@ -171,6 +183,11 @@ flowchart LR
         CE[CompositeToolExecutor]
         PE[PolicyToolExecutor]
         MR[McpRegistry]
+        EM[EventMcpDispatcher]
+        NE[NoopPipelineEvents]
+        PR[ProviderReportedResolver]
+        PC[CatalogCostResolver]
+        PM[McpCostResolver]
         NL[NativeLinuxBackend]
         NW[NativeWindowsBackend]
         UB[UnavailableBackend]
@@ -180,6 +197,11 @@ flowchart LR
     TE --> CE
     TE --> PE
     TE --> MR
+    PI --> EM
+    PI --> NE
+    CR --> PR
+    CR --> PC
+    CR --> PM
     SB --> NL
     SB --> NW
     SB --> UB

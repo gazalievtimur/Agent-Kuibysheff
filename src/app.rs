@@ -3,13 +3,14 @@
 //! This module is the entry used by `main.rs`. It is public so the binary crate can call it,
 //! but it is **not** part of the stable library facade for downstream dependents.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::access::{
     parse_tool_list, workspace_root_for_run, EffectiveToolPolicy, HomeFsPolicy, InputFilesPolicy,
@@ -17,16 +18,23 @@ use crate::access::{
 };
 use crate::acp;
 use crate::agent::{AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
+use crate::billing::{
+    CatalogCostResolver, CostResolver, CostResolverChain, McpCostResolver, Money, PricingCatalog,
+    ProviderReportedCostResolver, UnavailableCostResolver,
+};
 use crate::cli::{AcpArgs, Cli, Commands, RunArgs};
 use crate::commands;
-use crate::config::{apply_limit_overrides, load_config, load_dotenv, validate, AppConfig};
+use crate::config::{
+    apply_limit_overrides, load_config, load_dotenv, validate, AppConfig, BillingSource,
+};
 use crate::context::build_input_files_context;
-use crate::logging::{init_tracing, resolve_base_dir, Loggers};
+use crate::event_mcp::EventMcpDispatcher;
+use crate::logging::{init_tracing, resolve_base_dir, Loggers, SharedEventSink};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
 use crate::project_paths::resolve_agent_paths;
 use crate::prompt::build_runtime_rules;
-use crate::provider::openai_compat::OpenAiCompatClient;
+use crate::provider::openai_compat::{OpenAiCompatClient, ProviderAccountingOptions};
 use crate::sandbox::SandboxRunner;
 use crate::settings::load_settings;
 use crate::skills::dsl::SkillsCatalog;
@@ -42,10 +50,12 @@ pub struct AgentPromptArgs {
     pub settings_dir: PathBuf,
     pub home: PathBuf,
     pub prompt: String,
+    pub run_id: Option<String>,
     pub files: Vec<PathBuf>,
     pub max_iterations: Option<u32>,
     pub max_tokens: Option<u64>,
     pub max_duration_sec: Option<u64>,
+    pub max_cost: Option<Money>,
     pub save_chat_history: bool,
     pub cancel: RunCancel,
     pub events: AgentEventTx,
@@ -64,10 +74,12 @@ impl From<RunArgs> for AgentPromptArgs {
             settings_dir,
             home,
             prompt: cli.prompt,
+            run_id: cli.run_id,
             files: cli.files,
             max_iterations: cli.max_iterations,
             max_tokens: cli.max_tokens,
             max_duration_sec: cli.max_duration_sec,
+            max_cost: cli.max_cost,
             save_chat_history: cli.save_chat_history,
             cancel: RunCancel::new(),
             events: AgentEventTx::noop(),
@@ -146,7 +158,7 @@ fn run_worker(args: RunArgs) -> ExitCode {
         Err(err) => {
             error!(error = %err, "failed to serialize RunOutput as JSON");
             println!(
-                "{{\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
+                "{{\"run_id\":\"serialization-error\",\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0,\"cost\":{{\"status\":\"unavailable\",\"known_total\":null,\"priced_requests\":0,\"unpriced_requests\":0,\"budget_status\":\"not_configured\",\"requests\":[]}}}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
             );
             ExitCode::FAILURE
         }
@@ -189,8 +201,106 @@ fn apply_prompt_overrides(cfg: &mut AppConfig, args: &AgentPromptArgs) {
         args.max_iterations,
         args.max_tokens,
         args.max_duration_sec,
+        args.max_cost.clone(),
         args.save_chat_history,
     );
+}
+
+async fn build_billing_resolver(
+    cfg: &AppConfig,
+    config_path: &Path,
+    billing_target: Option<&(String, String)>,
+    billing_registry: Option<Arc<McpRegistry>>,
+    logger: Option<SharedEventSink>,
+) -> Result<Arc<CostResolverChain>> {
+    let provider: Arc<dyn CostResolver> = Arc::new(
+        ProviderReportedCostResolver::new(
+            cfg.billing.currency.clone(),
+            cfg.billing.provider_reported.unit.clone(),
+        )
+        .context("configuring provider-reported billing")?,
+    );
+
+    let catalog: Option<Arc<dyn CostResolver>> = if let Some(path) = &cfg.billing.catalog_path {
+        let resolved = if path.is_absolute() {
+            path.clone()
+        } else {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(path)
+        };
+        let catalog = tokio::task::spawn_blocking(move || PricingCatalog::load(&resolved))
+            .await
+            .context("loading pricing catalog task")?
+            .context("loading pricing catalog")?;
+        Some(Arc::new(
+            CatalogCostResolver::new(catalog, cfg.billing.currency.clone())
+                .context("configuring pricing catalog")?,
+        ))
+    } else {
+        None
+    };
+
+    let mcp: Option<Arc<dyn CostResolver>> = match (billing_target, billing_registry) {
+        (Some((server, tool)), Some(registry)) => {
+            let qualified = format!("{server}.{tool}");
+            if registry
+                .available_tools()
+                .iter()
+                .any(|name| name == &qualified)
+            {
+                let timeout_ms = cfg
+                    .billing
+                    .mcp
+                    .as_ref()
+                    .map_or(5_000, |binding| binding.timeout_ms);
+                Some(Arc::new(McpCostResolver::new(
+                    registry,
+                    server.clone(),
+                    tool.clone(),
+                    cfg.billing.currency.clone(),
+                    timeout_ms,
+                    logger,
+                )))
+            } else {
+                Some(Arc::new(UnavailableCostResolver::new(
+                    "mcp",
+                    format!("configured target `{qualified}` was not discovered"),
+                )))
+            }
+        }
+        (Some(_), None) => Some(Arc::new(UnavailableCostResolver::new(
+            "mcp",
+            "optional billing MCP failed to connect",
+        ))),
+        (None, _) => None,
+    };
+
+    let mut ordered: Vec<Arc<dyn CostResolver>> = Vec::new();
+    for source in &cfg.billing.source_order {
+        match source {
+            BillingSource::ProviderReported => ordered.push(provider.clone()),
+            BillingSource::Mcp => {
+                if let Some(mcp) = &mcp {
+                    ordered.push(mcp.clone());
+                }
+            }
+            BillingSource::Catalog => {
+                if let Some(catalog) = &catalog {
+                    ordered.push(catalog.clone());
+                }
+            }
+        }
+    }
+    Ok(Arc::new(CostResolverChain::new(ordered)))
+}
+
+fn generate_run_id() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 /// Wire config/tools/provider and run one agent turn.
@@ -210,6 +320,10 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
     validate(&cfg).context("validating config")?;
     if args.prompt.trim().is_empty() {
         bail!("prompt must not be empty");
+    }
+    let run_id = args.run_id.clone().unwrap_or_else(generate_run_id);
+    if run_id.trim().is_empty() || run_id.len() > 128 {
+        bail!("run_id must contain 1..=128 characters");
     }
 
     let log_dir = resolve_base_dir(&cfg.logging).context("resolving log directory")?;
@@ -259,17 +373,84 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             )
         })?;
 
-    let mcp = McpRegistry::connect_all(&cfg.mcp, loggers.mcp.clone(), run_cancel.token().clone())
+    let billing_target = cfg
+        .billing
+        .mcp
+        .as_ref()
+        .and_then(|binding| binding.target.split_once('.'))
+        .map(|(server, tool)| (server.to_string(), tool.to_string()));
+    let regular_mcp_configs: Vec<_> = cfg
+        .mcp
+        .iter()
+        .filter(|server| {
+            billing_target
+                .as_ref()
+                .is_none_or(|(billing_server, _)| server.name != *billing_server)
+        })
+        .cloned()
+        .collect();
+    let mcp = Arc::new(
+        McpRegistry::connect_all(
+            &regular_mcp_configs,
+            loggers.mcp.clone(),
+            run_cancel.token().clone(),
+        )
         .await
-        .context("connecting MCP servers")?;
+        .context("connecting MCP servers")?,
+    );
     let mcp_tools = parse_tool_list(mcp.available_tools())
         .map_err(|reason| anyhow::anyhow!("parsing MCP tool names: {reason}"))?;
     let effective = EffectiveToolPolicy::compile(&access_policy, &skills_allowed, mcp_tools);
+    let pipeline_events = EventMcpDispatcher::new(&cfg.event_mcp, mcp.clone(), loggers.mcp.clone())
+        .context("compiling Event-MCP handlers")?;
 
-    let provider =
-        OpenAiCompatClient::new(cfg.provider.clone()).context("initializing provider")?;
+    let billing_registry = if let Some((server_name, _)) = &billing_target {
+        let server_config = cfg
+            .mcp
+            .iter()
+            .find(|server| server.name == *server_name)
+            .expect("billing MCP target validated");
+        match McpRegistry::connect_all(
+            std::slice::from_ref(server_config),
+            loggers.mcp.clone(),
+            run_cancel.token().clone(),
+        )
+        .await
+        {
+            Ok(registry) => Some(Arc::new(registry)),
+            Err(error) => {
+                warn!(
+                    server = server_name,
+                    error = %error,
+                    "optional billing MCP unavailable; continuing with fallback sources"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let billing_resolver = build_billing_resolver(
+        &cfg,
+        &args.config,
+        billing_target.as_ref(),
+        billing_registry,
+        loggers.mcp.clone(),
+    )
+    .await?;
+
+    let provider = OpenAiCompatClient::new_with_accounting(
+        cfg.provider.clone(),
+        ProviderAccountingOptions {
+            provider_id: cfg.billing.provider_id.clone(),
+            reported_cost_unit: cfg.billing.provider_reported.unit.clone(),
+            cost_json_pointers: cfg.billing.provider_reported.json_pointers.clone(),
+            cost_headers: cfg.billing.provider_reported.headers.clone(),
+        },
+    )
+    .context("initializing provider")?;
     let tools = PolicyToolExecutor::new(
-        Arc::new(CompositeToolExecutor::new(home, local_tools, Arc::new(mcp))),
+        Arc::new(CompositeToolExecutor::new(home, local_tools, mcp)),
         effective.clone(),
     );
 
@@ -294,7 +475,9 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         "starting agent run"
     );
 
-    let engine = AgentEngine::new(Arc::new(provider), Arc::new(tools), loggers);
+    let engine = AgentEngine::new(Arc::new(provider), Arc::new(tools), loggers)
+        .with_pipeline_events(Arc::new(pipeline_events))
+        .with_billing(billing_resolver, cfg.billing.currency.clone(), run_id);
     Ok(engine
         .run(AgentRunRequest {
             prompt: args.prompt,
