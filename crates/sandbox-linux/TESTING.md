@@ -129,10 +129,32 @@ cargo check -p sandbox-linux --target x86_64-unknown-linux-gnu
 | `probe_succeeds_or_explains` | Probe unshare + uid map + `MS_PRIVATE` (or skip with clear unavailable) |
 | `echo_under_grants` | Script under grants; stdout contains marker; exit 0 |
 | `deny_sibling_write` | Sibling of write grant not writable; setup must not exit 70 |
+| `deny_sibling_read` | Sibling of write grant not readable |
+| `deny_symlink_escape_to_sibling` | Symlink inside grant must not leak sibling content |
 | `timeout_kills_tree` | Short deadline → `timed_out` or exit `124` |
-| `network_namespace_has_no_foreign_ifaces` | Empty netns: only `lo` under `/sys/class/net` |
+| `timeout_kills_process_tree_with_allow_children` | Child+grandchild under deadline |
+| `seccomp_denies_unshare_and_mount` | Denylist blocks mount/unshare from payload |
+| `network_namespace_has_no_foreign_ifaces` | Empty netns: no host NICs in `/proc/net/dev` |
+| `network_namespace_only_lo_and_connect_fails` | Only `lo` under `/sys/class/net`; connect fails |
 | `argv_metacharacters_are_literal` | Shell metacharacters stay literal argv (not executed) |
 | `truncates_large_stdout` | Large stdout sets truncation flag and respects `max_output_chars` |
+| `truncates_large_stderr_and_combined_pipes` | stdout+stderr both truncated |
+| `deny_child_processes_when_allow_children_false` | fork/clone denied when `allow_children=false` |
+| `allow_child_processes_when_allow_children_true` | child output appears when allowed |
+
+### Fail-closed CI
+
+Set `REQUIRE_LINUX_SANDBOX=1` so probe failure panics instead of silent skip:
+
+```bash
+REQUIRE_LINUX_SANDBOX=1 cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
+```
+
+PR CI runs this on `ubuntu-24.04` after relaxing
+`kernel.apparmor_restrict_unprivileged_userns` for the runner VM.
+
+Architecture: seccomp BPF is **x86_64-only** (`compile_error!` on other Linux arches).
+
 
 Agent / HomeFs E2E (Windows CI / local): `tests/integration.rs::model_can_home_run_via_native_sandbox`
 uses `sandbox_e2e_fixture` through `HomeFs` + `PolicyToolExecutor` + native backend.

@@ -143,7 +143,7 @@ The [Release](.github/workflows/release.yml) workflow builds
 ## Quick start
 
 Prerequisites:
-- Rust toolchain (`cargo`), MSRV **1.86**
+- Rust toolchain (`cargo`), MSRV **1.88**
 - Or a prebuilt binary from [Releases](#releases)
 
 PowerShell commands:
@@ -249,12 +249,20 @@ rustup show
 
 ### Pre-commit CI gate
 
-Commits are gated by the same checks that CI runs first:
+Commits are gated by the same checks that CI runs first, plus a local
+supply-chain check:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo deny check` (advisories, licenses, bans, sources; see [`deny.toml`](deny.toml))
 - `cargo test --workspace`
 - `cargo +nightly miri test -p sandbox-linux --lib` (Linux only, when nightly is installed)
+
+Install `cargo-deny` once:
+
+```powershell
+cargo install --locked cargo-deny
+```
 
 Enable the git hook once per clone:
 
@@ -274,30 +282,34 @@ Run the gate manually:
 ```powershell
 .\scripts\pre-commit-gate.ps1
 .\scripts\pre-commit-gate.ps1 -SkipMiri   # Windows / no nightly
+.\scripts\pre-commit-gate.ps1 -SkipDeny   # skip supply-chain check
 ```
 
 ```bash
 ./scripts/pre-commit-gate.sh
 ./scripts/pre-commit-gate.sh --skip-miri
+./scripts/pre-commit-gate.sh --skip-deny
 ```
 
-Emergency bypass (local only): `SKIP_PRECOMMIT=1`.
+Emergency bypass (local only): `SKIP_PRECOMMIT=1`. Skip only deny with `SKIP_DENY=1`.
 
 ### Full local quality gate
 
-Run all checks before pushing (fmt, clippy, cargo test, and AoC agent
+Run all checks before pushing (fmt, clippy, cargo deny, cargo test, and AoC agent
 regression against `local/aoc-bank`):
 
 ```powershell
 $env:POLZA_API_KEY = "..."   # only if not using provider.api_key or .env
 .\scripts\check.ps1
-.\scripts\check.ps1 -SkipAoc  # skip live agent eval when needed
+.\scripts\check.ps1 -SkipAoc   # skip live agent eval when needed
+.\scripts\check.ps1 -SkipDeny  # skip supply-chain check
 ```
 
 ```bash
 export POLZA_API_KEY="..."   # only if not using provider.api_key or .env
 ./scripts/check.sh
-./scripts/check.sh --skip-aoc  # skip live agent eval when needed
+./scripts/check.sh --skip-aoc   # skip live agent eval when needed
+./scripts/check.sh --skip-deny  # skip supply-chain check
 ```
 
 Individual commands:
@@ -305,6 +317,7 @@ Individual commands:
 ```powershell
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check
 cargo test --workspace
 .\scripts\aoc-regression.ps1
 ```
@@ -312,6 +325,7 @@ cargo test --workspace
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check
 cargo test --workspace
 ./scripts/aoc-regression.sh
 ```
@@ -426,7 +440,7 @@ names must be qualified `server.tool` (bare names are rejected). See
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-cargo +1.86.0 check --workspace
+cargo +1.88.0 check --workspace
 ```
 
 Platform suites (do not silently skip on the matching OS):
@@ -436,3 +450,12 @@ cargo test -p sandbox-windows --test appcontainer
 # On Linux (see crates/sandbox-linux/TESTING.md):
 # cargo test -p sandbox-linux --test namespaces -- --test-threads=1
 ```
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE)
+for copyright. Contributions are under the same terms; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
+trademark use beyond reasonable attribution of origin.

@@ -69,15 +69,19 @@ AoC eval is part of the normal local quality gate:
 $env:POLZA_API_KEY = "..."   # or set provider.api_key / .env
 .\scripts\check.ps1
 .\scripts\aoc-regression.ps1              # AoC-only
-.\scripts\check.ps1 -SkipAoc              # fmt/clippy/cargo test only
+.\scripts\check.ps1 -SkipAoc              # fmt/clippy/deny/cargo test only
+.\scripts\check.ps1 -SkipDeny             # skip cargo deny (supply-chain)
 ```
 
 ```bash
 export POLZA_API_KEY="..."   # or set provider.api_key / .env
 ./scripts/check.sh
 ./scripts/aoc-regression.sh              # AoC-only
-./scripts/check.sh --skip-aoc            # fmt/clippy/cargo test only
+./scripts/check.sh --skip-aoc            # fmt/clippy/deny/cargo test only
+./scripts/check.sh --skip-deny           # skip cargo deny (supply-chain)
 ```
+
+Supply-chain policy lives in `deny.toml`. Install once: `cargo install --locked cargo-deny`.
 
 Requirements for the gate:
 

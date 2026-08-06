@@ -67,6 +67,71 @@ mod linux {
             SandboxLinuxError::TimeoutCleanup { reason } => SandboxError::TimeoutCleanup { reason },
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::access::ProgramAlias;
+        use sandbox_linux::SandboxStage;
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        #[test]
+        fn to_linux_request_copies_fields() {
+            let spec = SandboxSpec {
+                alias: ProgramAlias::parse("fixture").unwrap(),
+                executable: PathBuf::from("/bin/true"),
+                argv: vec!["a".into()],
+                cwd: PathBuf::from("/tmp"),
+                env: BTreeMap::from([("K".into(), "V".into())]),
+                home_read: vec![PathBuf::from("/r")],
+                home_write: vec![PathBuf::from("/w")],
+                runtime_read_roots: Vec::new(),
+                deadline: Duration::from_secs(3),
+                max_output_chars: 99,
+                allow_children: true,
+            };
+            let req = to_linux_request(spec);
+            assert_eq!(req.executable, PathBuf::from("/bin/true"));
+            assert_eq!(req.argv, vec!["a".to_string()]);
+            assert_eq!(req.cwd, PathBuf::from("/tmp"));
+            assert_eq!(req.env.get("K").map(String::as_str), Some("V"));
+            assert_eq!(req.home_read, vec![PathBuf::from("/r")]);
+            assert_eq!(req.home_write, vec![PathBuf::from("/w")]);
+            assert!(req.runtime_read_roots.is_empty());
+            assert_eq!(req.deadline, Duration::from_secs(3));
+            assert_eq!(req.max_output_chars, 99);
+            assert!(req.allow_children);
+        }
+
+        #[test]
+        fn map_linux_error_preserves_variants() {
+            assert!(matches!(
+                map_linux_error(SandboxLinuxError::Unavailable { reason: "x".into() }),
+                SandboxError::Unavailable { .. }
+            ));
+            assert!(matches!(
+                map_linux_error(SandboxLinuxError::PolicyDenied { reason: "x".into() }),
+                SandboxError::PolicyDenied { .. }
+            ));
+            assert!(matches!(
+                map_linux_error(SandboxLinuxError::Setup {
+                    stage: SandboxStage::Seccomp,
+                    reason: "x".into()
+                }),
+                SandboxError::Setup { .. }
+            ));
+            assert!(matches!(
+                map_linux_error(SandboxLinuxError::Io { reason: "x".into() }),
+                SandboxError::Io { .. }
+            ));
+            assert!(matches!(
+                map_linux_error(SandboxLinuxError::TimeoutCleanup { reason: "x".into() }),
+                SandboxError::TimeoutCleanup { .. }
+            ));
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -134,6 +199,64 @@ mod windows {
             SandboxWindowsError::TimeoutCleanup { reason } => {
                 SandboxError::TimeoutCleanup { reason }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::access::ProgramAlias;
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        #[test]
+        fn to_windows_request_copies_fields() {
+            let spec = SandboxSpec {
+                alias: ProgramAlias::parse("fixture").unwrap(),
+                executable: PathBuf::from("C:\\Windows\\System32\\cmd.exe"),
+                argv: vec!["/c".into(), "echo".into()],
+                cwd: PathBuf::from("C:\\Temp"),
+                env: BTreeMap::from([("K".into(), "V".into())]),
+                home_read: vec![PathBuf::from("C:\\r")],
+                home_write: vec![PathBuf::from("C:\\w")],
+                runtime_read_roots: Vec::new(),
+                deadline: Duration::from_secs(3),
+                max_output_chars: 99,
+                allow_children: false,
+            };
+            let req = to_windows_request(spec);
+            assert_eq!(req.argv, vec!["/c".to_string(), "echo".to_string()]);
+            assert_eq!(req.env.get("K").map(String::as_str), Some("V"));
+            assert_eq!(req.max_output_chars, 99);
+            assert!(!req.allow_children);
+        }
+
+        #[test]
+        fn map_windows_error_preserves_variants() {
+            assert!(matches!(
+                map_windows_error(SandboxWindowsError::Unavailable { reason: "x".into() }),
+                SandboxError::Unavailable { .. }
+            ));
+            assert!(matches!(
+                map_windows_error(SandboxWindowsError::PolicyDenied { reason: "x".into() }),
+                SandboxError::PolicyDenied { .. }
+            ));
+            assert!(matches!(
+                map_windows_error(SandboxWindowsError::Setup {
+                    stage: "job",
+                    reason: "x".into()
+                }),
+                SandboxError::Setup { .. }
+            ));
+            assert!(matches!(
+                map_windows_error(SandboxWindowsError::Io { reason: "x".into() }),
+                SandboxError::Io { .. }
+            ));
+            assert!(matches!(
+                map_windows_error(SandboxWindowsError::TimeoutCleanup { reason: "x".into() }),
+                SandboxError::TimeoutCleanup { .. }
+            ));
         }
     }
 }

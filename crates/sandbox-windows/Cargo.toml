@@ -2,9 +2,9 @@
 name = "sandbox-windows"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.88"
 description = "Windows AppContainer sandbox FFI for agent_Kuibysheff home.run"
-license = "MIT"
+license = "Apache-2.0"
 publish = false
 
 [dependencies]

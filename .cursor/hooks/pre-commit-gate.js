@@ -5,7 +5,7 @@
  * - Require `core.hooksPath=.githooks` so the git pre-commit gate runs once
  *
  * The heavy CI-parity work lives in `.githooks/pre-commit` →
- * `scripts/pre-commit-gate.*` (fmt / clippy / test / miri).
+ * `scripts/pre-commit-gate.*` (fmt / clippy / cargo deny / test / miri).
  */
 "use strict";
 
@@ -84,7 +84,7 @@ function main() {
 
   if (hasNoVerify(command)) {
     deny(
-      "git commit --no-verify is blocked. Fix fmt/clippy/test/miri failures, or set SKIP_PRECOMMIT=1 for an emergency bypass.",
+      "git commit --no-verify is blocked. Fix fmt/clippy/cargo-deny/test/miri failures, or set SKIP_PRECOMMIT=1 for an emergency bypass.",
     );
     return;
   }

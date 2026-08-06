@@ -4,9 +4,10 @@
   CI-parity gate used by git pre-commit / Cursor hooks.
 
 .DESCRIPTION
-  Mirrors the fast CI jobs that keep failing on GitHub:
+  Mirrors the fast CI jobs that keep failing on GitHub, plus local supply-chain:
     - cargo fmt --all -- --check
     - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo deny check (skip with -SkipDeny / SKIP_DENY=1)
     - cargo test --workspace
     - cargo +nightly miri test -p sandbox-linux --lib (Linux only; skip with -SkipMiri)
 
@@ -14,7 +15,8 @@
 #>
 param(
     [switch]$SkipMiri,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$SkipDeny
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,6 +44,18 @@ Invoke-Step "cargo fmt --all -- --check" {
 
 Invoke-Step "cargo clippy --workspace --all-targets -- -D warnings" {
     cargo clippy --workspace --all-targets -- -D warnings
+}
+
+if ($SkipDeny -or $env:SKIP_DENY -eq "1") {
+    Write-Host "==> Skipping cargo deny (-SkipDeny / SKIP_DENY=1)"
+} else {
+    cargo deny --version 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo-deny is not installed. Install with: cargo install --locked cargo-deny"
+    }
+    Invoke-Step "cargo deny check" {
+        cargo deny check
+    }
 }
 
 if (-not $SkipTests) {

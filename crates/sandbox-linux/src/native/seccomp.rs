@@ -1,5 +1,12 @@
 //! Minimal seccomp denylist for sandbox escape primitives.
 
+// Seccomp filter encodes AUDIT_ARCH_X86_64 only. Non-x86_64 Linux must not
+// silently ship without a matching BPF program (see plan: arch-policy).
+#[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
+compile_error!(
+    "sandbox-linux seccomp denylist supports x86_64 only; add an AArch64 filter before enabling other arches"
+);
+
 use libc::{
     sock_filter, sock_fprog, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO,
     SECCOMP_RET_KILL_PROCESS,
