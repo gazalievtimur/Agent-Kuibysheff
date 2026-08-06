@@ -137,12 +137,20 @@ access:
     });
 
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
+    let notifications: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_notifications = Arc::clone(&notifications);
 
     let client_result = Client
         .builder()
         .name("bridge-test-client")
         .on_receive_notification(
-            async move |_notif: SessionNotification, _cx| Ok(()),
+            async move |notif: SessionNotification, _cx| {
+                captured_notifications
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(serde_json::to_string(&notif).unwrap_or_default());
+                Ok(())
+            },
             agent_client_protocol::on_receive_notification!(),
         )
         .connect_with(
@@ -181,6 +189,15 @@ access:
         .await;
 
     client_result.expect("ACP client flow over redirected pipes");
+    assert!(
+        notifications
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|notification| notification.contains("Usage:")
+                && notification.contains("cost: unavailable")),
+        "ACP final updates must include token and cost summary"
+    );
 
     // Dropping the ByteStreams transport closes child stdin; the agent should exit cleanly.
     let status = tokio::time::timeout(Duration::from_secs(15), child.wait())

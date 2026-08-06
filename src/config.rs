@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use thiserror::Error;
 
 use crate::access::{
     resolve_access_policy, validate_access_config, AccessError, ResolvedAccessPolicy,
 };
+use crate::billing::Money;
 use crate::cli::RunArgs;
 use crate::limits::LimitsConfig;
 
@@ -48,6 +50,8 @@ pub struct AppConfig {
     pub mcp: Vec<McpServerConfig>,
     #[serde(default)]
     pub event_mcp: crate::event_mcp::EventMcpConfig,
+    #[serde(default)]
+    pub billing: BillingConfig,
     pub limits: LimitsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -55,6 +59,97 @@ pub struct AppConfig {
     /// enforcement is fail-closed (anything not listed is denied).
     #[serde(default)]
     pub access: Option<AccessPolicyConfig>,
+}
+
+/// Monetary accounting configuration. An omitted section still emits an
+/// `unavailable` cost report rather than claiming a zero charge.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BillingConfig {
+    pub provider_id: String,
+    pub currency: String,
+    pub source_order: Vec<BillingSource>,
+    pub provider_reported: ProviderReportedCostConfig,
+    pub catalog_path: Option<PathBuf>,
+    pub mcp: Option<BillingMcpConfig>,
+    pub on_unpriced: BillingUnpricedPolicy,
+}
+
+impl Default for BillingConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: "openai_compatible".to_string(),
+            currency: "USD".to_string(),
+            source_order: vec![
+                BillingSource::ProviderReported,
+                BillingSource::Mcp,
+                BillingSource::Catalog,
+            ],
+            provider_reported: ProviderReportedCostConfig::default(),
+            catalog_path: None,
+            mcp: None,
+            on_unpriced: BillingUnpricedPolicy::Continue,
+        }
+    }
+}
+
+/// Ordered request-cost source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingSource {
+    ProviderReported,
+    Mcp,
+    Catalog,
+}
+
+/// Provider response fields that may carry a charged amount.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProviderReportedCostConfig {
+    /// Currency/unit assigned when the provider field itself has no unit.
+    pub unit: Option<String>,
+    /// JSON pointers checked in order against the completion response.
+    pub json_pointers: Vec<String>,
+    /// HTTP response headers checked in order.
+    pub headers: Vec<String>,
+}
+
+impl Default for ProviderReportedCostConfig {
+    fn default() -> Self {
+        Self {
+            unit: None,
+            json_pointers: vec![
+                "/usage/cost".to_string(),
+                "/usage/response_cost/total_cost".to_string(),
+            ],
+            headers: vec!["x-litellm-response-cost".to_string()],
+        }
+    }
+}
+
+/// Optional MCP cost calculator binding.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BillingMcpConfig {
+    /// Qualified discovered tool name (`server.tool`).
+    pub target: String,
+    #[serde(default = "BillingMcpConfig::default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl BillingMcpConfig {
+    #[must_use]
+    pub const fn default_timeout_ms() -> u64 {
+        5_000
+    }
+}
+
+/// Missing-price behavior. The initial implementation is deliberately fail-soft.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingUnpricedPolicy {
+    #[default]
+    Continue,
 }
 
 /// Working chat-window budgets for the configured model (not run stop limits).
@@ -438,6 +533,7 @@ pub fn apply_cli_overrides(cfg: &mut AppConfig, cli: &RunArgs) {
         cli.max_iterations,
         cli.max_tokens,
         cli.max_duration_sec,
+        cli.max_cost.clone(),
         cli.save_chat_history,
     );
 }
@@ -448,6 +544,7 @@ pub fn apply_limit_overrides(
     max_iterations: Option<u32>,
     max_tokens: Option<u64>,
     max_duration_sec: Option<u64>,
+    max_cost: Option<Money>,
     save_chat_history: bool,
 ) {
     if let Some(max_iterations) = max_iterations {
@@ -458,6 +555,9 @@ pub fn apply_limit_overrides(
     }
     if let Some(max_duration_sec) = max_duration_sec {
         cfg.limits.max_duration_sec = max_duration_sec;
+    }
+    if let Some(max_cost) = max_cost {
+        cfg.limits.max_cost = Some(max_cost);
     }
     if save_chat_history {
         cfg.logging.enable_chat_history = true;
@@ -515,6 +615,69 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
             "`limits.max_duration_sec` must be > 0".to_string(),
         ));
     }
+    Money::new(Decimal::ZERO, cfg.billing.currency.clone())
+        .map_err(|error| ConfigError::Validation(format!("`billing.currency`: {error}")))?;
+    if cfg.billing.provider_id.trim().is_empty() {
+        return Err(ConfigError::Validation(
+            "`billing.provider_id` must not be empty".to_string(),
+        ));
+    }
+    let mut billing_sources = HashSet::new();
+    for source in &cfg.billing.source_order {
+        if !billing_sources.insert(*source) {
+            return Err(ConfigError::Validation(
+                "`billing.source_order` must not contain duplicates".to_string(),
+            ));
+        }
+    }
+    if cfg.billing.source_order.is_empty() {
+        return Err(ConfigError::Validation(
+            "`billing.source_order` must not be empty".to_string(),
+        ));
+    }
+    if let Some(unit) = &cfg.billing.provider_reported.unit {
+        Money::new(Decimal::ZERO, unit.clone()).map_err(|error| {
+            ConfigError::Validation(format!("`billing.provider_reported.unit`: {error}"))
+        })?;
+    }
+    for pointer in &cfg.billing.provider_reported.json_pointers {
+        if !pointer.starts_with('/') {
+            return Err(ConfigError::Validation(format!(
+                "billing JSON pointer `{pointer}` must start with `/`"
+            )));
+        }
+    }
+    if cfg
+        .billing
+        .provider_reported
+        .headers
+        .iter()
+        .any(|header| header.trim().is_empty())
+    {
+        return Err(ConfigError::Validation(
+            "billing provider-reported headers must not be empty".to_string(),
+        ));
+    }
+    if let Some(path) = &cfg.billing.catalog_path {
+        if path.as_os_str().is_empty() {
+            return Err(ConfigError::Validation(
+                "`billing.catalog_path` must not be empty".to_string(),
+            ));
+        }
+    }
+    if let Some(limit) = &cfg.limits.max_cost {
+        if limit.amount <= Decimal::ZERO {
+            return Err(ConfigError::Validation(
+                "`limits.max_cost.amount` must be > 0".to_string(),
+            ));
+        }
+        if limit.currency != cfg.billing.currency {
+            return Err(ConfigError::Validation(format!(
+                "`limits.max_cost.currency` must equal `billing.currency` ({})",
+                cfg.billing.currency
+            )));
+        }
+    }
     let mut names = HashSet::new();
     for server in &cfg.mcp {
         if server.name.trim().is_empty() {
@@ -570,6 +733,45 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
         }
     }
 
+    if let Some(mcp) = &cfg.billing.mcp {
+        if mcp.timeout_ms == 0 {
+            return Err(ConfigError::Validation(
+                "`billing.mcp.timeout_ms` must be > 0".to_string(),
+            ));
+        }
+        let Some((server, tool)) = mcp.target.split_once('.') else {
+            return Err(ConfigError::Validation(
+                "`billing.mcp.target` must be a qualified `server.tool` name".to_string(),
+            ));
+        };
+        if server.trim().is_empty() || tool.trim().is_empty() || tool.contains('.') {
+            return Err(ConfigError::Validation(
+                "`billing.mcp.target` must be a qualified `server.tool` name".to_string(),
+            ));
+        }
+        if !names.contains(server) {
+            return Err(ConfigError::Validation(format!(
+                "`billing.mcp.target` references unknown MCP server `{server}`"
+            )));
+        }
+        if cfg
+            .event_mcp
+            .events
+            .values()
+            .flat_map(|pipeline| &pipeline.handlers)
+            .any(|handler| {
+                handler
+                    .target
+                    .split_once('.')
+                    .is_some_and(|(event_server, _)| event_server == server)
+            })
+        {
+            return Err(ConfigError::Validation(format!(
+                "billing MCP server `{server}` must be dedicated and cannot host Event-MCP handlers"
+            )));
+        }
+    }
+
     cfg.event_mcp
         .validate_shape()
         .map_err(ConfigError::Validation)?;
@@ -608,10 +810,12 @@ mod tests {
                 }),
             }],
             event_mcp: crate::event_mcp::EventMcpConfig::default(),
+            billing: BillingConfig::default(),
             limits: LimitsConfig {
                 max_iterations: 5,
                 max_tokens: 500,
                 max_duration_sec: 30,
+                max_cost: None,
             },
             logging: LoggingConfig {
                 enable_ai_log: false,
@@ -633,6 +837,24 @@ mod tests {
             err.to_string().contains("provider.model"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn config_validation_rejects_max_cost_currency_mismatch() {
+        let mut cfg = sample_config();
+        cfg.limits.max_cost = Some(Money::parse("0.00000894", "EUR").expect("money"));
+        let error = validate(&cfg).expect_err("currency mismatch");
+        assert!(error.to_string().contains("max_cost.currency"), "{error}");
+    }
+
+    #[test]
+    fn config_validation_accepts_dedicated_billing_mcp_target() {
+        let mut cfg = sample_config();
+        cfg.billing.mcp = Some(BillingMcpConfig {
+            target: "local.calculate".to_string(),
+            timeout_ms: 100,
+        });
+        validate(&cfg).expect("dedicated billing target");
     }
 
     #[test]

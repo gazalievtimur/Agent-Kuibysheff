@@ -7,6 +7,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::access::AccessMode;
+use crate::billing::PricingCatalog;
 use crate::cli::CheckArgs;
 use crate::config::{load_config, AppConfig, ConfigError, McpTransport};
 use crate::logging::resolve_base_dir;
@@ -129,6 +130,7 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
 
     check_provider(&cfg, args.skip_provider, &mut items).await;
     check_mcp(&cfg, args.skip_mcp, &mut items).await;
+    check_billing_catalog(&cfg, &args.config, &mut items);
     check_access(&access, &mut items);
     check_sandbox(&access, args.skip_sandbox, &mut items);
     check_logging(&cfg, &mut items);
@@ -234,10 +236,27 @@ async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
         {
             Ok(registry) => {
                 let tools = registry.available_tools();
+                let missing_billing_target = cfg
+                    .billing
+                    .mcp
+                    .as_ref()
+                    .filter(|binding| binding.target.starts_with(&format!("{}.", server.name)))
+                    .is_some_and(|binding| !tools.iter().any(|tool| tool == &binding.target));
                 items.push(CheckItem {
                     name,
-                    status: CheckStatus::Ok,
-                    detail: format!("{transport}; {} tool(s)", tools.len()),
+                    status: if missing_billing_target {
+                        CheckStatus::Fail
+                    } else {
+                        CheckStatus::Ok
+                    },
+                    detail: if missing_billing_target {
+                        format!(
+                            "{transport}; configured billing target was not discovered ({} tool(s))",
+                            tools.len()
+                        )
+                    } else {
+                        format!("{transport}; {} tool(s)", tools.len())
+                    },
                 });
                 registry.shutdown().await;
             }
@@ -247,6 +266,42 @@ async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
                 detail: format!("{transport}: {err}"),
             }),
         }
+    }
+}
+
+fn check_billing_catalog(cfg: &AppConfig, config_path: &Path, items: &mut Vec<CheckItem>) {
+    let Some(path) = &cfg.billing.catalog_path else {
+        items.push(CheckItem {
+            name: "billing.catalog".to_string(),
+            status: CheckStatus::Skip,
+            detail: "no local pricing catalog configured".to_string(),
+        });
+        return;
+    };
+    let resolved = if path.is_absolute() {
+        path.clone()
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path)
+    };
+    match PricingCatalog::load(&resolved) {
+        Ok(catalog) => items.push(CheckItem {
+            name: "billing.catalog".to_string(),
+            status: CheckStatus::Ok,
+            detail: format!(
+                "loaded `{}` version `{}` ({} rule(s))",
+                resolved.display(),
+                catalog.version,
+                catalog.rules.len()
+            ),
+        }),
+        Err(error) => items.push(CheckItem {
+            name: "billing.catalog".to_string(),
+            status: CheckStatus::Fail,
+            detail: error.to_string(),
+        }),
     }
 }
 

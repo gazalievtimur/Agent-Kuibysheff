@@ -129,7 +129,8 @@ host rejects an empty list, a changed first role, or removal of the original sys
 { "content": "..." }
 ```
 
-Token usage is host metadata and cannot be changed by a handler.
+Token usage and cost accounting are host metadata and cannot be changed by a
+handler.
 
 `run.before_output`:
 
@@ -137,7 +138,8 @@ Token usage is host metadata and cannot be changed by a handler.
 { "result": "..." }
 ```
 
-Only the result text is replaceable; usage, stop reason, and log report remain host-owned.
+Only the result text is replaceable; usage, cost, stop reason, run identity, and
+log report remain host-owned.
 
 ## Timeouts, cancellation, and limits
 
@@ -158,7 +160,17 @@ Event calls use metadata-only audit records by default: event, handler id, targe
 sizes, duration, action, and success. Prompt and response bodies are not written to the MCP audit
 log. Existing model-selected `mcp_tool_call` audit behavior is unchanged.
 
-Handlers cannot change event metadata, tool policy, token accounting, stop reason, or log paths.
+Handlers cannot change event metadata, tool policy, token/cost accounting, stop
+reason, run identity, or log paths.
+
+## Billing MCP is not Event-MCP
+
+The optional calculator configured by `billing.mcp` also uses standard
+`tools/call`, but it is a separate host-owned resolver. Its dedicated MCP server
+is not exposed to the model or Event-MCP, receives only normalized usage and
+billing metadata (never prompt/response bodies), and degrades to the next price
+source on connection, timeout, or schema failure. See
+[BILLING.md](BILLING.md).
 
 ## Media and vision extension
 

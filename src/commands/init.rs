@@ -225,10 +225,23 @@ pub fn render_agent_config(answers: &ConfigAnswers) -> String {
 mcp: []
 # Add MCP servers with a future `add-mcp` command, or edit this list by hand.
 
+billing:
+  provider_id: "openai"
+  currency: "USD"
+  source_order: ["provider_reported", "mcp", "catalog"]
+  provider_reported:
+    unit: "USD"
+    json_pointers: ["/usage/cost", "/usage/response_cost/total_cost"]
+    headers: ["x-litellm-response-cost"]
+  # catalog_path: "./pricing.yaml"
+  # mcp: {{ target: "pricing.calculate_cost", timeout_ms: 5000 }}
+  on_unpriced: continue
+
 limits:
   max_iterations: {max_iterations}
   max_tokens: {max_tokens}
   max_duration_sec: {max_duration_sec}
+  # max_cost: {{ amount: "1.00", currency: "USD" }}
 
 logging:
   enable_ai_log: true

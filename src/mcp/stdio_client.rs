@@ -173,6 +173,16 @@ impl McpRegistry {
         self.call_discovered_tool(server, tool, arguments).await
     }
 
+    /// Calls a discovered host-owned billing tool without model-tool payload logging.
+    pub(crate) async fn call_billing_handler(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, Error> {
+        self.call_discovered_tool(server, tool, arguments).await
+    }
+
     async fn call_discovered_tool(
         &self,
         server: &str,
@@ -204,7 +214,7 @@ impl McpRegistry {
 
     /// Test helper: registry with one server whose every request returns `result`.
     #[cfg(test)]
-    fn with_stub_server(
+    pub(crate) fn with_stub_server(
         server: &str,
         tool: &str,
         result: Value,

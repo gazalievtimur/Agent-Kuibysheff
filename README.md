@@ -15,7 +15,8 @@ Minimal and reliable CLI agent worker in Rust.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
   Windows AppContainer) with no network.
-- Produces a final JSON result with usage stats and optional AI/MCP logs.
+- Produces a final JSON result with per-request token/cost accounting, exact
+  decimal totals, and optional AI/MCP logs.
 
 The CLI is a worker, not an orchestrator. It never applies generated files to a
 target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface an
@@ -43,7 +44,9 @@ agent_Kuibysheff run \
   --prompt <TEXT> \
   --home <DIR> \
   [--project-root <DIR>] \
-  [--files <PATH>...]
+  [--files <PATH>...] \
+  [--run-id <ID>] \
+  [--max-cost <CURRENCY:AMOUNT>]
 ```
 
 With `--project-root`, relative `--config` / `--settings-dir` / `--home` resolve
@@ -194,6 +197,11 @@ Model context-window pruning is configured under `provider.history` (defaults
 `max_tail_messages: 30`, `max_chars: 200000`). Raise these for long-context
 models; they are independent of `limits.max_tokens` (the run stop budget).
 
+Exact cost accounting is configured under `billing`; `limits.max_cost` or
+`--max-cost USD:1.00` adds a fail-soft monetary stop budget. Provider-reported
+cost, an optional dedicated MCP calculator, and a versioned local catalog can be
+ordered as pricing sources. See [docs/BILLING.md](docs/BILLING.md).
+
 See [`agent-config.example.yaml`](agent-config.example.yaml) for runtime config
 (including the required `access` policy),
 [`settings/`](settings/) for the settings layout,
@@ -326,13 +334,22 @@ The CLI prints exactly one JSON document to stdout:
 
 ```json
 {
+  "run_id": "run-...",
   "result": "final result text",
   "usage": {
     "iterations": 4,
     "prompt_tokens": 1234,
     "completion_tokens": 567,
     "total_tokens": 1801,
-    "elapsed_ms": 42120
+    "elapsed_ms": 42120,
+    "cost": {
+      "status": "complete",
+      "known_total": { "amount": "0.004812", "currency": "USD" },
+      "priced_requests": 4,
+      "unpriced_requests": 0,
+      "budget_status": "not_configured",
+      "requests": []
+    }
   },
   "stop_reason": "goal_reached",
   "logs": {
@@ -427,7 +444,7 @@ By default the agent writes detailed logs under `~/.agent-kuibysheff/logs`:
 | File | Content |
 |------|---------|
 | `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
-| `ai_usage.jsonl` | Structured AI completion events (when `enable_ai_log: true`) |
+| `ai_usage.jsonl` | Structured AI completion, provider-attempt, token, and cost events (when `enable_ai_log: true`) |
 | `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
 | `chat_history.json` | Chat transcript pruned to the same `provider.history` budgets as the model window (when `enable_chat_history: true` or `--save-chat-history`) |
 

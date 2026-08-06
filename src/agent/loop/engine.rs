@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -10,6 +10,7 @@ use super::directive::{approx_json_object_count, content_preview, parse_directiv
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
 use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
+use crate::billing::{BillingError, CostResolverChain, RunCostReport, RunCostTracker};
 use crate::config::ProviderHistoryConfig;
 use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEvents};
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
@@ -30,6 +31,8 @@ pub enum AgentError {
     Logging(#[from] LoggingError),
     #[error("Event-MCP failure: {0}")]
     EventMcp(#[from] EventMcpError),
+    #[error("billing failure: {0}")]
+    Billing(#[from] BillingError),
 }
 
 #[derive(Clone)]
@@ -50,6 +53,9 @@ pub struct AgentEngine {
     model: Arc<dyn ModelClient>,
     tools: Arc<dyn ToolExecutor>,
     pipeline_events: Arc<dyn PipelineEvents>,
+    billing_resolver: Arc<CostResolverChain>,
+    billing_currency: String,
+    run_id: String,
     loggers: Loggers,
 }
 
@@ -63,6 +69,9 @@ impl AgentEngine {
             model,
             tools,
             pipeline_events: Arc::new(NoopPipelineEvents),
+            billing_resolver: Arc::new(CostResolverChain::default()),
+            billing_currency: "USD".to_string(),
+            run_id: generate_run_id(),
             loggers,
         }
     }
@@ -74,12 +83,27 @@ impl AgentEngine {
         self
     }
 
+    /// Attaches the host-owned cost resolver and run identity.
+    #[must_use]
+    pub fn with_billing(
+        mut self,
+        resolver: Arc<CostResolverChain>,
+        currency: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> Self {
+        self.billing_resolver = resolver;
+        self.billing_currency = currency.into();
+        self.run_id = run_id.into();
+        self
+    }
+
     pub async fn run(&self, request: AgentRunRequest) -> RunOutput {
         let result = self.run_inner(request).await;
         self.loggers.shutdown().await;
         match result {
             Ok(out) => out,
             Err((err, usage)) => RunOutput {
+                run_id: self.run_id.clone(),
                 result: err.to_string(),
                 usage,
                 stop_reason: StopReason::Error,
@@ -112,6 +136,15 @@ impl AgentEngine {
         ];
         let mut full_history = messages.clone();
         let mut metrics = RunMetrics::new();
+        let mut cost_tracker =
+            RunCostTracker::new(self.billing_currency.clone(), limits.max_cost.clone()).map_err(
+                |error| {
+                    (
+                        error.into(),
+                        build_usage_report(&metrics, RunCostReport::default()),
+                    )
+                },
+            )?;
         let mut final_result = String::new();
         let mut stop_reason = StopReason::LimitReached;
         let mut diag = RunDiagnostics::default();
@@ -130,6 +163,11 @@ impl AgentEngine {
                 &mut final_result,
                 &mut stop_reason,
             ) {
+                break;
+            }
+            if cost_tracker.limit_hit() {
+                final_result = "Execution stopped due to limit: max_cost".to_string();
+                stop_reason = StopReason::LimitReached;
                 break;
             }
             match metrics.pre_step_check(&limits) {
@@ -160,21 +198,27 @@ impl AgentEngine {
                     Ok(payload) => payload,
                     Err(err) => {
                         self.loggers.persist_chat_history(&full_history, None).await;
-                        return Err((err.into(), build_usage_report(&metrics)));
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
                     }
                 };
                 match decode_context_before_model(&messages, transformed) {
                     Ok(snapshot) => Some(snapshot),
                     Err(err) => {
                         self.loggers.persist_chat_history(&full_history, None).await;
-                        return Err((err.into(), build_usage_report(&metrics)));
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
                     }
                 }
             } else {
                 None
             };
             let provider_messages = provider_snapshot.as_deref().unwrap_or(&messages);
-            let completion = tokio::select! {
+            let accounted = tokio::select! {
                 biased;
                 () = cancel.token().cancelled() => {
                     set_cancel_or_duration_stop(
@@ -186,15 +230,43 @@ impl AgentEngine {
                     );
                     break;
                 }
-                completion = self.model.complete(provider_messages) => completion,
+                completion = self.model.complete_accounted(provider_messages) => completion,
             };
-            let mut completion = match completion {
-                Ok(completion) => completion,
-                Err(err) => {
+            let (mut completion, attempts) = match accounted {
+                Ok(accounted) => (accounted.response, accounted.attempts),
+                Err(failure) => {
+                    let cost_start = cost_tracker.report().requests.len();
+                    for attempt in &failure.attempts {
+                        let resolution = self.billing_resolver.resolve(attempt).await;
+                        cost_tracker.record(iteration, attempt, resolution);
+                    }
+                    let report = cost_tracker.report();
+                    let attempt_costs = &report.requests[cost_start..];
+                    if let Some(ai_log) = &self.loggers.ai {
+                        if let Err(error) = ai_log
+                            .write_event(
+                                "ai_provider_failure",
+                                json!({
+                                    "run_id": self.run_id,
+                                    "iteration": iteration,
+                                    "attempts": failure.attempts,
+                                    "costs": attempt_costs,
+                                }),
+                            )
+                            .await
+                        {
+                            warn!(iteration, error = ?error, "AI provider failure audit write failed");
+                        }
+                    }
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((err.into(), build_usage_report(&metrics)));
+                    return Err((failure.error.into(), build_usage_report(&metrics, report)));
                 }
             };
+            let cost_start = cost_tracker.report().requests.len();
+            for attempt in &attempts {
+                let resolution = self.billing_resolver.resolve(attempt).await;
+                cost_tracker.record(iteration, attempt, resolution);
+            }
             metrics.add_tokens(completion.usage);
             if self
                 .pipeline_events
@@ -213,19 +285,54 @@ impl AgentEngine {
                     Ok(payload) => payload,
                     Err(err) => {
                         self.loggers.persist_chat_history(&full_history, None).await;
-                        return Err((err.into(), build_usage_report(&metrics)));
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
                     }
                 };
                 completion.content = match decode_model_after_response(transformed) {
                     Ok(content) => content,
                     Err(err) => {
                         self.loggers.persist_chat_history(&full_history, None).await;
-                        return Err((err.into(), build_usage_report(&metrics)));
+                        return Err((
+                            err.into(),
+                            build_usage_report(&metrics, cost_tracker.report()),
+                        ));
                     }
                 };
             }
+            let current_cost_report = cost_tracker.report();
+            let attempt_costs = &current_cost_report.requests[cost_start..];
+            if let Some(ai_log) = &self.loggers.ai {
+                if let Err(err) = ai_log
+                    .write_event(
+                        "ai_completion",
+                        json!({
+                            "run_id": self.run_id,
+                            "iteration": iteration,
+                            "content": completion.content,
+                            "usage": completion.usage,
+                            "provider_attempts": attempts,
+                            "costs": attempt_costs,
+                        }),
+                    )
+                    .await
+                {
+                    warn!(
+                        iteration,
+                        error = ?err,
+                        "AI audit log write failed after successful completion; continuing run"
+                    );
+                }
+            }
             if metrics.tokens_limit_hit(&limits) {
                 final_result = "Execution stopped due to limit: max_tokens".to_string();
+                stop_reason = StopReason::LimitReached;
+                break;
+            }
+            if cost_tracker.limit_hit() {
+                final_result = "Execution stopped due to limit: max_cost".to_string();
                 stop_reason = StopReason::LimitReached;
                 break;
             }
@@ -240,26 +347,6 @@ impl AgentEngine {
                 &mut stop_reason,
             ) {
                 break;
-            }
-
-            if let Some(ai_log) = &self.loggers.ai {
-                if let Err(err) = ai_log
-                    .write_event(
-                        "ai_completion",
-                        json!({
-                            "iteration": iteration,
-                            "content": completion.content,
-                            "usage": completion.usage,
-                        }),
-                    )
-                    .await
-                {
-                    warn!(
-                        iteration,
-                        error = ?err,
-                        "AI audit log write failed after successful completion; continuing run"
-                    );
-                }
             }
 
             let directive = match parse_directive(&completion.content) {
@@ -592,19 +679,26 @@ impl AgentEngine {
                 Ok(payload) => payload,
                 Err(err) => {
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((err.into(), build_usage_report(&metrics)));
+                    return Err((
+                        err.into(),
+                        build_usage_report(&metrics, cost_tracker.report()),
+                    ));
                 }
             };
             final_result = match decode_run_before_output(transformed) {
                 Ok(result) => result,
                 Err(err) => {
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((err.into(), build_usage_report(&metrics)));
+                    return Err((
+                        err.into(),
+                        build_usage_report(&metrics, cost_tracker.report()),
+                    ));
                 }
             };
         }
 
-        self.emit_run_summary(&diag, &stop_reason, &final_result)
+        let final_cost_report = cost_tracker.report();
+        self.emit_run_summary(&diag, &stop_reason, &final_result, &final_cost_report)
             .await;
 
         if !final_result.is_empty() {
@@ -613,6 +707,7 @@ impl AgentEngine {
 
         let tokens = metrics.tokens();
         let output = RunOutput {
+            run_id: self.run_id.clone(),
             result: final_result,
             usage: UsageReport {
                 iterations: metrics.iterations(),
@@ -620,10 +715,12 @@ impl AgentEngine {
                 completion_tokens: tokens.completion_tokens,
                 total_tokens: tokens.total_tokens,
                 elapsed_ms: metrics.elapsed_ms(),
+                cost: final_cost_report,
             },
             stop_reason,
             logs: self.loggers.report(),
         };
+        events.emit(AgentEvent::UsageSummary(output.usage.clone()));
         self.loggers
             .persist_chat_history(&full_history, Some(&output))
             .await;
@@ -645,6 +742,7 @@ impl AgentEngine {
         diag: &RunDiagnostics,
         stop_reason: &StopReason,
         final_result: &str,
+        cost: &RunCostReport,
     ) {
         let done_without_home_run = *stop_reason == StopReason::GoalReached && !diag.home_run_ok;
         let stop_reason_name = stop_reason_name(stop_reason);
@@ -666,6 +764,7 @@ impl AgentEngine {
             .write_event(
                 "run_summary",
                 json!({
+                    "run_id": self.run_id,
                     "stop_reason": stop_reason_name,
                     "result_len": final_result.len(),
                     "parse_failures": diag.parse_failures,
@@ -674,6 +773,7 @@ impl AgentEngine {
                     "home_run_ok": diag.home_run_ok,
                     "done_without_home_run": done_without_home_run,
                     "audit_write_failed": audit_write_failed,
+                    "cost": cost,
                 }),
             )
             .await
@@ -785,7 +885,7 @@ fn limit_name(limit: LimitExceeded) -> &'static str {
     }
 }
 
-fn build_usage_report(metrics: &RunMetrics) -> UsageReport {
+fn build_usage_report(metrics: &RunMetrics, cost: RunCostReport) -> UsageReport {
     let tokens = metrics.tokens();
     UsageReport {
         iterations: metrics.iterations(),
@@ -793,7 +893,15 @@ fn build_usage_report(metrics: &RunMetrics) -> UsageReport {
         completion_tokens: tokens.completion_tokens,
         total_tokens: tokens.total_tokens,
         elapsed_ms: metrics.elapsed_ms(),
+        cost,
     }
+}
+
+fn generate_run_id() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {
@@ -1040,6 +1148,7 @@ mod tests {
             max_iterations: 10,
             max_tokens: 1_000,
             max_duration_sec: 100,
+            max_cost: None,
         }
     }
 
@@ -1321,6 +1430,7 @@ mod tests {
                     max_iterations: 10,
                     max_tokens: 1_000,
                     max_duration_sec: 1,
+                    max_cost: None,
                 },
                 history: test_history(),
                 cancel: RunCancel::new(),
@@ -1412,6 +1522,7 @@ mod tests {
                     max_iterations: 10,
                     max_tokens: 1_000,
                     max_duration_sec: 60,
+                    max_cost: None,
                 },
                 history: test_history(),
                 cancel,
@@ -1429,6 +1540,7 @@ mod tests {
                         saw_cancelled_tool_finish = true;
                     }
                 }
+                AgentEvent::UsageSummary(_) => {}
                 AgentEvent::Thought(_) | AgentEvent::Message(_) => {}
             }
         }

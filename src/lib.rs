@@ -32,6 +32,7 @@ pub mod app;
 pub mod access;
 pub(crate) mod acp;
 pub mod agent;
+pub mod billing;
 pub mod config;
 pub mod event_mcp;
 pub mod limits;
