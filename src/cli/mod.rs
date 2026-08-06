@@ -198,8 +198,8 @@ mod tests {
         };
         assert_eq!(args.run_id.as_deref(), Some("invoice-row-42"));
         let max_cost = args.max_cost.expect("max cost");
-        assert_eq!(max_cost.amount.to_string(), "0.00000894");
-        assert_eq!(max_cost.currency, "USD");
+        assert_eq!(max_cost.amount().to_string(), "0.00000894");
+        assert_eq!(max_cost.currency(), "USD");
     }
 
     #[test]

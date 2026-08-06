@@ -34,7 +34,7 @@ pub fn map_agent_event(event: AgentEvent) -> SessionUpdate {
         AgentEvent::UsageSummary(usage) => {
             let cost = usage.cost.known_total.as_ref().map_or_else(
                 || format!("{:?}", usage.cost.status).to_ascii_lowercase(),
-                |money| format!("{} {}", money.amount, money.currency),
+                |money| format!("{} {}", money.amount(), money.currency()),
             );
             SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
                 TextContent::new(format!(

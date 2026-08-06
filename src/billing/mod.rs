@@ -48,8 +48,8 @@ pub enum BillingError {
 /// Exact decimal money/credit amount with an explicit ISO-4217 currency or custom unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Money {
-    pub amount: Decimal,
-    pub currency: String,
+    amount: Decimal,
+    currency: String,
 }
 
 impl Money {
@@ -62,7 +62,7 @@ impl Money {
     pub fn new(amount: Decimal, currency: impl Into<String>) -> Result<Self, BillingError> {
         let currency = currency.into();
         validate_currency(&currency)?;
-        Ok(Self { amount, currency })
+        Ok(Self::from_validated(amount, currency))
     }
 
     /// Parses a decimal amount without a floating-point intermediate.
@@ -73,6 +73,18 @@ impl Money {
     pub fn parse(amount: &str, currency: impl Into<String>) -> Result<Self, BillingError> {
         let amount = parse_decimal(amount)?;
         Self::new(amount, currency)
+    }
+
+    /// Decimal amount (exact, no binary float).
+    #[must_use]
+    pub fn amount(&self) -> Decimal {
+        self.amount
+    }
+
+    /// ISO-4217 currency or custom unit validated at construction.
+    #[must_use]
+    pub fn currency(&self) -> &str {
+        &self.currency
     }
 
     /// Adds two amounts only when their currencies match.
@@ -91,7 +103,11 @@ impl Money {
             .amount
             .checked_add(other.amount)
             .ok_or(BillingError::ArithmeticOverflow)?;
-        Self::new(amount, self.currency.clone())
+        Ok(Self::from_validated(amount, self.currency.clone()))
+    }
+
+    fn from_validated(amount: Decimal, currency: String) -> Self {
+        Self { amount, currency }
     }
 }
 
@@ -144,7 +160,7 @@ impl<'de> Deserialize<'de> for Money {
     }
 }
 
-fn validate_currency(value: &str) -> Result<(), BillingError> {
+pub(crate) fn validate_currency(value: &str) -> Result<(), BillingError> {
     let valid = (3..=24).contains(&value.len())
         && value
             .bytes()
@@ -318,7 +334,7 @@ pub enum CostPrecision {
 /// One priced meter line.
 #[derive(Debug, Clone, Serialize)]
 pub struct CostLineItem {
-    pub metric: String,
+    pub metric: BillableMetric,
     pub quantity: u64,
     #[serde(serialize_with = "serialize_decimal")]
     pub amount: Decimal,
@@ -494,7 +510,9 @@ impl CostResolver for ProviderReportedCostResolver {
                     .details
                     .iter()
                     .map(|(metric, amount)| CostLineItem {
-                        metric: metric.clone(),
+                        metric: metric
+                            .parse()
+                            .unwrap_or_else(|_| BillableMetric::Other(metric.clone())),
                         quantity: 0,
                         amount: *amount,
                     })
@@ -726,7 +744,7 @@ impl CostResolver for CatalogCostResolver {
         let mut line_items = Vec::new();
         if let Some(fixed) = rule.fixed_cost {
             line_items.push(CostLineItem {
-                metric: "request".to_string(),
+                metric: BillableMetric::Other("request".to_string()),
                 quantity: 1,
                 amount: fixed,
             });
@@ -758,7 +776,7 @@ impl CostResolver for CatalogCostResolver {
                 }
             };
             line_items.push(CostLineItem {
-                metric: metric.to_string(),
+                metric: metric.clone(),
                 quantity,
                 amount,
             });
@@ -788,6 +806,17 @@ pub enum CostReportStatus {
     Unavailable,
 }
 
+/// Budget enforcement state for a run-level cost report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetStatus {
+    #[default]
+    NotConfigured,
+    Degraded,
+    LimitReached,
+    Enforced,
+}
+
 /// Run-level exact monetary summary and per-attempt ledger.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunCostReport {
@@ -795,7 +824,7 @@ pub struct RunCostReport {
     pub known_total: Option<Money>,
     pub priced_requests: u32,
     pub unpriced_requests: u32,
-    pub budget_status: String,
+    pub budget_status: BudgetStatus,
     pub requests: Vec<RequestCost>,
 }
 
@@ -806,7 +835,7 @@ impl Default for RunCostReport {
             known_total: None,
             priced_requests: 0,
             unpriced_requests: 0,
-            budget_status: "not_configured".to_string(),
+            budget_status: BudgetStatus::NotConfigured,
             requests: Vec::new(),
         }
     }
@@ -835,10 +864,10 @@ impl RunCostTracker {
         let target_currency = target_currency.into();
         validate_currency(&target_currency)?;
         if let Some(limit) = &max_cost {
-            if limit.currency != target_currency {
+            if limit.currency() != target_currency {
                 return Err(BillingError::InvalidCurrency(format!(
                     "max_cost currency `{}` differs from target `{target_currency}`",
-                    limit.currency
+                    limit.currency()
                 )));
             }
         }
@@ -866,8 +895,8 @@ impl RunCostTracker {
                 pricing_version,
                 line_items,
             } => {
-                if money.currency == self.target_currency {
-                    if let Some(total) = self.known_total.checked_add(money.amount) {
+                if money.currency() == self.target_currency {
+                    if let Some(total) = self.known_total.checked_add(money.amount()) {
                         self.known_total = total;
                         self.priced_requests = self.priced_requests.saturating_add(1);
                         self.requests.push(RequestCost {
@@ -930,38 +959,92 @@ impl RunCostTracker {
     pub fn limit_hit(&self) -> bool {
         self.max_cost
             .as_ref()
-            .is_some_and(|limit| self.known_total >= limit.amount)
+            .is_some_and(|limit| self.known_total >= limit.amount())
+    }
+
+    /// Number of recorded attempt cost rows (priced and unpriced).
+    #[must_use]
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Borrowed slice of attempt costs recorded at or after `start`.
+    #[must_use]
+    pub fn requests_since(&self, start: usize) -> &[RequestCost] {
+        self.requests.get(start..).unwrap_or(&[])
     }
 
     #[must_use]
     pub fn report(&self) -> RunCostReport {
-        let status = if self.requests.is_empty() || self.priced_requests == 0 {
-            CostReportStatus::Unavailable
-        } else if self.unpriced_requests == 0 {
-            CostReportStatus::Complete
-        } else {
-            CostReportStatus::Partial
-        };
-        let known_total = (self.priced_requests > 0).then(|| {
-            Money::new(self.known_total, self.target_currency.clone()).expect("validated")
-        });
-        let budget_status = if self.max_cost.is_none() {
-            "not_configured"
-        } else if self.unpriced_requests > 0 {
-            "degraded"
-        } else if self.limit_hit() {
-            "limit_reached"
-        } else {
-            "enforced"
-        };
-        RunCostReport {
-            status,
+        self.build_report(self.requests.clone())
+    }
+
+    /// Consumes the tracker into a run report without cloning the ledger.
+    #[must_use]
+    pub fn into_report(self) -> RunCostReport {
+        let Self {
+            target_currency,
             known_total,
-            priced_requests: self.priced_requests,
-            unpriced_requests: self.unpriced_requests,
-            budget_status: budget_status.to_string(),
-            requests: self.requests.clone(),
-        }
+            priced_requests,
+            unpriced_requests,
+            requests,
+            max_cost,
+        } = self;
+        build_run_cost_report(
+            target_currency,
+            known_total,
+            priced_requests,
+            unpriced_requests,
+            requests,
+            max_cost.as_ref(),
+        )
+    }
+
+    fn build_report(&self, requests: Vec<RequestCost>) -> RunCostReport {
+        build_run_cost_report(
+            self.target_currency.clone(),
+            self.known_total,
+            self.priced_requests,
+            self.unpriced_requests,
+            requests,
+            self.max_cost.as_ref(),
+        )
+    }
+}
+
+fn build_run_cost_report(
+    target_currency: String,
+    known_total_amount: Decimal,
+    priced_requests: u32,
+    unpriced_requests: u32,
+    requests: Vec<RequestCost>,
+    max_cost: Option<&Money>,
+) -> RunCostReport {
+    let status = if requests.is_empty() || priced_requests == 0 {
+        CostReportStatus::Unavailable
+    } else if unpriced_requests == 0 {
+        CostReportStatus::Complete
+    } else {
+        CostReportStatus::Partial
+    };
+    let known_total =
+        (priced_requests > 0).then(|| Money::from_validated(known_total_amount, target_currency));
+    let budget_status = if max_cost.is_none() {
+        BudgetStatus::NotConfigured
+    } else if unpriced_requests > 0 {
+        BudgetStatus::Degraded
+    } else if max_cost.is_some_and(|limit| known_total_amount >= limit.amount()) {
+        BudgetStatus::LimitReached
+    } else {
+        BudgetStatus::Enforced
+    };
+    RunCostReport {
+        status,
+        known_total,
+        priced_requests,
+        unpriced_requests,
+        budget_status,
+        requests,
     }
 }
 
@@ -1074,7 +1157,7 @@ rules:
         let CostResolution::Priced { money, .. } = resolver.resolve(&attempt()).await else {
             panic!("expected priced");
         };
-        assert_eq!(money.amount.to_string(), "0.0000014");
+        assert_eq!(money.amount().to_string(), "0.0000014");
     }
 
     #[tokio::test]
@@ -1100,7 +1183,7 @@ rules:
             panic!("expected fallback price");
         };
         assert_eq!(source, "catalog:fixture");
-        assert_eq!(money.amount.to_string(), "0.00000894");
+        assert_eq!(money.amount().to_string(), "0.00000894");
     }
 
     #[test]
@@ -1114,7 +1197,7 @@ rules:
     fn money_deserializes_yaml_number_exactly() {
         let money: Money =
             serde_yaml::from_str("{ amount: 0.00000894, currency: USD }").expect("money");
-        assert_eq!(money.amount.to_string(), "0.00000894");
+        assert_eq!(money.amount().to_string(), "0.00000894");
     }
 
     #[test]
@@ -1143,9 +1226,9 @@ rules:
 
         let report = tracker.report();
         assert_eq!(report.status, CostReportStatus::Partial);
-        assert_eq!(report.budget_status, "degraded");
+        assert_eq!(report.budget_status, BudgetStatus::Degraded);
         assert_eq!(
-            report.known_total.expect("known").amount.to_string(),
+            report.known_total.expect("known").amount().to_string(),
             "0.00000894"
         );
     }

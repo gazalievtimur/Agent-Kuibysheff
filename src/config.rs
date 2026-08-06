@@ -666,12 +666,12 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
         }
     }
     if let Some(limit) = &cfg.limits.max_cost {
-        if limit.amount <= Decimal::ZERO {
+        if limit.amount() <= Decimal::ZERO {
             return Err(ConfigError::Validation(
                 "`limits.max_cost.amount` must be > 0".to_string(),
             ));
         }
-        if limit.currency != cfg.billing.currency {
+        if limit.currency() != cfg.billing.currency {
             return Err(ConfigError::Validation(format!(
                 "`limits.max_cost.currency` must equal `billing.currency` ({})",
                 cfg.billing.currency

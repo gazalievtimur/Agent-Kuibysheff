@@ -242,37 +242,37 @@ impl OpenAiCompatClient {
         Duration::from_millis(raw.saturating_add(jitter))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn accounting_attempt(
-        &self,
-        attempt: u32,
-        occurred_at_ms: u128,
-        status: Option<StatusCode>,
-        request_id: Option<String>,
-        resolved_model: Option<String>,
-        service_tier: Option<String>,
-        usage: TokenUsage,
-        usage_reported: bool,
-        billable_metrics: BTreeMap<BillableMetric, u64>,
-        reported_cost: Option<ReportedCost>,
-        error: Option<String>,
-    ) -> ProviderAttemptAccounting {
+    fn accounting_attempt(&self, draft: AttemptDraft) -> ProviderAttemptAccounting {
         ProviderAttemptAccounting {
-            attempt,
+            attempt: draft.attempt,
             provider_id: self.accounting.provider_id.clone(),
             requested_model: self.cfg.model.clone(),
-            resolved_model,
-            service_tier,
-            request_id,
-            http_status: status.map(|value| value.as_u16()),
-            occurred_at_ms,
-            usage_reported,
-            usage,
-            billable_metrics,
-            reported_cost,
-            error,
+            resolved_model: draft.resolved_model,
+            service_tier: draft.service_tier,
+            request_id: draft.request_id,
+            http_status: draft.status.map(|value| value.as_u16()),
+            occurred_at_ms: draft.occurred_at_ms,
+            usage_reported: draft.usage_reported,
+            usage: draft.usage,
+            billable_metrics: draft.billable_metrics,
+            reported_cost: draft.reported_cost,
+            error: draft.error,
         }
     }
+}
+
+struct AttemptDraft {
+    attempt: u32,
+    occurred_at_ms: u128,
+    status: Option<StatusCode>,
+    request_id: Option<String>,
+    resolved_model: Option<String>,
+    service_tier: Option<String>,
+    usage: TokenUsage,
+    usage_reported: bool,
+    billable_metrics: BTreeMap<BillableMetric, u64>,
+    reported_cost: Option<ReportedCost>,
+    error: Option<String>,
 }
 
 #[async_trait]
@@ -313,19 +313,19 @@ impl ModelClient for OpenAiCompatClient {
                 Ok(v) => v,
                 Err(err) => {
                     let message = err.to_string();
-                    attempts.push(self.accounting_attempt(
-                        retry_index + 1,
+                    attempts.push(self.accounting_attempt(AttemptDraft {
+                        attempt: retry_index + 1,
                         occurred_at_ms,
-                        None,
-                        None,
-                        None,
-                        None,
-                        TokenUsage::default(),
-                        false,
-                        BTreeMap::new(),
-                        None,
-                        Some(message),
-                    ));
+                        status: None,
+                        request_id: None,
+                        resolved_model: None,
+                        service_tier: None,
+                        usage: TokenUsage::default(),
+                        usage_reported: false,
+                        billable_metrics: BTreeMap::new(),
+                        reported_cost: None,
+                        error: Some(message),
+                    }));
                     if retry_index >= self.cfg.max_retries {
                         return Err(AccountedProviderError {
                             error: Error::Http(err),
@@ -344,53 +344,60 @@ impl ModelClient for OpenAiCompatClient {
             let text = match response.text().await {
                 Ok(text) => text,
                 Err(err) => {
-                    attempts.push(self.accounting_attempt(
-                        retry_index + 1,
+                    attempts.push(self.accounting_attempt(AttemptDraft {
+                        attempt: retry_index + 1,
                         occurred_at_ms,
-                        Some(status),
-                        header_request_id,
-                        None,
-                        None,
-                        TokenUsage::default(),
-                        false,
-                        BTreeMap::new(),
-                        None,
-                        Some(err.to_string()),
-                    ));
+                        status: Some(status),
+                        request_id: header_request_id,
+                        resolved_model: None,
+                        service_tier: None,
+                        usage: TokenUsage::default(),
+                        usage_reported: false,
+                        billable_metrics: BTreeMap::new(),
+                        reported_cost: None,
+                        error: Some(err.to_string()),
+                    }));
                     return Err(AccountedProviderError {
                         error: Error::Http(err),
                         attempts,
                     });
                 }
             };
-            let payload = serde_json::from_str::<Value>(&text).ok();
-            let extracted = payload.as_ref().map(extract_usage).unwrap_or_default();
-            let reported_cost = extract_reported_cost(payload.as_ref(), &headers, &self.accounting);
-            let response_request_id = payload
+            let payload_parse = serde_json::from_str::<Value>(&text);
+            let extracted = payload_parse
                 .as_ref()
+                .map(extract_usage)
+                .unwrap_or_default();
+            let reported_cost =
+                extract_reported_cost(payload_parse.as_ref().ok(), &headers, &self.accounting);
+            let response_request_id = payload_parse
+                .as_ref()
+                .ok()
                 .and_then(|value| string_at(value, "/id"))
                 .or(header_request_id);
-            let resolved_model = payload
+            let resolved_model = payload_parse
                 .as_ref()
+                .ok()
                 .and_then(|value| string_at(value, "/model"));
-            let service_tier = payload
+            let service_tier = payload_parse
                 .as_ref()
+                .ok()
                 .and_then(|value| string_at(value, "/service_tier"));
 
             if !status.is_success() {
-                attempts.push(self.accounting_attempt(
-                    retry_index + 1,
+                attempts.push(self.accounting_attempt(AttemptDraft {
+                    attempt: retry_index + 1,
                     occurred_at_ms,
-                    Some(status),
-                    response_request_id,
+                    status: Some(status),
+                    request_id: response_request_id,
                     resolved_model,
                     service_tier,
-                    extracted.usage,
-                    extracted.reported,
-                    extracted.metrics,
+                    usage: extracted.usage,
+                    usage_reported: extracted.reported,
+                    billable_metrics: extracted.metrics,
                     reported_cost,
-                    Some(format!("provider returned HTTP {status}")),
-                ));
+                    error: Some(format!("provider returned HTTP {status}")),
+                }));
                 let is_retryable =
                     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
                 if is_retryable && retry_index < self.cfg.max_retries {
@@ -409,24 +416,22 @@ impl ModelClient for OpenAiCompatClient {
                 });
             }
 
-            let payload_value = match payload {
-                Some(payload) => payload,
-                None => {
-                    let error = serde_json::from_str::<Value>(&text)
-                        .expect_err("payload previously failed to decode");
-                    attempts.push(self.accounting_attempt(
-                        retry_index + 1,
+            let payload_value = match payload_parse {
+                Ok(payload) => payload,
+                Err(error) => {
+                    attempts.push(self.accounting_attempt(AttemptDraft {
+                        attempt: retry_index + 1,
                         occurred_at_ms,
-                        Some(status),
-                        response_request_id,
+                        status: Some(status),
+                        request_id: response_request_id,
                         resolved_model,
                         service_tier,
-                        TokenUsage::default(),
-                        false,
-                        BTreeMap::new(),
+                        usage: TokenUsage::default(),
+                        usage_reported: false,
+                        billable_metrics: BTreeMap::new(),
                         reported_cost,
-                        Some(error.to_string()),
-                    ));
+                        error: Some(error.to_string()),
+                    }));
                     return Err(AccountedProviderError {
                         error: Error::Decode(error),
                         attempts,
@@ -436,19 +441,19 @@ impl ModelClient for OpenAiCompatClient {
             let payload: ChatCompletionResponse = match serde_json::from_value(payload_value) {
                 Ok(payload) => payload,
                 Err(error) => {
-                    attempts.push(self.accounting_attempt(
-                        retry_index + 1,
+                    attempts.push(self.accounting_attempt(AttemptDraft {
+                        attempt: retry_index + 1,
                         occurred_at_ms,
-                        Some(status),
-                        response_request_id,
+                        status: Some(status),
+                        request_id: response_request_id,
                         resolved_model,
                         service_tier,
-                        extracted.usage,
-                        extracted.reported,
-                        extracted.metrics,
+                        usage: extracted.usage,
+                        usage_reported: extracted.reported,
+                        billable_metrics: extracted.metrics,
                         reported_cost,
-                        Some(error.to_string()),
-                    ));
+                        error: Some(error.to_string()),
+                    }));
                     return Err(AccountedProviderError {
                         error: Error::Decode(error),
                         attempts,
@@ -458,19 +463,19 @@ impl ModelClient for OpenAiCompatClient {
             let choice = match payload.choices.into_iter().next() {
                 Some(choice) => choice,
                 None => {
-                    attempts.push(self.accounting_attempt(
-                        retry_index + 1,
+                    attempts.push(self.accounting_attempt(AttemptDraft {
+                        attempt: retry_index + 1,
                         occurred_at_ms,
-                        Some(status),
-                        response_request_id,
+                        status: Some(status),
+                        request_id: response_request_id,
                         resolved_model,
                         service_tier,
-                        extracted.usage,
-                        extracted.reported,
-                        extracted.metrics,
+                        usage: extracted.usage,
+                        usage_reported: extracted.reported,
+                        billable_metrics: extracted.metrics,
                         reported_cost,
-                        Some("provider response has no choices".to_string()),
-                    ));
+                        error: Some("provider response has no choices".to_string()),
+                    }));
                     return Err(AccountedProviderError {
                         error: Error::EmptyChoices,
                         attempts,
@@ -478,19 +483,19 @@ impl ModelClient for OpenAiCompatClient {
                 }
             };
             let content = extract_content(choice.message.content);
-            attempts.push(self.accounting_attempt(
-                retry_index + 1,
+            attempts.push(self.accounting_attempt(AttemptDraft {
+                attempt: retry_index + 1,
                 occurred_at_ms,
-                Some(status),
-                response_request_id,
+                status: Some(status),
+                request_id: response_request_id,
                 resolved_model,
                 service_tier,
-                extracted.usage,
-                extracted.reported,
-                extracted.metrics,
+                usage: extracted.usage,
+                usage_reported: extracted.reported,
+                billable_metrics: extracted.metrics,
                 reported_cost,
-                None,
-            ));
+                error: None,
+            }));
 
             return Ok(AccountedModelResponse {
                 response: ModelResponse {
@@ -642,10 +647,26 @@ fn extract_usage(payload: &Value) -> ExtractedUsage {
     if native_thinking_is_separate {
         metrics.insert(BillableMetric::ReasoningTokens, reasoning);
     }
-    metrics.insert(BillableMetric::AudioInputTokens, audio_input);
-    metrics.insert(BillableMetric::ImageInputTokens, image_input);
-    metrics.insert(BillableMetric::AudioOutputTokens, audio_output);
-    metrics.insert(BillableMetric::ImageOutputTokens, image_output);
+    insert_optional_metric(
+        &mut metrics,
+        BillableMetric::AudioInputTokens,
+        (audio_input > 0).then_some(audio_input),
+    );
+    insert_optional_metric(
+        &mut metrics,
+        BillableMetric::ImageInputTokens,
+        (image_input > 0).then_some(image_input),
+    );
+    insert_optional_metric(
+        &mut metrics,
+        BillableMetric::AudioOutputTokens,
+        (audio_output > 0).then_some(audio_output),
+    );
+    insert_optional_metric(
+        &mut metrics,
+        BillableMetric::ImageOutputTokens,
+        (image_output > 0).then_some(image_output),
+    );
     insert_optional_metric(
         &mut metrics,
         BillableMetric::WebSearchRequests,

@@ -9,8 +9,8 @@ use tokio::time::timeout;
 use tracing::warn;
 
 use super::{
-    decimal_from_value, CostLineItem, CostPrecision, CostResolution, CostResolver, Money,
-    ProviderAttemptAccounting,
+    decimal_from_value, validate_currency, BillableMetric, BillingError, CostLineItem,
+    CostPrecision, CostResolution, CostResolver, Money, ProviderAttemptAccounting,
 };
 use crate::logging::SharedEventSink;
 use crate::mcp::McpRegistry;
@@ -28,7 +28,11 @@ pub struct McpCostResolver {
 
 impl McpCostResolver {
     /// Builds a resolver after the target has been split and discovered.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError::InvalidCurrency`] when `target_currency` is not a
+    /// compact ASCII currency/unit identifier.
     pub fn new(
         registry: Arc<McpRegistry>,
         server: impl Into<String>,
@@ -36,18 +40,20 @@ impl McpCostResolver {
         target_currency: impl Into<String>,
         timeout_ms: u64,
         logger: Option<SharedEventSink>,
-    ) -> Self {
+    ) -> Result<Self, BillingError> {
         let server = server.into();
         let tool = tool.into();
-        Self {
+        let target_currency = target_currency.into();
+        validate_currency(&target_currency)?;
+        Ok(Self {
             target: format!("{server}.{tool}"),
             registry,
             server,
             tool,
-            target_currency: target_currency.into(),
+            target_currency,
             timeout: Duration::from_millis(timeout_ms),
             logger,
-        }
+        })
     }
 
     async fn resolve_inner(&self, attempt: &ProviderAttemptAccounting) -> CostResolution {
@@ -242,7 +248,9 @@ fn parse_line_items(value: &Value) -> Result<Vec<CostLineItem>, String> {
             let metric = item
                 .get("metric")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "line item metric must be a string".to_string())?;
+                .ok_or_else(|| "line item metric must be a string".to_string())?
+                .parse::<BillableMetric>()
+                .map_err(|error| error.to_string())?;
             let quantity = item
                 .get("quantity")
                 .and_then(Value::as_u64)
@@ -252,7 +260,7 @@ fn parse_line_items(value: &Value) -> Result<Vec<CostLineItem>, String> {
                 .ok_or_else(|| "line item amount is required".to_string())
                 .and_then(|value| decimal_from_value(value).map_err(|error| error.to_string()))?;
             Ok(CostLineItem {
-                metric: metric.to_string(),
+                metric,
                 quantity,
                 amount,
             })
@@ -304,12 +312,13 @@ mod tests {
             }),
             None,
         ));
-        let resolver = McpCostResolver::new(registry, "pricing", "calculate", "USD", 100, None);
+        let resolver = McpCostResolver::new(registry, "pricing", "calculate", "USD", 100, None)
+            .expect("resolver");
 
         let CostResolution::Priced { money, .. } = resolver.resolve(&attempt()).await else {
             panic!("expected priced");
         };
-        assert_eq!(money.amount.to_string(), "0.00000894");
+        assert_eq!(money.amount().to_string(), "0.00000894");
     }
 
     #[tokio::test]
@@ -320,7 +329,8 @@ mod tests {
             json!({"structuredContent": {"status": "priced"}}),
             None,
         ));
-        let resolver = McpCostResolver::new(registry, "pricing", "calculate", "USD", 100, None);
+        let resolver = McpCostResolver::new(registry, "pricing", "calculate", "USD", 100, None)
+            .expect("resolver");
 
         assert!(matches!(
             resolver.resolve(&attempt()).await,

@@ -11,8 +11,8 @@ use agent_Kuibysheff::access::{
 };
 use agent_Kuibysheff::agent::{AgentEngine, AgentRunRequest, RunCancel};
 use agent_Kuibysheff::billing::{
-    parse_decimal, BillableMetric, CostResolverChain, Money, ProviderAttemptAccounting,
-    ProviderReportedCostResolver, ReportedCost,
+    parse_decimal, BillableMetric, BudgetStatus, CostResolverChain, Money,
+    ProviderAttemptAccounting, ProviderReportedCostResolver, ReportedCost,
 };
 use agent_Kuibysheff::config::{LogSinkConfig, LoggingConfig};
 use agent_Kuibysheff::limits::{LimitsConfig, TokenUsage};
@@ -282,7 +282,7 @@ async fn final_output_contains_exact_per_request_cost() {
             .known_total
             .as_ref()
             .expect("known total")
-            .amount
+            .amount()
             .to_string(),
         "0.00000894"
     );
@@ -292,7 +292,7 @@ async fn final_output_contains_exact_per_request_cost() {
             .amount
             .as_ref()
             .expect("request amount")
-            .amount
+            .amount()
             .to_string(),
         "0.00000894"
     );
@@ -322,7 +322,7 @@ async fn max_cost_stops_after_charged_request() {
 
     assert_eq!(output.stop_reason, StopReason::LimitReached);
     assert!(output.result.contains("max_cost"), "{}", output.result);
-    assert_eq!(output.usage.cost.budget_status, "limit_reached");
+    assert_eq!(output.usage.cost.budget_status, BudgetStatus::LimitReached);
 }
 
 #[tokio::test]
