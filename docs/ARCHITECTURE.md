@@ -299,7 +299,8 @@ P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-archi
 ## Further reading
 
 - [`CONTRACT.md`](../CONTRACT.md) — stable orchestrator interface and output schema.
-- [`README.md`](../README.md) — quick start, configuration examples, and release notes.
+- [`../README.md`](../README.md) — product overview, quick start, and CLI usage.
+- [`docs/README.md`](README.md) — documentation index (billing, Event-MCP, logging, output, releases).
 - [`crates/sandbox-linux/TESTING.md`](../crates/sandbox-linux/TESTING.md) — Linux sandbox testing notes.
 - [`settings/`](../settings/) — example agent settings directory.
 - [`agent-config.example.yaml`](../agent-config.example.yaml) — example runtime config.
