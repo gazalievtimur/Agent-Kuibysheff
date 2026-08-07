@@ -1,0 +1,10 @@
+{
+  "linux": {
+    "min_lines_percent": 50.0
+  },
+  "windows": {
+    "min_lines_percent": 50.0
+  },
+  "changed_lines_min_percent": 70.0,
+  "notes": "Conservative floors below expected CI totals; raise deliberately after measuring higher green runs. Ratchet also compares PR LCOV to the latest main coverage artifact (0.5pp tolerance)."
+}

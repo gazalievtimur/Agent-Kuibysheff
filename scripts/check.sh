@@ -4,10 +4,12 @@
 # Usage:
 #   ./scripts/check.sh
 #   ./scripts/check.sh --skip-aoc
+#   ./scripts/check.sh --skip-deny
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKIP_AOC=0
+SKIP_DENY_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -15,8 +17,12 @@ while [[ $# -gt 0 ]]; do
       SKIP_AOC=1
       shift
       ;;
+    --skip-deny|-SkipDeny)
+      SKIP_DENY_FLAG=1
+      shift
+      ;;
     -h|--help)
-      sed -n '2,8p' "$0"
+      sed -n '2,9p' "$0"
       exit 0
       ;;
     *)
@@ -26,11 +32,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+require_cargo_deny() {
+  if ! cargo deny --version >/dev/null 2>&1; then
+    echo "cargo-deny is not installed. Install with: cargo install --locked cargo-deny" >&2
+    exit 1
+  fi
+}
+
 echo "Checking formatting..."
 cargo fmt --all -- --check
 
 echo "Running clippy..."
 cargo clippy --workspace --all-targets -- -D warnings
+
+if [[ "$SKIP_DENY_FLAG" -eq 1 || "${SKIP_DENY:-}" == "1" ]]; then
+  echo "Skipping cargo deny (--skip-deny / SKIP_DENY=1)."
+else
+  echo "Running cargo deny..."
+  require_cargo_deny
+  cargo deny check
+fi
 
 echo "Running tests..."
 cargo test --workspace

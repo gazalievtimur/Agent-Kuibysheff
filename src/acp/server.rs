@@ -108,19 +108,9 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
                     },
                 );
                 if sessions.len() > MAX_ACTIVE_SESSIONS {
-                    let evicted = sessions
-                        .iter()
-                        .min_by_key(|(_, slot)| slot.touched_seq)
-                        .map(|(key, _)| key.clone())
-                        .and_then(|oldest| {
-                            if oldest != id_key {
-                                sessions.remove(&oldest)?;
-                                Some(oldest)
-                            } else {
-                                None
-                            }
-                        });
-                    if let Some(evicted_id) = evicted {
+                    if let Some(evicted_id) =
+                        evict_lru_session_if_needed(&mut sessions, &id_key, MAX_ACTIVE_SESSIONS)
+                    {
                         warn!(
                             session_id = %evicted_id,
                             max_sessions = MAX_ACTIVE_SESSIONS,
@@ -269,4 +259,83 @@ fn extract_prompt_text(blocks: &[ContentBlock]) -> String {
         }
     }
     parts.join("\n")
+}
+
+/// Evict the least-recently-touched session when over capacity, never the just-created one.
+fn evict_lru_session_if_needed(
+    sessions: &mut HashMap<String, SessionSlot>,
+    keep_id: &str,
+    max_sessions: usize,
+) -> Option<String> {
+    if sessions.len() <= max_sessions {
+        return None;
+    }
+    let oldest = sessions
+        .iter()
+        .filter(|(key, _)| key.as_str() != keep_id)
+        .min_by_key(|(_, slot)| slot.touched_seq)
+        .map(|(key, _)| key.clone())?;
+    sessions.remove(&oldest);
+    Some(oldest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::TextContent;
+
+    #[test]
+    fn extract_prompt_text_joins_text_blocks() {
+        let blocks = vec![
+            ContentBlock::Text(TextContent::new("hello")),
+            ContentBlock::Text(TextContent::new("world")),
+        ];
+        assert_eq!(extract_prompt_text(&blocks), "hello\nworld");
+    }
+
+    #[test]
+    fn extract_prompt_text_empty_when_no_text() {
+        assert!(extract_prompt_text(&[]).is_empty());
+    }
+
+    #[test]
+    fn extract_prompt_text_whitespace_only_trims_empty() {
+        let blocks = vec![ContentBlock::Text(TextContent::new("  \n\t  "))];
+        assert!(extract_prompt_text(&blocks).trim().is_empty());
+    }
+
+    #[test]
+    fn evict_lru_skips_when_under_capacity() {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            "a".into(),
+            SessionSlot {
+                cancel: RunCancel::new(),
+                cwd: PathBuf::from("/tmp"),
+                touched_seq: 1,
+            },
+        );
+        assert!(evict_lru_session_if_needed(&mut sessions, "a", 256).is_none());
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn evict_lru_removes_oldest_not_keep_id() {
+        let mut sessions = HashMap::new();
+        for (id, seq) in [("old", 1u64), ("mid", 2), ("keep", 3)] {
+            sessions.insert(
+                id.into(),
+                SessionSlot {
+                    cancel: RunCancel::new(),
+                    cwd: PathBuf::from("/tmp"),
+                    touched_seq: seq,
+                },
+            );
+        }
+        let evicted = evict_lru_session_if_needed(&mut sessions, "keep", 2);
+        assert_eq!(evicted.as_deref(), Some("old"));
+        assert!(!sessions.contains_key("old"));
+        assert!(sessions.contains_key("keep"));
+        assert!(sessions.contains_key("mid"));
+    }
 }

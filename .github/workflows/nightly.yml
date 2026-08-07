@@ -1,0 +1,72 @@
+name: Nightly depth
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deep-linux:
+    name: Deep Linux (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Allow unprivileged userns mounts
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Workspace tests
+        run: cargo test --workspace
+
+      - name: Fail-closed namespace suite
+        env:
+          REQUIRE_LINUX_SANDBOX: "1"
+        run: cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
+
+  fuzz-smoke:
+    name: Fuzz / mutation smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly + cargo-fuzz
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      # Targets are opt-in; this job documents the lane and fails soft until fuzz targets land.
+      - name: List cargo-mutants scope
+        run: |
+          cargo mutants --list -p agent_Kuibysheff --examine 'src/access/**' --examine 'src/config/**' 2>&1 | head -n 40 || true
+
+  release-smoke:
+    name: Release artifact smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release -p agent_Kuibysheff
+
+      - name: Smoke --help
+        run: ./target/release/agent_Kuibysheff --help

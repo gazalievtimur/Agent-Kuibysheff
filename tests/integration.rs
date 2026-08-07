@@ -443,6 +443,39 @@ async fn run_stops_on_iteration_limit() {
 }
 
 #[tokio::test]
+async fn run_stops_on_max_tokens_limit() {
+    let model = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![ModelResponse {
+            content: r#"{"done":false,"thought":"step1","tool_calls":[],"result":null}"#
+                .to_string(),
+            usage: TokenUsage {
+                prompt_tokens: 40,
+                completion_tokens: 40,
+                total_tokens: 80,
+            },
+        }])),
+    };
+
+    let engine = AgentEngine::new(Arc::new(model), Arc::new(FakeTools), Loggers::default());
+    let output = engine
+        .run(request(
+            "never done",
+            LimitsConfig {
+                max_iterations: 10,
+                max_tokens: 50,
+                max_duration_sec: 60,
+                max_cost: None,
+            },
+        ))
+        .await;
+
+    assert_eq!(output.stop_reason, StopReason::LimitReached);
+    assert!(output.result.contains("max_tokens"));
+    assert!(output.usage.total_tokens >= 50);
+    assert_eq!(output.usage.iterations, 1);
+}
+
+#[tokio::test]
 async fn model_can_write_an_artifact_inside_home() {
     let model = FakeModel {
         responses: Mutex::new(VecDeque::from(vec![
@@ -528,7 +561,12 @@ async fn model_can_home_run_via_native_sandbox() {
     };
 
     let runner = Arc::new(agent_Kuibysheff::sandbox::SandboxRunner::platform_default());
-    if runner.probe().is_err() {
+    if let Err(err) = runner.probe() {
+        if std::env::var_os("REQUIRE_LINUX_SANDBOX").is_some()
+            || std::env::var_os("REQUIRE_NATIVE_SANDBOX").is_some()
+        {
+            panic!("native sandbox required but unavailable: {err}");
+        }
         return;
     }
 

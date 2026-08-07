@@ -28,7 +28,7 @@ Prebuilt Windows and Linux binaries are on
 [GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases).
 Archive names, checksums, and how to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 
-Or build from source (Rust MSRV **1.86**):
+Or build from source (Rust MSRV **1.88**):
 
 ```powershell
 cargo build --release --bin agent_Kuibysheff
@@ -146,3 +146,12 @@ Model context-window pruning lives under `provider.history` (defaults
 ## Documentation
 
 Full index: [docs/README.md](docs/README.md).
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE)
+for copyright. Contributions are under the same terms; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
+trademark use beyond reasonable attribution of origin.

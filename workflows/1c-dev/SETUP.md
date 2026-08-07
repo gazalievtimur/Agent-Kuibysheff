@@ -36,7 +36,7 @@
 - Git
 - Доступ в интернет к LLM API и (для intake) к Jira/Confluence
 - Один из вариантов бинарника агента:
-  - Rust toolchain (MSRV **1.86+**) и `cargo build --release`, **или**
+  - Rust toolchain (MSRV **1.88+**) и `cargo build --release`, **или**
   - готовый `agent_Kuibysheff` с [GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases)
 
 ### Для этапа 1 (Jira/Confluence)

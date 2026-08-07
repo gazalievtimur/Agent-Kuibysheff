@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        toolchain: [stable, "1.86"]
+        toolchain: [stable, "1.88"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,14 +80,171 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.86
-        uses: dtolnay/rust-toolchain@1.86
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
 
       - name: Check workspace with MSRV
         run: cargo check --workspace
+
+  linux-sandbox:
+    name: Linux sandbox (fail-closed)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # GHA ubuntu-24.04 ships with AppArmor userns restrict; mounts inside
+      # unprivileged userns need CAP_SYS_ADMIN unless this is relaxed.
+      - name: Allow unprivileged userns mounts
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Namespace tests (REQUIRE_LINUX_SANDBOX=1)
+        env:
+          REQUIRE_LINUX_SANDBOX: "1"
+        run: cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
+
+      - name: Agent native-sandbox E2E (REQUIRE_LINUX_SANDBOX=1)
+        env:
+          REQUIRE_LINUX_SANDBOX: "1"
+        run: cargo test --test integration model_can_home_run_via_native_sandbox -- --nocapture
+
+  coverage:
+    name: Coverage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            baseline_os: linux
+          - os: windows-latest
+            baseline_os: windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Allow unprivileged userns mounts
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Generate LCOV report + summary
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info --summary-only
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: lcov.info
+          retention-days: 30
+
+      - name: Download main coverage artifact
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: ci.yml
+          branch: ${{ github.base_ref }}
+          name: coverage-${{ matrix.os }}
+          path: coverage-main
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Coverage ratchet + changed-lines gate
+        shell: bash
+        env:
+          BASELINE_OS: ${{ matrix.baseline_os }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          PYTHON=python3
+          command -v python3 >/dev/null || PYTHON=python
+          CHANGED_MIN=$($PYTHON -c "import json; print(json.load(open('.github/coverage-baseline.json'))['changed_lines_min_percent'])")
+          ARGS=(
+            --lcov lcov.info
+            --baseline .github/coverage-baseline.json
+            --os "$BASELINE_OS"
+          )
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git fetch origin "$BASE_REF" --depth=1
+            ARGS+=(--changed-from "origin/$BASE_REF" --changed-min "$CHANGED_MIN")
+            if [[ -f coverage-main/lcov.info ]]; then
+              ARGS+=(--vs-lcov coverage-main/lcov.info --tolerance 0.5)
+            else
+              echo "warn: no main LCOV artifact yet; skipping vs-main compare"
+            fi
+          fi
+          $PYTHON scripts/coverage_ratchet.py "${ARGS[@]}"
+
+  # Ratchet / changed-lines gate lives in the coverage job above.
+
+  python-smoke:
+    name: Python aoc-live smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run offline smoke
+        run: python3 workflows/aoc-live/test_smoke_offline.py
+
+      - name: Coverage ratchet unit tests
+        working-directory: scripts
+        run: python3 -m unittest test_coverage_ratchet -v
+
+  vscode-extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/vscode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Unit tests
+        run: npm test
 
   miri:
     name: Miri (ubuntu-latest)

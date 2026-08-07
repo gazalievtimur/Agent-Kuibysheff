@@ -1,6 +1,7 @@
 //! Parent-side supervisor: re-exec helper and collect output.
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -164,4 +165,87 @@ fn validate(request: &SandboxLaunchRequest) -> Result<(), SandboxLinuxError> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    fn minimal_request(exe: PathBuf, cwd: PathBuf) -> SandboxLaunchRequest {
+        SandboxLaunchRequest {
+            executable: exe,
+            argv: Vec::new(),
+            cwd,
+            env: BTreeMap::new(),
+            home_read: Vec::new(),
+            home_write: Vec::new(),
+            runtime_read_roots: Vec::new(),
+            deadline: Duration::from_secs(1),
+            max_output_chars: 1024,
+            allow_children: false,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_relative_executable() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("payload.sh");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let mut req = minimal_request(PathBuf::from("payload.sh"), dir.path().to_path_buf());
+        req.executable = PathBuf::from("payload.sh");
+        let err = validate(&req).expect_err("relative exe");
+        assert!(err.to_string().contains("absolute"));
+    }
+
+    #[test]
+    fn validate_rejects_relative_cwd() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("payload.sh");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let req = minimal_request(exe, PathBuf::from("relative-cwd"));
+        let err = validate(&req).expect_err("relative cwd");
+        assert!(err.to_string().contains("cwd"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_output() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("payload.sh");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let mut req = minimal_request(exe, dir.path().to_path_buf());
+        req.max_output_chars = 0;
+        let err = validate(&req).expect_err("zero max_output");
+        assert!(err.to_string().contains("max_output_chars"));
+    }
+
+    #[test]
+    fn validate_rejects_missing_executable() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing-bin");
+        let req = minimal_request(missing, dir.path().to_path_buf());
+        let err = validate(&req).expect_err("missing exe");
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn validate_accepts_absolute_existing() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("payload.sh");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let req = minimal_request(exe, dir.path().to_path_buf());
+        validate(&req).expect("valid request");
+    }
+
+    #[test]
+    fn read_bounded_truncates_and_preserves_utf8() {
+        let data = "abcdefghij";
+        let mut cursor = std::io::Cursor::new(data.as_bytes());
+        let (out, truncated) = read_bounded(&mut cursor, 5);
+        assert!(truncated);
+        assert_eq!(out.chars().count(), 5);
+        assert_eq!(out, "abcde");
+    }
 }
