@@ -24,6 +24,10 @@ agent-config.local.yaml
 /workflows/aoc-live/runs/*
 !/workflows/aoc-live/runs/.gitkeep
 
+# SWE-bench Verified workflow run artifacts (not committed)
+/workflows/swebench-verified/runs/*
+!/workflows/swebench-verified/runs/.gitkeep
+
 # Local product adapter paths (keep *.yaml.example in git)
 /workflows/1c-dev/products/*.yaml
 !/workflows/1c-dev/products/*.yaml.example

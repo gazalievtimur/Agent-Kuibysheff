@@ -23,37 +23,37 @@ use crate::tool_api::ToolExecutor;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EventMcpError {
-    #[error("invalid Event-MCP configuration: {0}")]
+    #[error("invalid event-mcp configuration: {0}")]
     Configuration(String),
-    #[error("Event-MCP handler `{handler}` target `{target}` was not discovered")]
+    #[error("event-mcp handler `{handler}` target `{target}` was not discovered")]
     UnknownTarget { handler: String, target: String },
-    #[error("Event-MCP handler `{handler}` payload is {actual} bytes; limit is {limit}")]
+    #[error("event-mcp handler `{handler}` payload is {actual} bytes; limit is {limit}")]
     PayloadTooLarge {
         handler: String,
         actual: usize,
         limit: usize,
     },
-    #[error("Event-MCP handler `{handler}` outcome is {actual} bytes; limit is {limit}")]
+    #[error("event-mcp handler `{handler}` outcome is {actual} bytes; limit is {limit}")]
     OutcomeTooLarge {
         handler: String,
         actual: usize,
         limit: usize,
     },
-    #[error("Event-MCP handler `{handler}` timed out after {timeout_ms} ms")]
+    #[error("event-mcp handler `{handler}` timed out after {timeout_ms} ms")]
     Timeout { handler: String, timeout_ms: u64 },
-    #[error("Event-MCP event `{event}` was cancelled")]
+    #[error("event-mcp event `{event}` was cancelled")]
     Cancelled { event: EventStage },
-    #[error("Event-MCP handler `{handler}` failed: {source}")]
+    #[error("event-mcp handler `{handler}` failed: {source}")]
     Mcp {
         handler: String,
         #[source]
         source: McpError,
     },
-    #[error("Event-MCP handler `{handler}` returned an invalid outcome: {reason}")]
+    #[error("event-mcp handler `{handler}` returned an invalid outcome: {reason}")]
     InvalidOutcome { handler: String, reason: String },
-    #[error("Event-MCP event `{event}` returned an invalid payload: {reason}")]
+    #[error("event-mcp event `{event}` returned an invalid payload: {reason}")]
     InvalidPayload { event: EventStage, reason: String },
-    #[error("Event-MCP handler `{handler}` rejected event `{event}`: {reason}")]
+    #[error("event-mcp handler `{handler}` rejected event `{event}`: {reason}")]
     Rejected {
         event: EventStage,
         handler: String,
@@ -193,7 +193,7 @@ impl EventMcpDispatcher {
         &self,
         event: EventStage,
         handler: &CompiledHandler,
-        payload: Value,
+        payload: &Value,
         iteration: Option<u32>,
         cancel: &CancellationToken,
     ) -> Result<(EventOutcome, usize, usize, u128), EventMcpError> {
@@ -202,19 +202,14 @@ impl EventMcpDispatcher {
             format!("{}:{sequence}", event.as_str()),
             event,
             iteration,
-            payload,
+            payload.clone(),
         );
-        let arguments =
-            serde_json::to_value(envelope).map_err(|error| EventMcpError::InvalidOutcome {
-                handler: handler.id.clone(),
+        let encoded =
+            serde_json::to_vec(&envelope).map_err(|error| EventMcpError::InvalidPayload {
+                event,
                 reason: format!("failed to encode event envelope: {error}"),
             })?;
-        let input_bytes = serde_json::to_vec(&arguments)
-            .map_err(|error| EventMcpError::InvalidOutcome {
-                handler: handler.id.clone(),
-                reason: format!("failed to measure event envelope: {error}"),
-            })?
-            .len();
+        let input_bytes = encoded.len();
         if input_bytes > self.max_payload_bytes {
             return Err(EventMcpError::PayloadTooLarge {
                 handler: handler.id.clone(),
@@ -222,6 +217,11 @@ impl EventMcpDispatcher {
                 limit: self.max_payload_bytes,
             });
         }
+        let arguments: Value =
+            serde_json::from_slice(&encoded).map_err(|error| EventMcpError::InvalidPayload {
+                event,
+                reason: format!("failed to rehydrate event envelope: {error}"),
+            })?;
 
         let started = Instant::now();
         let call = self.invoker.call(&handler.server, &handler.tool, arguments);
@@ -242,8 +242,8 @@ impl EventMcpDispatcher {
                 source,
             })?;
         let outcome_bytes = serde_json::to_vec(&response)
-            .map_err(|error| EventMcpError::InvalidOutcome {
-                handler: handler.id.clone(),
+            .map_err(|error| EventMcpError::InvalidPayload {
+                event,
                 reason: format!("failed to measure MCP result: {error}"),
             })?
             .len();
@@ -317,7 +317,7 @@ impl PipelineEvents for EventMcpDispatcher {
         for handler in chain {
             let started = Instant::now();
             match self
-                .invoke_handler(event, handler, current.clone(), iteration, cancel)
+                .invoke_handler(event, handler, &current, iteration, cancel)
                 .await
             {
                 Ok((outcome, input_bytes, outcome_bytes, duration_ms)) => {

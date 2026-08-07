@@ -235,13 +235,12 @@ impl AgentEngine {
             let (mut completion, attempts) = match accounted {
                 Ok(accounted) => (accounted.response, accounted.attempts),
                 Err(failure) => {
-                    let cost_start = cost_tracker.report().requests.len();
+                    let cost_start = cost_tracker.request_count();
                     for attempt in &failure.attempts {
                         let resolution = self.billing_resolver.resolve(attempt).await;
                         cost_tracker.record(iteration, attempt, resolution);
                     }
-                    let report = cost_tracker.report();
-                    let attempt_costs = &report.requests[cost_start..];
+                    let attempt_costs = cost_tracker.requests_since(cost_start);
                     if let Some(ai_log) = &self.loggers.ai {
                         if let Err(error) = ai_log
                             .write_event(
@@ -259,10 +258,13 @@ impl AgentEngine {
                         }
                     }
                     self.loggers.persist_chat_history(&full_history, None).await;
-                    return Err((failure.error.into(), build_usage_report(&metrics, report)));
+                    return Err((
+                        failure.error.into(),
+                        build_usage_report(&metrics, cost_tracker.report()),
+                    ));
                 }
             };
-            let cost_start = cost_tracker.report().requests.len();
+            let cost_start = cost_tracker.request_count();
             for attempt in &attempts {
                 let resolution = self.billing_resolver.resolve(attempt).await;
                 cost_tracker.record(iteration, attempt, resolution);
@@ -302,8 +304,7 @@ impl AgentEngine {
                     }
                 };
             }
-            let current_cost_report = cost_tracker.report();
-            let attempt_costs = &current_cost_report.requests[cost_start..];
+            let attempt_costs = cost_tracker.requests_since(cost_start);
             if let Some(ai_log) = &self.loggers.ai {
                 if let Err(err) = ai_log
                     .write_event(
@@ -697,7 +698,7 @@ impl AgentEngine {
             };
         }
 
-        let final_cost_report = cost_tracker.report();
+        let final_cost_report = cost_tracker.into_report();
         self.emit_run_summary(&diag, &stop_reason, &final_result, &final_cost_report)
             .await;
 

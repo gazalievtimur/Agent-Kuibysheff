@@ -255,14 +255,17 @@ async fn build_billing_resolver(
                     .mcp
                     .as_ref()
                     .map_or(5_000, |binding| binding.timeout_ms);
-                Some(Arc::new(McpCostResolver::new(
-                    registry,
-                    server.clone(),
-                    tool.clone(),
-                    cfg.billing.currency.clone(),
-                    timeout_ms,
-                    logger,
-                )))
+                Some(Arc::new(
+                    McpCostResolver::new(
+                        registry,
+                        server.clone(),
+                        tool.clone(),
+                        cfg.billing.currency.clone(),
+                        timeout_ms,
+                        logger,
+                    )
+                    .context("configuring billing MCP resolver")?,
+                ))
             } else {
                 Some(Arc::new(UnavailableCostResolver::new(
                     "mcp",
