@@ -75,6 +75,7 @@ cp -R ./local/aoc-bank.example ./local/aoc-bank
 | ID | Назначение |
 | --- | --- |
 | [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
+| [swebench-solver](./swebench-solver/) | SWE-bench Verified: фикс issue через `workspace.*` MCP в Docker `/testbed` |
 | [searxng](./searxng/) | Web search через Streamable HTTP MCP `mcp-searxng` → локальный SearXNG |
 | [1c-intake](./1c-intake/) | Этап 1 воркфлоу 1С: Jira/Confluence → brief |
 | [1c-analyst](./1c-analyst/) | Этап 2: brief + CF (+ SearXNG) → план |
@@ -82,6 +83,7 @@ cp -R ./local/aoc-bank.example ./local/aoc-bank
 | [1c-implementer](./1c-implementer/) | Этап 4: упаковка CFE `out/cfe` |
 
 Оркестратор 1С: [workflows/1c-dev/README.md](../workflows/1c-dev/README.md), `scripts/1c-dev-run.ps1`.
+Оркестратор SWE-bench: [workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md), `scripts/swebench-verified-run.ps1`.
 
 ## SearXNG web search
 

@@ -33,6 +33,11 @@ For a **live Advent of Code** example that speaks ACP stdio from a Python
 singleton (download puzzle → agent solve → submit → retry ≤5), see
 [workflows/aoc-live/README.md](workflows/aoc-live/README.md).
 
+For **SWE-bench Verified** (generate patches in Docker task containers, grade
+with the official harness), see
+[workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
+and `scripts/swebench-verified-run.ps1` / `.sh`.
+
 ## Inputs
 
 Worker (`run`):
