@@ -37,6 +37,7 @@ async fn logging_pipeline_writes_trace_and_jsonl_files() {
         enable_chat_history: false,
         output_dir: None,
         sink: LogSinkConfig::default(),
+        ..Default::default()
     };
 
     let trace_path = init_tracing(dir.path()).expect("tracing");

@@ -415,6 +415,7 @@ mod tests {
             enable_chat_history: false,
             output_dir: Some(dir.path().to_path_buf()),
             sink: LogSinkConfig::default(),
+            ..Default::default()
         };
 
         let sink = create_event_sink(&config, "ai_usage.jsonl")

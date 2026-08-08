@@ -686,6 +686,7 @@ async fn run_saves_full_chat_history_when_enabled() {
         enable_chat_history: true,
         output_dir: Some(dir.path().to_path_buf()),
         sink: LogSinkConfig::default(),
+        ..Default::default()
     })
     .await
     .expect("loggers");

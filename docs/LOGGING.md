@@ -19,6 +19,15 @@ Future sinks (for example database-backed storage) are configured via
 `logging.sink.type`. The current release ships the `file` sink; `db` is reserved
 for a later implementation.
 
+## Audit redaction
+
+AI/MCP JSONL sinks apply redaction before write (chat history and `agent.trace.log` are unchanged):
+
+- Sensitive object keys (case-insensitive), including `api_key`, `authorization`, `password`, `secret`, `token`, `access_token`, `refresh_token`, `client_secret`, `private_key`, `cookie`, `set-cookie`, `bearer`, plus any `extra_sensitive_keys`
+- String leaves longer than `max_string_chars` are truncated with a `…[truncated]` suffix
+
+Defaults: `enabled: true`, `max_string_chars: 4096`. Set `enabled: false` for legacy full payloads.
+
 Enable full chat history from the CLI:
 
 ```powershell
@@ -32,6 +41,10 @@ logging:
   enable_ai_log: true
   enable_mcp_log: true
   enable_chat_history: false
+  audit_redaction:
+    enabled: true
+    max_string_chars: 4096
+    # extra_sensitive_keys: ["session_token"]
   sink:
     type: file
     # path: "./custom-logs"   # optional; defaults to ~/.agent-kuibysheff/logs

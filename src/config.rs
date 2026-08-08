@@ -454,6 +454,41 @@ pub struct LoggingConfig {
     pub output_dir: Option<PathBuf>,
     #[serde(default)]
     pub sink: LogSinkConfig,
+    /// Redaction/truncation applied to AI/MCP JSONL audit payloads (not chat history).
+    #[serde(default)]
+    pub audit_redaction: AuditRedactionConfig,
+}
+
+fn default_audit_redaction_enabled() -> bool {
+    true
+}
+
+fn default_audit_max_string_chars() -> usize {
+    4096
+}
+
+/// Policy for scrubbing structured AI/MCP audit JSONL before it is written.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuditRedactionConfig {
+    /// When `false`, payloads are written unmodified (legacy full audit).
+    #[serde(default = "default_audit_redaction_enabled")]
+    pub enabled: bool,
+    /// UTF-8 character limit for string leaves; longer values get a truncation suffix.
+    #[serde(default = "default_audit_max_string_chars")]
+    pub max_string_chars: usize,
+    /// Extra JSON object keys (case-insensitive) whose values become `[REDACTED]`.
+    #[serde(default)]
+    pub extra_sensitive_keys: Vec<String>,
+}
+
+impl Default for AuditRedactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_audit_redaction_enabled(),
+            max_string_chars: default_audit_max_string_chars(),
+            extra_sensitive_keys: Vec::new(),
+        }
+    }
 }
 
 /// Destination for structured AI/MCP event logs.
@@ -823,6 +858,7 @@ mod tests {
                 enable_chat_history: false,
                 output_dir: None,
                 sink: LogSinkConfig::default(),
+                ..Default::default()
             },
             access: Some(AccessPolicyConfig::default()),
         }
@@ -981,6 +1017,49 @@ logging:
 
         let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
         assert!(cfg.logging.enable_chat_history);
+    }
+
+    #[test]
+    fn logging_config_audit_redaction_defaults_and_override() {
+        let yaml_default = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+logging:
+  enable_ai_log: true
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml_default).expect("parse");
+        assert!(cfg.logging.audit_redaction.enabled);
+        assert_eq!(cfg.logging.audit_redaction.max_string_chars, 4096);
+        assert!(cfg.logging.audit_redaction.extra_sensitive_keys.is_empty());
+
+        let yaml_override = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+logging:
+  audit_redaction:
+    enabled: false
+    max_string_chars: 128
+    extra_sensitive_keys: [session_token]
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml_override).expect("parse");
+        assert!(!cfg.logging.audit_redaction.enabled);
+        assert_eq!(cfg.logging.audit_redaction.max_string_chars, 128);
+        assert_eq!(
+            cfg.logging.audit_redaction.extra_sensitive_keys,
+            vec!["session_token".to_string()]
+        );
     }
 
     #[test]

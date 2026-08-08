@@ -6,6 +6,7 @@
 
 mod chat_history;
 mod paths;
+pub(crate) mod redact;
 pub(crate) mod sink;
 
 use std::io::Write;
@@ -29,6 +30,7 @@ pub use sink::{EventSink, SharedEventSink, SinkDestination};
 
 pub(crate) use chat_history::{write_chat_history, ChatHistoryRecord};
 
+use redact::{AuditRedactionPolicy, RedactingEventSink};
 use sink::{create_event_sink, TrackingEventSink};
 
 #[derive(Debug, Error)]
@@ -92,12 +94,15 @@ impl Loggers {
             ..Self::default()
         };
 
+        let redaction = AuditRedactionPolicy::from_config(&config.audit_redaction);
         if config.enable_ai_log {
             let sink = create_event_sink(config, "ai_usage.jsonl").await?;
+            let sink = RedactingEventSink::wrap(sink, redaction.clone());
             loggers.ai = Some(TrackingEventSink::wrap(sink, audit_write_failed.clone()));
         }
         if config.enable_mcp_log {
             let sink = create_event_sink(config, "mcp_usage.jsonl").await?;
+            let sink = RedactingEventSink::wrap(sink, redaction);
             loggers.mcp = Some(TrackingEventSink::wrap(sink, audit_write_failed));
         }
         if config.enable_chat_history {
@@ -331,6 +336,7 @@ mod tests {
             enable_chat_history: false,
             output_dir: Some(dir.path().to_path_buf()),
             sink: LogSinkConfig::default(),
+            ..Default::default()
         };
 
         let loggers = Loggers::from_config(&config).await.expect("loggers");
@@ -365,6 +371,7 @@ mod tests {
             enable_chat_history: true,
             output_dir: Some(dir.path().to_path_buf()),
             sink: LogSinkConfig::default(),
+            ..Default::default()
         };
 
         let loggers = Loggers::from_config(&config).await.expect("loggers");
