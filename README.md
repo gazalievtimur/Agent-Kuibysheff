@@ -120,6 +120,10 @@ VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
   [workflows/aoc-live/README.md](workflows/aoc-live/README.md)
 - **SWE-bench Verified** (Docker patches + official harness):
   [workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
+- **Security sandbox LLM regression** (adversarial prompts, containment canaries, Docker
+  outer lab; `scripts/security-regression.*` / `check.* -Security`; never weakens OS
+  sandbox probe):
+  [workflows/security-sandbox/README.md](workflows/security-sandbox/README.md)
 
 ## Configuration
 

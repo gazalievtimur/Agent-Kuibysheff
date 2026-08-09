@@ -27,6 +27,9 @@ agent-config.local.yaml
 /local/aoc-runs/
 /local/aoc-sandbox-runtime/
 /local/aoc-live-project/
+/local/security-bank/
+/local/security-runs/
+/local/security-host-canary/
 /workflows/aoc-live/project/
 
 # 1C workflow run homes (not committed)

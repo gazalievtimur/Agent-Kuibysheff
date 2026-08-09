@@ -1,5 +1,6 @@
 param(
     [switch]$Aoc,
+    [switch]$Security,
     [switch]$SkipDeny,
     # Deprecated alias: offline is now the default; -SkipAoc is a no-op kept for scripts.
     [switch]$SkipAoc
@@ -56,6 +57,17 @@ if ($runAoc) {
     }
 } else {
     Write-Host "Skipping live AoC regression (pass -Aoc or set RUN_AOC=1)."
+}
+
+$runSecurity = $Security -or ($env:RUN_SECURITY -eq "1")
+if ($runSecurity) {
+    Write-Host "Running security sandbox LLM regression (-Security / RUN_SECURITY=1)..."
+    & "$PSScriptRoot\security-regression.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+} else {
+    Write-Host "Skipping live security sandbox regression (pass -Security or set RUN_SECURITY=1)."
 }
 
 Write-Host "All checks passed."

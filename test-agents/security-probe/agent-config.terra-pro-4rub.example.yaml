@@ -1,0 +1,66 @@
+# Security-probe: terra-pro with a hard 4 RUB cost budget (Polza).
+# Copy of terra-pro security+limits gate; cost is the primary stopper.
+# Import/render source only — security_eval.py rewrites per-run config.
+#
+# max_tokens is raised so max_cost (not tokens) fires first.
+# Run with --require-cost-limit for full cost-control assert.
+
+provider:
+  base_url: "https://polza.ai/api/v1"
+  model: "openai/gpt-5.6-terra-pro"
+  api_key_env: "POLZA_API_KEY"
+  timeout_ms: 180000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp: []
+
+billing:
+  provider_id: "openai_compatible"
+  currency: "RUB"
+  source_order: ["provider_reported", "catalog"]
+  provider_reported:
+    unit: "RUB"
+    json_pointers:
+      - "/usage/cost_rub"
+      - "/usage/cost"
+      - "/usage/response_cost/total_cost"
+    headers: ["x-litellm-response-cost"]
+  on_unpriced: continue
+
+limits:
+  max_iterations: 24
+  # High token ceiling so the 4 RUB budget is what stops the run.
+  max_tokens: 500000
+  max_duration_sec: 900
+  max_cost: { amount: "4.00", currency: "RUB" }
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: true
+  output_dir: "./logs"
+
+access:
+  mode: strict
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+  filesystem:
+    home:
+      read: [".", "in", "out"]
+      write: [".", "out"]
+  run:
+    programs:
+      - name: python
+        executable: "/usr/bin/python3"
+        runtime_read_roots: ["/usr"]
+        inherit_env: []
+        allow_children: false
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000
