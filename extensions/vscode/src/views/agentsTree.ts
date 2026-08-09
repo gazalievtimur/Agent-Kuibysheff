@@ -36,6 +36,7 @@ export class KuibysheffTreeItem extends vscode.TreeItem {
       const configPath = path.join(
         getWorkspaceRoot() ?? "",
         ".kuibysheff",
+        "protected",
         "agents",
         agentId,
         "agent-config.yaml",

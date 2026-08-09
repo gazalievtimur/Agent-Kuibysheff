@@ -5,7 +5,7 @@ coordination, review, and application of generated changes belong to an
 external orchestrator.
 
 Multi-stage product workflows may chain several `run` invocations (different
-`--settings-dir` / `--config` / `--home` per stage) and hand off `out/`
+`--agent` / `--home` per stage under one `--project-root`) and hand off `out/`
 artifacts between them. An example is the 1C conveyor under
 [`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`). The same
 four profiles can be driven from an IDE as **four ACP registrations** plus an
@@ -16,11 +16,10 @@ external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
 
 ```text
 agent_Kuibysheff run \
-  --config <FILE> \
-  --settings-dir <DIR> \
+  --project-root <DIR> \
+  --agent <ID> \
   --prompt <TEXT> \
-  --home <DIR> \
-  [--project-root <DIR>] \
+  [--home <REL_UNDER_KUIBYSHEFF>] \
   [--files <PATH>...] \
   [--run-id ID] \
   [--max-iterations N] \
@@ -29,24 +28,20 @@ agent_Kuibysheff run \
   [--max-cost CURRENCY:AMOUNT]
 ```
 
-- `--config` contains provider (including optional `provider.history` context
-  pruning), billing, MCP, limits, logging, and required `access` policy
-  configuration.
-- `--settings-dir` contains `master_prompt.md`, `skills.dsl`, and optional
-  `rules.md`.
+- `--project-root` is the product/workspace directory that owns `.kuibysheff/`.
+- `--agent` selects the protected profile
+  `{project-root}/.kuibysheff/protected/agents/<id>/` (settings + `agent-config.yaml`).
+- Operators do **not** pass storage paths for config/settings; the agent owns the layout.
 - `--prompt` is the task for one run.
 - `--files` are UTF-8 files embedded into the model context as read-only
   inputs. They are not copied into home. Each file is truncated to 50,000
   characters in the context. Under strict `access`, each file must fall
-  under `access.filesystem.input_roots`.
-- `--home` is the root for built-in `home.*` filesystem tools. The agent
-  creates it when necessary.
-- `--project-root` (optional) is a product/workspace directory. When set,
-  relative `--config`, `--settings-dir`, and `--home` resolve under
-  `{project-root}/.kuibysheff/`. Absolute paths are unchanged. The worker does
-  not rewrite MCP args or `access.filesystem.workspace` from this flag;
-  per-project MCP and workspace paths belong in the project's agent config
-  (typically under `.kuibysheff/agents/`).
+  under `access.filesystem.input_roots`. Paths under `.kuibysheff/protected/`
+  are always denied.
+- `--home` is optional and must be **relative** under `.kuibysheff/` (never under
+  `protected/`). Default: `homes/<agent>`. Absolute `--home` is rejected.
+- External settings enter the profile only via `config import --from <PATH>`
+  (write into protected store, then validate; see `config import` below).
 
 `limits.*` stop the run (iterations / cumulative token budget / wall clock /
 optional exact-decimal monetary budget).
@@ -79,52 +74,68 @@ precision, and amount are nested under `usage.cost.requests`.
 
 ### Management commands
 
-Commands other than `run` (for example `init`, `check`, `acp`) print
+Commands other than `run` (for example `init`, `check`, `acp`, `config`) print
 human-readable text and use process exit codes — except `acp`, which speaks
 JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
+`config` accepts `--format text|json` (default `text`).
 
 ```text
 agent_Kuibysheff help
 agent_Kuibysheff help init
 agent_Kuibysheff help check
 agent_Kuibysheff help acp
+agent_Kuibysheff help config
 agent_Kuibysheff --help
 
-agent_Kuibysheff init <agent-id> [--path DIR] [--force] [-i|--interactive]
+agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
 
-agent_Kuibysheff check --config <FILE> \
-  [--settings-dir <DIR>] \
+agent_Kuibysheff check --project-root <DIR> --agent <ID> \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
 
 agent_Kuibysheff acp \
-  --config <FILE> \
-  --settings-dir <DIR> \
-  --home <DIR> \
+  --agent <ID> \
+  [--project-root <DIR>] \
+  [--home <REL>] \
   [--max-iterations N] \
   [--max-tokens N] \
   [--max-duration-sec N] \
   [--max-cost CURRENCY:AMOUNT] \
   [--save-chat-history]
+
+agent_Kuibysheff config --project-root <DIR> --agent <ID> [--format text|json] \
+  import --from <PATH> [--force]
+  | show | provider … | limits … | access … | mcp … | billing … \
+  | event-mcp … | skill … | prompt … | rules … | tools effective [--connect]
 ```
 
-`init` creates a settings directory (`master_prompt.md`, `skills.dsl`,
-`rules.md`) plus `agent-config.example.yaml`. Default path: `./<agent-id>/`.
-With `--interactive`, the CLI prompts for `provider` (`base_url`, `model`,
-`api_key_env`) and `limits`, then writes those values into the starter config.
+`init` creates the protected profile under
+`.kuibysheff/protected/agents/<id>/` (`master_prompt.md`, `skills.dsl`,
+`rules.md`, `agent-config.yaml`). With `--interactive`, the CLI prompts for
+`provider` and `limits`.
 
-`check` probes resources from the runtime config (and optionally the settings
-directory) without running the agent loop. It reports pass/fail for:
+`config import` copies an external config file or settings directory into the
+protected profile. External paths are treated as untrusted payloads until
+contents are installed under `.kuibysheff/protected/` and validated there
+(`load_config` + safety + skills parse). `--force` overwrites a non-empty
+profile. If the profile has no `agent-config.yaml` yet, the agent bootstraps a
+minimal fail-closed `access` policy first so settings can be imported;
+external `access` is imported when present and becomes authoritative only after
+that write-then-validate step. Directory import may omit a config file
+(settings-only); missing `access` in an external config is filled with the same
+minimal policy before validation.
 
-- config load and schema validation (including resolved `access` host paths)
-- provider API key resolution and HTTP reachability (`GET {base_url}/models`)
-- each configured MCP server (connect + `tools/list`)
-- local pricing catalog validity and configured billing MCP target discovery
-- `access.run` program executables and required `inherit_env` variables
-- OS sandbox availability when programs are configured
-- logging base directory resolution
-- settings files and `skills.dsl` parse (when `--settings-dir` is set)
+`check` probes the protected profile without running the agent loop.
 
-Exit code `0` only when every probe is `ok` or intentionally `skip`.
+### Protected store trust boundary
+
+Settings under `.kuibysheff/protected/` are readable/writable only by the
+`agent_Kuibysheff` process (load + `config` CRUD). Tool paths (`home.*`,
+`local_tools.*`, `--files`) hard-deny that tree. `home.run` sandbox specs must
+not grant it. Stdio MCP children use `mcp-runtime/{agent}/{server}/` with a
+cleared environment and require a working OS sandbox probe unless
+`KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (dev/emergency only).
+
+Exit code `0` for `check` only when every probe is `ok` or intentionally `skip`.
 
 ### ACP (IDE, messengers, mail bridges)
 
@@ -161,8 +172,8 @@ usage field.
 Rules for bridge authors:
 
 - Spawn with three separate pipes (do not merge stdout and stderr).
-- Keep **one long-lived process per agent configuration** (`--config` /
-  `--settings-dir` / `--home`); do not restart for every chat message.
+- Keep **one long-lived process per agent** (`--project-root` / `--agent` /
+  optional `--home`); do not restart for every chat message.
 - On stdin EOF the agent exits; restart the process if the bridge needs another
   session after exit.
 - Each `session/prompt` is **stateless** relative to prior turns: the engine does
@@ -175,7 +186,7 @@ Minimal spawn sketch (pseudo-Rust):
 
 ```rust
 let mut child = Command::new("agent_Kuibysheff")
-    .args(["acp", "--config", cfg, "--settings-dir", settings, "--home", home])
+    .args(["acp", "--project-root", project, "--agent", agent_id])
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped()) // drain concurrently
@@ -210,13 +221,15 @@ workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
     "args": [
       "acp",
       "--project-root", "${workspaceFolder}",
-      "--config", "agents/1c-analyst/agent-config.yaml",
-      "--settings-dir", "agents/1c-analyst",
-      "--home", "runs/vscode-active/stage2/home"
+      "--agent", "1c-analyst"
     ]
   }
 }
 ```
+
+Profiles live under `.kuibysheff/protected/agents/<id>/` after `init` or
+`config import`. Session `cwd` from the IDE is preferred as project root when
+non-empty.
 
 `run` remains the one-shot orchestrator contract (single `RunOutput` JSON on
 stdout). Multi-agent IDE or bridge flows register one ACP process per profile;

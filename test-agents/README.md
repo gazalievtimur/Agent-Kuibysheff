@@ -1,25 +1,30 @@
 # Test agents
 
-Каталог описаний тестовых агентов для `agent_Kuibysheff`. Каждый агент — отдельная
-папка с `--settings-dir` и примером runtime-конфигурации.
+Каталог **шаблонов** профилей для `agent_Kuibysheff`. Каждый агент — отдельная
+папка с `master_prompt.md` / `skills.dsl` / `rules.md` и примером
+`agent-config*.yaml`.
 
-Агенты из этого каталога участвуют в интеграционных и сценарных тестах оркестратора.
-CLI остаётся stateless worker: агент пишет артефакты в `--home`, оркестратор решает,
-как их применять.
-
-## Новый агент
-
-Чтобы положить профиль в этот каталог:
+В runtime эти папки **не** передаются как `--settings-dir`. Их импортируют в
+protected store:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init my-agent --path .\test-agents\my-agent
-# или с запросом provider/limits:
-cargo run --bin agent_Kuibysheff -- init my-agent --path .\test-agents\my-agent -i
+cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
+cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+  import --from .\test-agents\referent --force
 ```
 
-По умолчанию `init` создаёт `./<agent-id>/` в текущей директории.
+CLI остаётся stateless worker: артефакты пишутся в home под `.kuibysheff/homes/<id>/`
+(или относительный `--home`), оркестратор решает, как их применять.
 
-## Структура агента
+## Новый шаблон
+
+```powershell
+# Создать защищённый профиль, затем скопировать файлы наружу как шаблон (опционально)
+cargo run --bin agent_Kuibysheff -- init my-agent --project-root . --force
+# или скопировать существующий каталог test-agents/<id> вручную
+```
+
+## Структура шаблона
 
 ```text
 test-agents/<agent-id>/
@@ -40,11 +45,14 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
+cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
+cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+  import --from .\test-agents\referent --force
+
 cargo run --bin agent_Kuibysheff -- run `
-  --config .\test-agents\referent\agent-config.example.yaml `
-  --settings-dir .\test-agents\referent `
-  --prompt "Собери первичную информацию по задаче PROJ-123" `
-  --home .\demo-home\referent
+  --project-root . `
+  --agent referent `
+  --prompt "Собери первичную информацию по задаче PROJ-123"
 ```
 
 Для работы с изображениями используйте vision-модель в `provider.model`
@@ -58,54 +66,5 @@ Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-ao
 
 База заданий и прогоны **не в git** — см. [local/README.md](../local/README.md).
 
-```powershell
-Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
-.\scripts\aoc-eval.ps1 -TaskId 2024-01-1
-```
-
-```bash
-cp -R ./local/aoc-bank.example ./local/aoc-bank
-./scripts/aoc-eval.sh --task-id 2024-01-1
-```
-
-Конфиг: [`referent/agent-config.aoc.example.yaml`](./referent/agent-config.aoc.example.yaml).
-
-## Агенты
-
-| ID | Назначение |
-| --- | --- |
-| [referent](./referent/) | Research из Jira/Confluence (`mcp-atlassian`) и AoC solve (`mcp-aoc-tasks` + `home.run`) |
-| [swebench-solver](./swebench-solver/) | SWE-bench Verified: фикс issue через `workspace.*` MCP в Docker `/testbed` |
-| [searxng](./searxng/) | Web search через Streamable HTTP MCP `mcp-searxng` → локальный SearXNG |
-| [1c-intake](./1c-intake/) | Этап 1 воркфлоу 1С: Jira/Confluence → brief |
-| [1c-analyst](./1c-analyst/) | Этап 2: brief + CF (+ SearXNG) → план |
-| [1c-coder](./1c-coder/) | Этап 3: план → `out/src` |
-| [1c-implementer](./1c-implementer/) | Этап 4: упаковка CFE `out/cfe` |
-
-Оркестратор 1С: [workflows/1c-dev/README.md](../workflows/1c-dev/README.md), `scripts/1c-dev-run.ps1`.
-Оркестратор SWE-bench: [workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md), `scripts/swebench-verified-run.ps1`.
-
-## SearXNG web search
-
-Нужны: SearXNG (JSON API) и `mcp-searxng` на `http://127.0.0.1:3000/mcp`.
-
-```powershell
-# SearXNG уже на 127.0.0.1:8080 (пример: контейнер 1c-odata-searxng)
-docker run -d --name mcp-searxng -p 3000:3000 `
-  --network 1c-odata-skill_default `
-  -e MCP_HTTP_PORT=3000 -e MCP_HTTP_HOST=0.0.0.0 `
-  -e SEARXNG_URL=http://searxng:8080 `
-  isokoliuk/mcp-searxng:latest
-
-New-Item -ItemType Directory -Force -Path .\demo-home\searxng | Out-Null
-cargo run --bin agent_Kuibysheff -- run `
-  --config .\test-agents\searxng\agent-config.example.yaml `
-  --settings-dir .\test-agents\searxng `
-  --prompt "Find what SearXNG is and write a short brief to out/search_brief.md" `
-  --home .\demo-home\searxng
-```
-
-
-AoC solve regression is part of `scripts/check.ps1` / `scripts/check.sh` via
-`scripts/aoc-regression.ps1` / `scripts/aoc-regression.sh`
-(see [local/README.md](../local/README.md)).
+Оркестратор: [`scripts/aoc-eval.ps1`](../scripts/aoc-eval.ps1) (импортирует шаблон в
+`local/aoc-eval-project/.kuibysheff/protected/agents/…`).

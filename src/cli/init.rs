@@ -2,17 +2,17 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-/// Arguments for scaffolding a new agent settings directory.
+/// Arguments for scaffolding a new agent profile.
 #[derive(Debug, Parser)]
 pub struct InitArgs {
-    /// Agent identifier used in the default path `./<agent-id>/`.
+    /// Agent identifier (`[a-z0-9][a-z0-9_-]*`).
     pub agent_id: String,
 
-    /// Target directory (defaults to `./<agent-id>`).
+    /// Project root that owns `.kuibysheff/` (required).
     #[arg(long, value_name = "DIR")]
-    pub path: Option<PathBuf>,
+    pub project_root: PathBuf,
 
-    /// Overwrite known template files if the target directory already exists.
+    /// Overwrite known template files if the profile already exists.
     #[arg(long)]
     pub force: bool,
 

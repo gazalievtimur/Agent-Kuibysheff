@@ -6,7 +6,7 @@ This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host 
 
 ## Features
 
-- **Sidebar** — agents under `.kuibysheff/agents`, workflow stage status, quick actions
+- **Sidebar** — agents under `.kuibysheff/protected/agents`, workflow stage status, quick actions
 - **Config editor** — provider, limits, MCP, access, logging (webview); Validate runs `agent_Kuibysheff check`
 - **Sync ACP** — writes `acp.agents` into `.vscode/settings.json`
 - **Scaffold** — wraps `scripts/1c-dev-scaffold-project.ps1`

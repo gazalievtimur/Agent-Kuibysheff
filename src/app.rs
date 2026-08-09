@@ -25,14 +25,15 @@ use crate::billing::{
 use crate::cli::{AcpArgs, Cli, Commands, RunArgs};
 use crate::commands;
 use crate::config::{
-    apply_limit_overrides, load_config, load_dotenv, validate, AppConfig, BillingSource,
+    apply_limit_overrides, load_config, load_dotenv_layered, validate, AppConfig, BillingSource,
+    ConfigSafetyValidator,
 };
 use crate::context::build_input_files_context;
 use crate::event_mcp::EventMcpDispatcher;
 use crate::logging::{init_tracing, resolve_base_dir, Loggers, SharedEventSink};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
-use crate::project_paths::resolve_agent_paths;
+use crate::project_paths::{resolve_agent_identity, resolve_config_path_for_dotenv};
 use crate::prompt::build_runtime_rules;
 use crate::provider::openai_compat::{OpenAiCompatClient, ProviderAccountingOptions};
 use crate::sandbox::SandboxRunner;
@@ -49,6 +50,8 @@ pub struct AgentPromptArgs {
     pub config: PathBuf,
     pub settings_dir: PathBuf,
     pub home: PathBuf,
+    pub project_root: Option<PathBuf>,
+    pub agent_id: String,
     pub prompt: String,
     pub run_id: Option<String>,
     pub files: Vec<PathBuf>,
@@ -61,18 +64,21 @@ pub struct AgentPromptArgs {
     pub events: AgentEventTx,
 }
 
-impl From<RunArgs> for AgentPromptArgs {
-    fn from(cli: RunArgs) -> Self {
-        let (config, settings_dir, home) = resolve_agent_paths(
-            cli.project_root.as_deref(),
-            &cli.config,
-            &cli.settings_dir,
-            &cli.home,
-        );
-        Self {
-            config,
-            settings_dir,
-            home,
+impl TryFrom<RunArgs> for AgentPromptArgs {
+    type Error = anyhow::Error;
+
+    fn try_from(cli: RunArgs) -> Result<Self> {
+        let paths = resolve_agent_identity(
+            &cli.identity.project_root,
+            &cli.identity.agent,
+            cli.home.as_deref(),
+        )?;
+        Ok(Self {
+            config: paths.config,
+            settings_dir: paths.settings_dir,
+            home: paths.home,
+            project_root: Some(paths.project_root),
+            agent_id: paths.agent_id,
             prompt: cli.prompt,
             run_id: cli.run_id,
             files: cli.files,
@@ -83,18 +89,16 @@ impl From<RunArgs> for AgentPromptArgs {
             save_chat_history: cli.save_chat_history,
             cancel: RunCancel::new(),
             events: AgentEventTx::noop(),
-        }
+        })
     }
 }
 
-/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp`.
+/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `config`.
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
 #[must_use]
 pub fn run() -> ExitCode {
-    load_dotenv();
-
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => {
@@ -102,6 +106,39 @@ pub fn run() -> ExitCode {
             return ExitCode::from(err.exit_code().clamp(0, 255) as u8);
         }
     };
+
+    let launch_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resolved_config_env = match &cli.command {
+        Commands::Run(args) => resolve_agent_identity(
+            &args.identity.project_root,
+            &args.identity.agent,
+            args.home.as_deref(),
+        )
+        .ok()
+        .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd)),
+        Commands::Acp(args) => {
+            let root = args
+                .project_root
+                .clone()
+                .unwrap_or_else(|| launch_cwd.clone());
+            resolve_agent_identity(&root, &args.agent, args.home.as_deref())
+                .ok()
+                .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
+        }
+        Commands::Check(args) => {
+            resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)
+                .ok()
+                .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
+        }
+        Commands::Config(args) => {
+            resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)
+                .ok()
+                .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
+        }
+        Commands::Init(_) => None,
+    };
+    // Precedence: process env > config-dir .env > launch CWD .env
+    load_dotenv_layered(resolved_config_env.as_deref());
 
     match cli.command {
         Commands::Run(args) => run_worker(args),
@@ -130,6 +167,13 @@ pub fn run() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Commands::Config(args) => match commands::config::run(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
@@ -145,7 +189,15 @@ fn run_worker(args: RunArgs) -> ExitCode {
         }
     };
 
-    let output = match runtime.block_on(run_agent_prompt(AgentPromptArgs::from(args))) {
+    let prompt_args = match AgentPromptArgs::try_from(args) {
+        Ok(a) => a,
+        Err(err) => {
+            eprintln!("error: {err:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let output = match runtime.block_on(run_agent_prompt(prompt_args)) {
         Ok(out) => out,
         Err(err) => RunOutput::error(format!("{err:#}")),
     };
@@ -321,6 +373,7 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
 
     apply_prompt_overrides(&mut cfg, &args);
     validate(&cfg).context("validating config")?;
+    ConfigSafetyValidator::check(&cfg).context("config safety validation")?;
     if args.prompt.trim().is_empty() {
         bail!("prompt must not be empty");
     }
@@ -362,9 +415,12 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         .await
         .with_context(|| format!("initializing home workspace `{}`", args.home.display()))?;
 
+    let config_dir = args.config.parent().map(Path::to_path_buf);
     let workspace_root = workspace_root_for_run(
         &access_policy,
         &std::env::current_dir().context("resolving current working directory")?,
+        args.project_root.as_deref(),
+        config_dir.as_deref(),
     );
     let workspace_policy = WorkspaceFsPolicy::from_access(&access_policy);
     let local_tools = LocalTools::new(&workspace_root, workspace_policy)
@@ -393,10 +449,14 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         .cloned()
         .collect();
     let mcp = Arc::new(
-        McpRegistry::connect_all(
+        McpRegistry::connect_all_isolated(
             &regular_mcp_configs,
             loggers.mcp.clone(),
             run_cancel.token().clone(),
+            crate::mcp::McpIsolationContext {
+                project_root: args.project_root.clone(),
+                agent_id: args.agent_id.clone(),
+            },
         )
         .await
         .context("connecting MCP servers")?,
@@ -413,10 +473,14 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             .iter()
             .find(|server| server.name == *server_name)
             .expect("billing MCP target validated");
-        match McpRegistry::connect_all(
+        match McpRegistry::connect_all_isolated(
             std::slice::from_ref(server_config),
             loggers.mcp.clone(),
             run_cancel.token().clone(),
+            crate::mcp::McpIsolationContext {
+                project_root: args.project_root.clone(),
+                agent_id: args.agent_id.clone(),
+            },
         )
         .await
         {

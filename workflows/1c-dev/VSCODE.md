@@ -7,18 +7,21 @@
   src/cf/
   .kuibysheff/
     product.yaml
-    agents/1c-{intake,analyst,coder,implementer}/
+    protected/agents/1c-{intake,analyst,coder,implementer}/
+    homes/
+    mcp-runtime/
     runs/vscode-active/
   .vscode/settings.json       ← acp.agents
 ```
 
-CLI и ACP делят один флаг/контекст:
+CLI и ACP адресуют агента так:
 
 ```text
---project-root <ЗУП>
+--project-root <ЗУП> --agent 1c-analyst
 ```
 
-Относительные `--config` / `--settings-dir` / `--home` резолвятся как `{project}/.kuibysheff/<path>`.  
+Профиль всегда в `.kuibysheff/protected/agents/<id>/` (агент владеет хранилищем).  
+Внешние шаблоны заносятся через `config import --from …`.  
 В ACP непустой `session/new` → `cwd` имеет приоритет над `--project-root`.
 
 ---
@@ -75,13 +78,14 @@ cd "C:\Git\Agent Kuibysheff"
 
 | Путь | Назначение |
 |------|------------|
-| `.kuibysheff/agents/1c-*` | settings-dir + `agent-config.yaml` (копия из test-agents) |
+| `.kuibysheff/protected/agents/1c-*` | protected-профили (`init` + `config import` из test-agents) |
 | `.kuibysheff/product.yaml` | пути продукта для prepare/оркестратора |
 | `.vscode/settings.json` | четыре ACP-агента с `--project-root ${workspaceFolder}` |
 | `.vscode/tasks.json` | prepare / promote / approve |
 | запись в `.gitignore` | `.kuibysheff/runs/` |
 
-Дальше **обязательно** отредактируйте в каждом `agents/*/agent-config.yaml`:
+Дальше **обязательно** отредактируйте в каждом `protected/agents/*/agent-config.yaml`
+(или через `agent_Kuibysheff config …`):
 
 - `provider.*` и `api_key_env`
 - MCP (`command`, `args`, `url`, env) — как нужно **этому** проекту
@@ -120,18 +124,16 @@ Apply/BuildCfe по-прежнему через `1c-dev-run.ps1 -ProjectRoot …
 
 ---
 
-## 4. CLI с `--project-root`
+## 4. CLI с `--project-root` + `--agent`
 
 ```powershell
 agent_Kuibysheff run `
   --project-root "C:\ПервыйБИТ\Первый.Гит\ЗУП" `
-  --config agents/1c-analyst/agent-config.yaml `
-  --settings-dir agents/1c-analyst `
-  --home runs/vscode-active/stage2/home `
+  --agent 1c-analyst `
   --prompt "…"
 ```
 
-Эквивалент абсолютных путей под `.kuibysheff/…`.
+Профиль: `.kuibysheff/protected/agents/1c-analyst/`. Home по умолчанию: `.kuibysheff/homes/1c-analyst/`.
 
 Оркестратор:
 
@@ -144,7 +146,7 @@ agent_Kuibysheff run `
   -Stage 2
 ```
 
-При наличии `.kuibysheff/agents` используются проектные профили; runs пишутся в `.kuibysheff/runs/`.
+При наличии `.kuibysheff/protected/agents` используются проектные профили; runs пишутся в `.kuibysheff/runs/` / `.kuibysheff/homes/`.
 
 ---
 

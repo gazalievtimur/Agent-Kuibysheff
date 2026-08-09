@@ -84,7 +84,8 @@ flowchart TD
 
 - `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
 - `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio.
-- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` (`RunArgs`), `acp` (`AcpArgs`: `--config`, `--settings-dir`, `--home`, optional limit overrides), `init` (`InitArgs`), and `check` (`CheckArgs`).
+- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` / `acp` (`--project-root`,
+  `--agent`, optional `--home`), `init`, `check`, and `config` (CRUD + import).
 - `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
 - `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.

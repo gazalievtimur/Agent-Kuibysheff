@@ -30,6 +30,9 @@ from swebench_adapter import (
 WORKFLOW_DIR = Path(__file__).resolve().parent
 SCHEMA_VERSION = 1
 
+DEFAULT_AGENT_ID = "swebench-solver"
+DEFAULT_HOME_REL = "homes/work"
+
 STATUS_OK = "ok"
 STATUS_EMPTY_PATCH = "empty_patch"
 STATUS_AGENT_ERROR = "agent_error"
@@ -52,6 +55,9 @@ class InstancePaths:
     run_output_path: Path
     stderr_path: Path
     provenance_path: Path
+    project_root: Path
+    agent_id: str
+    home_rel: str
     home: Path
     config_path: Path
     log_dir: Path
@@ -100,10 +106,83 @@ def yaml_provider_api_key(text: str) -> str:
 
 
 def provider_api_key_available(text: str) -> bool:
-    if yaml_provider_api_key(text):
-        return True
+    """True when the configured api_key_env is present in the environment."""
     api_key_env = yaml_scalar(text, "api_key_env", "OPENAI_API_KEY")
     return bool(os.environ.get(api_key_env, "").strip())
+
+
+def protected_profile_dir(project_root: Path, agent_id: str) -> Path:
+    return project_root / ".kuibysheff" / "protected" / "agents" / agent_id
+
+
+def resolve_home_abs(project_root: Path, home_rel: str) -> Path:
+    """Resolve `--home` relative under `{project}/.kuibysheff/`."""
+    rel = home_rel.replace("\\", "/").strip("/")
+    if not rel or ".." in Path(rel).parts:
+        raise ValueError(f"invalid relative --home: {home_rel!r}")
+    if rel.split("/")[0] == "protected":
+        raise ValueError(f"--home must not be under protected/: {home_rel!r}")
+    return (project_root / ".kuibysheff" / Path(rel)).resolve()
+
+
+def ensure_agent_profile(
+    *,
+    agent_bin: Path,
+    project_root: Path,
+    agent_id: str,
+    template_dir: Path,
+) -> Path:
+    """Create/refresh protected profile via `init` + `config import --from`."""
+    if not template_dir.is_dir():
+        raise FileNotFoundError(f"agent template dir not found: {template_dir}")
+    project_root.mkdir(parents=True, exist_ok=True)
+    profile = protected_profile_dir(project_root, agent_id)
+    config_path = profile / "agent-config.yaml"
+    skills_path = profile / "skills.dsl"
+    if config_path.is_file() and skills_path.is_file():
+        return profile
+
+    init = subprocess.run(
+        [
+            str(agent_bin),
+            "init",
+            agent_id,
+            "--project-root",
+            str(project_root),
+            "--force",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if init.returncode != 0:
+        raise RuntimeError(
+            f"agent init failed ({init.returncode}): {init.stderr or init.stdout}"
+        )
+    imp = subprocess.run(
+        [
+            str(agent_bin),
+            "config",
+            "--project-root",
+            str(project_root),
+            "--agent",
+            agent_id,
+            "import",
+            "--from",
+            str(template_dir),
+            "--force",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if imp.returncode != 0:
+        raise RuntimeError(
+            f"config import failed ({imp.returncode}): {imp.stderr or imp.stdout}"
+        )
+    return profile
 
 
 def escape_yaml_double(value: str) -> str:
@@ -134,23 +213,46 @@ def host_label() -> str:
     return f"{platform.system()}-{platform.machine()}"
 
 
-def resolve_agent_binary(repo_root: Path, override: Optional[Path] = None) -> Path:
+def resolve_agent_binary(
+    repo_root: Optional[Path] = None,
+    override: Optional[Path] = None,
+) -> Path:
+    """Resolve agent_Kuibysheff: explicit path, PATH, then optional Cargo fallback."""
     if override is not None:
         path = override.resolve()
         if not path.is_file():
             raise FileNotFoundError(f"agent binary not found: {path}")
         return path
-    release = repo_root / "target" / "release"
-    candidates = [
-        release / "agent_Kuibysheff.exe",
-        release / "agent_Kuibysheff",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.resolve()
+
+    for name in ("agent_Kuibysheff.exe", "agent_Kuibysheff"):
+        found = shutil.which(name)
+        if found:
+            return Path(found).resolve()
+
+    search_roots: list[Path] = []
+    if repo_root is not None:
+        search_roots.append(repo_root)
+    parent = WORKFLOW_DIR.parent
+    if parent.name == "workflows":
+        search_roots.append(parent.parent)
+
+    seen: set[Path] = set()
+    for root in search_roots:
+        root = root.resolve()
+        if root in seen:
+            continue
+        seen.add(root)
+        release = root / "target" / "release"
+        for candidate in (
+            release / "agent_Kuibysheff.exe",
+            release / "agent_Kuibysheff",
+        ):
+            if candidate.is_file():
+                return candidate.resolve()
+
     raise FileNotFoundError(
-        "Release binary missing under target/release "
-        "(run `cargo build --release` first, or pass --agent-bin)"
+        "agent_Kuibysheff not found on PATH or under target/release "
+        "(install the binary, run `cargo build --release`, or pass --agent-bin)"
     )
 
 
@@ -215,10 +317,18 @@ def write_text_atomic(path: Path, text: str) -> None:
             tmp.unlink(missing_ok=True)
 
 
-def instance_paths(run_dir: Path, instance_id: str) -> InstancePaths:
+def instance_paths(
+    run_dir: Path,
+    instance_id: str,
+    *,
+    agent_id: str = DEFAULT_AGENT_ID,
+    home_rel: str = DEFAULT_HOME_REL,
+) -> InstancePaths:
     instance_dir = run_dir / "instances" / instance_id
-    home = instance_dir / "home"
+    project_root = instance_dir
+    home = resolve_home_abs(project_root, home_rel)
     log_dir = home / "logs"
+    config_path = protected_profile_dir(project_root, agent_id) / "agent-config.yaml"
     return InstancePaths(
         instance_dir=instance_dir,
         status_path=instance_dir / "status.json",
@@ -226,8 +336,11 @@ def instance_paths(run_dir: Path, instance_id: str) -> InstancePaths:
         run_output_path=instance_dir / "run-output.json",
         stderr_path=instance_dir / "agent.stderr.txt",
         provenance_path=instance_dir / "provenance.json",
+        project_root=project_root,
+        agent_id=agent_id,
+        home_rel=home_rel,
         home=home,
-        config_path=home / "agent-config.yaml",
+        config_path=config_path,
         log_dir=log_dir,
     )
 
@@ -282,20 +395,16 @@ def render_run_config(
     provider_base_url = yaml_scalar(base_config_text, "base_url", "https://api.openai.com/v1")
     provider_model = yaml_scalar(base_config_text, "model", "gpt-4o")
     provider_api_key_env = yaml_scalar(base_config_text, "api_key_env", "OPENAI_API_KEY")
-    provider_api_key = yaml_provider_api_key(base_config_text)
     provider_timeout_ms = yaml_scalar(base_config_text, "timeout_ms", "120000")
     max_iterations = yaml_scalar(base_config_text, "max_iterations", "80")
     max_tokens = yaml_scalar(base_config_text, "max_tokens", "800000")
     max_duration_sec = yaml_scalar(base_config_text, "max_duration_sec", "1800")
 
-    api_key_line = ""
-    if provider_api_key:
-        api_key_line = f'  api_key: "{escape_yaml_double(provider_api_key)}"\n'
-
+    # Inline provider.api_key is rejected by ConfigSafetyValidator — api_key_env only.
     return f"""provider:
   base_url: "{escape_yaml_double(provider_base_url)}"
   model: "{escape_yaml_double(provider_model)}"
-{api_key_line}  api_key_env: "{escape_yaml_double(provider_api_key_env)}"
+  api_key_env: "{escape_yaml_double(provider_api_key_env)}"
   timeout_ms: {provider_timeout_ms}
   max_retries: 3
   retry_base_delay_ms: 500
@@ -509,23 +618,23 @@ def extract_model_patch(container: Any) -> tuple[str, str]:
 def run_agent(
     *,
     agent_bin: Path,
-    config_path: Path,
-    settings_dir: Path,
+    project_root: Path,
+    agent_id: str,
     prompt: str,
-    home: Path,
+    home_rel: str,
     run_id: str,
 ) -> tuple[int, str, str]:
     cmd = [
         str(agent_bin),
         "run",
-        "--config",
-        str(config_path),
-        "--settings-dir",
-        str(settings_dir),
+        "--project-root",
+        str(project_root),
+        "--agent",
+        agent_id,
         "--prompt",
         prompt,
         "--home",
-        str(home),
+        home_rel,
         "--run-id",
         run_id,
         "--save-chat-history",
@@ -607,9 +716,14 @@ def generate_one_instance(
     agent_bin: Path,
     model_name_or_path: str,
     resume: bool,
+    agent_id: str = DEFAULT_AGENT_ID,
+    home_rel: str = DEFAULT_HOME_REL,
 ) -> dict[str, Any]:
+    del repo_root  # reserved for future monorepo-relative resolution
     safe = project_safe(raw)
-    paths = instance_paths(run_dir, safe.instance_id)
+    paths = instance_paths(
+        run_dir, safe.instance_id, agent_id=agent_id, home_rel=home_rel
+    )
     existing = read_status(paths)
     if should_skip_instance(existing, resume=resume):
         return existing or {"status": STATUS_OK, "instance_id": safe.instance_id, "skipped": True}
@@ -629,7 +743,17 @@ def generate_one_instance(
         mcp_script = WORKFLOW_DIR / "docker_workspace_mcp.py"
         base_text = base_config.read_text(encoding="utf-8")
         if not provider_api_key_available(base_text):
-            raise RuntimeError("provider API key missing (config api_key or api_key_env)")
+            raise RuntimeError(
+                "provider API key missing: set the env named by provider.api_key_env "
+                "(inline provider.api_key is rejected)"
+            )
+
+        ensure_agent_profile(
+            agent_bin=agent_bin,
+            project_root=paths.project_root,
+            agent_id=paths.agent_id,
+            template_dir=settings_dir,
+        )
 
         config_text = render_run_config(
             base_config_text=base_text,
@@ -643,10 +767,10 @@ def generate_one_instance(
         prompt = render_agent_prompt(safe)
         rc, stdout, stderr = run_agent(
             agent_bin=agent_bin,
-            config_path=paths.config_path,
-            settings_dir=settings_dir,
+            project_root=paths.project_root,
+            agent_id=paths.agent_id,
             prompt=prompt,
-            home=paths.home,
+            home_rel=paths.home_rel,
             run_id=f"{run_id}-{safe.instance_id}",
         )
         write_text_atomic(paths.stderr_path, stderr)
@@ -724,6 +848,8 @@ def generate_batch(
     model_name_or_path: str,
     workers: int,
     resume: bool,
+    agent_id: str = DEFAULT_AGENT_ID,
+    home_rel: str = DEFAULT_HOME_REL,
 ) -> list[dict[str, Any]]:
     run_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
@@ -740,6 +866,8 @@ def generate_batch(
             agent_bin=agent_bin,
             model_name_or_path=model_name_or_path,
             resume=resume,
+            agent_id=agent_id,
+            home_rel=home_rel,
         )
 
     if workers == 1:

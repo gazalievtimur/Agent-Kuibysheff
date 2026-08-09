@@ -15,7 +15,7 @@ use crate::tool_api::{ExternalToolError, ToolError};
 
 pub use crate::tool_api::ToolExecutor;
 pub use oauth::BearerChallenge;
-pub use stdio_client::McpRegistry;
+pub use stdio_client::{McpIsolationContext, McpRegistry};
 
 /// MCP-specific error (JSON-RPC, transport, OAuth, server lifecycle).
 #[derive(Debug, Error)]
@@ -68,6 +68,10 @@ pub enum McpError {
     ActorClosed { server: String },
     #[error("MCP call cancelled on server `{server}`")]
     Cancelled { server: String },
+    #[error("MCP isolation denied on server `{server}`: {reason}")]
+    IsolationDenied { server: String, reason: String },
+    #[error("MCP sandbox unavailable for stdio server `{server}`: {reason}")]
+    SandboxUnavailable { server: String, reason: String },
 }
 
 /// Backwards-compatible alias for the MCP-specific error type.

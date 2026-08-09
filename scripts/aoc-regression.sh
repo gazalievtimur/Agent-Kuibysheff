@@ -8,6 +8,8 @@
 #   ./scripts/aoc-regression.sh
 #   ./scripts/aoc-regression.sh --config path/to/config.yaml
 #   ./scripts/aoc-regression.sh --task-id 2024-01-1
+#
+# --config is an import/render source for aoc-eval.sh (not passed to the agent binary).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,15 +77,16 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 
 CONFIG_TEXT="$(cat "$CONFIG")"
-if ! provider_api_key_available "$CONFIG_TEXT"; then
-  API_KEY_ENV="$(yaml_scalar "api_key_env" "OPENAI_API_KEY" <<<"$CONFIG_TEXT")"
+API_KEY_ENV="$(yaml_scalar "api_key_env" "OPENAI_API_KEY" <<<"$CONFIG_TEXT")"
+if [[ -z "${!API_KEY_ENV:-}" ]]; then
   cat >&2 <<EOF
-AoC regression requires a provider API key.
+AoC regression requires a provider API key via environment.
 
-Set one of:
-  - provider.api_key in $CONFIG
+Set:
   - environment variable $API_KEY_ENV
   - $API_KEY_ENV in $REPO_ROOT/.env
+
+Inline provider.api_key in config is rejected by ConfigSafetyValidator.
 EOF
   exit 1
 fi

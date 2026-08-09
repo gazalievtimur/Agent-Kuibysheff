@@ -4,19 +4,19 @@
 id: demo
 displayName: "Demo 1C product"
 issueKeyRegex: '^[A-Z][A-Z0-9]+-\d+$'
-workspaceRoot: "D:/work/my-1c-workspace"
-productRoot: "D:/work/my-1c-workspace/product"
+workspaceRoot: "REQUIRED_WORKSPACE_ROOT"
+productRoot: "REQUIRED_PRODUCT_ROOT"
 cfSrc: "src/cf"
 cfeSrc: "src/cfe"
 stagingReleaseBranch: "release/baseline"
-stagingDbPath: "D:/1C/Bases/Staging"
+stagingDbPath: "REQUIRED_STAGING_DB_PATH"
 taskDirPattern: "{workspaceRoot}/{issueKey}"
 extensionNamePattern: "Ext_{number}"
 mcp:
   codeIndexPath: "{productRoot}/src/cf"
-  sntxSemConfig: "D:/tools/1c-sntx-sem/config.yaml"
+  sntxSemConfig: "REQUIRED_SNTX_SEM_CONFIG"
   searxngUrl: "http://127.0.0.1:3000/mcp"
-  codeIndexCommand: "D:/tools/code-index/bsl-indexer.exe"
+  codeIndexCommand: "REQUIRED_BSL_INDEXER"
 apply:
   mode: cfe_task_workdir
   buildScript: "{workspaceRoot}/.workflow/skills/cfe-task-extension/scripts/cfe-task-extension.ps1"

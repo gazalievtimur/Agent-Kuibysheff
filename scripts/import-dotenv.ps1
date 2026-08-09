@@ -64,10 +64,6 @@ function Test-ProviderApiKeyAvailable {
         [string]$ConfigText
     )
 
-    if (-not [string]::IsNullOrWhiteSpace((Get-YamlProviderApiKey $ConfigText))) {
-        return $true
-    }
-
     $apiKeyEnv = "OPENAI_API_KEY"
     foreach ($pattern in @(
             '(?m)^\s*api_key_env:\s*"([^"]+)"',

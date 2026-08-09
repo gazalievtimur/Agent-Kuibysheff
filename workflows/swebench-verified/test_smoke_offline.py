@@ -105,6 +105,8 @@ def test_yaml_escape_and_config_render() -> None:
     assert "SWEBENCH_CONTAINER_ID: \"cid123\"" in text
     assert "builtins: []" in text
     assert "home.run" not in text
+    assert "\n  api_key:" not in text
+    assert "api_key_env:" in text
 
 
 def test_reducer_deterministic() -> None:

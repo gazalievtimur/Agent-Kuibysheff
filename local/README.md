@@ -96,7 +96,8 @@ The harness:
 1. Builds a fresh `target/release` agent (`aoc-regression.ps1` / `aoc-regression.sh`)
 2. Loads tasks from `local/aoc-bank`
 3. Writes a per-run config with fail-closed `access` (python alias + runtime roots)
-4. Runs `agent_Kuibysheff run` once per task with `--settings-dir test-agents/referent`
+4. Imports `test-agents/referent` into a protected profile, then runs
+   `agent_Kuibysheff run --project-root … --agent …` once per task
 5. Compares `RunOutput.result` to `expected`
 6. Writes `local/aoc-runs/<run-id>/report.json`
 

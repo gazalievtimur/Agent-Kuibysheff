@@ -72,15 +72,15 @@ if (-not (Test-ProviderApiKeyAvailable $configText)) {
     }
 
     throw @"
-AoC regression requires a provider API key.
+AoC regression requires a provider API key via environment.
 
-Set one of:
-  - provider.api_key in $Config
+Set:
   - environment variable $apiKeyEnv
   - $apiKeyEnv in $(Join-Path $RepoRoot '.env')
+
+Inline provider.api_key in config is rejected by ConfigSafetyValidator.
 "@
 }
-
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     throw "AoC regression requires Node.js on PATH (mcp-aoc-tasks.js)."
 }

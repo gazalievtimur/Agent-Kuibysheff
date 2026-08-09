@@ -36,7 +36,7 @@ logging:
 # Fail-closed: home.* + sandboxed python. Paths resolve against this file's dir.
 # Prefer the staged runtime (created by aoc-eval / aoc-regression):
 #   ../../local/aoc-sandbox-runtime/python
-# Host installs like C:/Python312 often fail AppContainer ACL inheritance.
+# Host installs like a system Python often fail AppContainer ACL inheritance.
 access:
   mode: strict
   tools:

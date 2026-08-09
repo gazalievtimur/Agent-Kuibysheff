@@ -7,7 +7,7 @@ function kuibysheffRoot(workspaceRoot) {
   return path.join(workspaceRoot, ".kuibysheff");
 }
 function agentsRoot(workspaceRoot) {
-  return path.join(kuibysheffRoot(workspaceRoot), "agents");
+  return path.join(kuibysheffRoot(workspaceRoot), "protected", "agents");
 }
 function agentDir(workspaceRoot, agentId) {
   return path.join(agentsRoot(workspaceRoot), agentId);
@@ -27,7 +27,7 @@ test("kuibysheff layout paths", () => {
   assert.equal(kuibysheffRoot(ws), path.join(ws, ".kuibysheff"));
   assert.equal(
     agentConfigPath(ws, "1c-coder"),
-    path.join(ws, ".kuibysheff", "agents", "1c-coder", "agent-config.yaml")
+    path.join(ws, ".kuibysheff", "protected", "agents", "1c-coder", "agent-config.yaml")
   );
   assert.equal(
     stageHome(ws, "3"),

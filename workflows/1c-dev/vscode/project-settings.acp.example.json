@@ -6,10 +6,8 @@
         "acp",
         "--project-root",
         "${workspaceFolder}",
-        "--config",
-        "agents/1c-intake/agent-config.yaml",
-        "--settings-dir",
-        "agents/1c-intake",
+        "--agent",
+        "1c-intake",
         "--home",
         "runs/vscode-active/stage1/home"
       ]
@@ -20,10 +18,8 @@
         "acp",
         "--project-root",
         "${workspaceFolder}",
-        "--config",
-        "agents/1c-analyst/agent-config.yaml",
-        "--settings-dir",
-        "agents/1c-analyst",
+        "--agent",
+        "1c-analyst",
         "--home",
         "runs/vscode-active/stage2/home"
       ]
@@ -34,10 +30,8 @@
         "acp",
         "--project-root",
         "${workspaceFolder}",
-        "--config",
-        "agents/1c-coder/agent-config.yaml",
-        "--settings-dir",
-        "agents/1c-coder",
+        "--agent",
+        "1c-coder",
         "--home",
         "runs/vscode-active/stage3/home"
       ]
@@ -48,10 +42,8 @@
         "acp",
         "--project-root",
         "${workspaceFolder}",
-        "--config",
-        "agents/1c-implementer/agent-config.yaml",
-        "--settings-dir",
-        "agents/1c-implementer",
+        "--agent",
+        "1c-implementer",
         "--home",
         "runs/vscode-active/stage4/home"
       ]

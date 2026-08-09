@@ -77,17 +77,16 @@ class AcpAgentSession:
         self,
         *,
         agent_bin: Path,
-        config: Path,
-        settings_dir: Path,
-        home: Path,
-        cwd: Path,
+        project_root: Path,
+        agent: str,
+        home: Optional[str] = None,
         save_chat_history: bool = True,
     ) -> None:
         self.agent_bin = agent_bin
-        self.config = config
-        self.settings_dir = settings_dir
+        self.project_root = project_root
+        self.agent = agent
+        # Relative under `{project}/.kuibysheff/` (e.g. homes/work). Never absolute.
         self.home = home
-        self.cwd = cwd
         self.save_chat_history = save_chat_history
         self._client = _CollectingClient()
         self._cm: Any = None
@@ -99,21 +98,22 @@ class AcpAgentSession:
     async def __aenter__(self) -> "AcpAgentSession":
         args = [
             "acp",
-            "--config",
-            str(self.config),
-            "--settings-dir",
-            str(self.settings_dir),
-            "--home",
-            str(self.home),
+            "--project-root",
+            str(self.project_root),
+            "--agent",
+            self.agent,
         ]
+        if self.home:
+            args.extend(["--home", self.home])
         if self.save_chat_history:
             args.append("--save-chat-history")
 
+        # Session cwd must match project_root: ACP cwd overrides CLI --project-root.
         self._cm = spawn_agent_process(
             self._client,
             str(self.agent_bin),
             *args,
-            cwd=str(self.cwd),
+            cwd=str(self.project_root),
         )
         self._conn, self._proc = await self._cm.__aenter__()
         self._stderr_task = asyncio.create_task(
@@ -121,7 +121,9 @@ class AcpAgentSession:
         )
 
         await self._conn.initialize(protocol_version=PROTOCOL_VERSION)
-        session = await self._conn.new_session(cwd=str(self.cwd), mcp_servers=[])
+        session = await self._conn.new_session(
+            cwd=str(self.project_root), mcp_servers=[]
+        )
         self._session_id = session.session_id
         logger.info("ACP session ready id=%s", self._session_id)
         return self

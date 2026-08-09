@@ -50,7 +50,7 @@ async function pickAgentId(preferred?: string): Promise<string | undefined> {
   const ids = listAgentIds(root);
   if (!ids.length) {
     vscode.window.showWarningMessage(
-      "No agents under .kuibysheff/agents. Run Kuibysheff: Scaffold project.",
+      "No agents under .kuibysheff/protected/agents. Run Kuibysheff: Scaffold project.",
     );
     return undefined;
   }
@@ -216,8 +216,7 @@ export function registerCommands(
     out.appendLine(`> check ${id}`);
     const result = await runAgentCheck({
       workspaceRoot: root,
-      configRelative: `agents/${id}/agent-config.yaml`,
-      settingsDirRelative: `agents/${id}`,
+      agentId: id,
     });
     out.appendLine(result.stdout);
     if (result.stderr) {

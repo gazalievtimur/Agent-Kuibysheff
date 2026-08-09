@@ -2,12 +2,12 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::EventStage;
 
 /// Event-MCP configuration. An empty value is a no-op.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct EventMcpConfig {
     pub events: BTreeMap<EventStage, EventPipelineConfig>,
@@ -80,7 +80,7 @@ impl EventMcpConfig {
 }
 
 /// Ordered handlers subscribed to one event.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventPipelineConfig {
     #[serde(default)]
@@ -88,7 +88,7 @@ pub struct EventPipelineConfig {
 }
 
 /// One MCP tool bound as an event handler.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventHandlerConfig {
     pub id: String,
@@ -107,7 +107,7 @@ impl EventHandlerConfig {
 }
 
 /// Technical failure policy for an individual handler.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventFailurePolicy {
     Continue,

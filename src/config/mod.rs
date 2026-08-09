@@ -1,9 +1,16 @@
+//! Runtime agent configuration (YAML/JSON wire DTOs).
+
+pub mod safety;
+
+pub use safety::*;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::access::{
@@ -28,6 +35,12 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
+    #[error("failed to write config file `{path}`: {source}")]
+    WriteFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to parse config: {0}")]
     Parse(String),
     #[error("config validation failed: {0}")]
@@ -42,7 +55,7 @@ impl From<AccessError> for ConfigError {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
     pub provider: ProviderConfig,
@@ -63,7 +76,7 @@ pub struct AppConfig {
 
 /// Monetary accounting configuration. An omitted section still emits an
 /// `unavailable` cost report rather than claiming a zero charge.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BillingConfig {
     pub provider_id: String,
@@ -94,7 +107,7 @@ impl Default for BillingConfig {
 }
 
 /// Ordered request-cost source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BillingSource {
     ProviderReported,
@@ -103,7 +116,7 @@ pub enum BillingSource {
 }
 
 /// Provider response fields that may carry a charged amount.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderReportedCostConfig {
     /// Currency/unit assigned when the provider field itself has no unit.
@@ -128,7 +141,7 @@ impl Default for ProviderReportedCostConfig {
 }
 
 /// Optional MCP cost calculator binding.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BillingMcpConfig {
     /// Qualified discovered tool name (`server.tool`).
@@ -145,7 +158,7 @@ impl BillingMcpConfig {
 }
 
 /// Missing-price behavior. The initial implementation is deliberately fail-soft.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BillingUnpricedPolicy {
     #[default]
@@ -153,7 +166,7 @@ pub enum BillingUnpricedPolicy {
 }
 
 /// Working chat-window budgets for the configured model (not run stop limits).
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderHistoryConfig {
     /// Max messages kept after the fixed prefix (system + initial user).
@@ -185,7 +198,7 @@ impl ProviderHistoryConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
@@ -264,6 +277,65 @@ impl McpServerConfig {
     }
 }
 
+impl Serialize for McpServerConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.transport {
+            McpTransport::Stdio(stdio) => {
+                #[derive(Serialize)]
+                struct Wire<'a> {
+                    name: &'a str,
+                    transport: &'a str,
+                    command: &'a str,
+                    #[serde(skip_serializing_if = "Vec::is_empty")]
+                    args: &'a Vec<String>,
+                    #[serde(skip_serializing_if = "HashMap::is_empty")]
+                    env: &'a HashMap<String, String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    cwd: &'a Option<PathBuf>,
+                    timeout_ms: u64,
+                }
+
+                Wire {
+                    name: &self.name,
+                    transport: "stdio",
+                    command: &stdio.command,
+                    args: &stdio.args,
+                    env: &stdio.env,
+                    cwd: &stdio.cwd,
+                    timeout_ms: self.timeout_ms,
+                }
+                .serialize(serializer)
+            }
+            McpTransport::Http(http) => {
+                #[derive(Serialize)]
+                struct Wire<'a> {
+                    name: &'a str,
+                    transport: &'a str,
+                    url: &'a str,
+                    #[serde(skip_serializing_if = "HashMap::is_empty")]
+                    headers: &'a HashMap<String, String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    auth: &'a Option<McpOAuthConfig>,
+                    timeout_ms: u64,
+                }
+
+                Wire {
+                    name: &self.name,
+                    transport: "http",
+                    url: &http.url,
+                    headers: &http.headers,
+                    auth: &http.auth,
+                    timeout_ms: self.timeout_ms,
+                }
+                .serialize(serializer)
+            }
+        }
+    }
+}
+
 /// Transport-specific MCP connection settings.
 #[derive(Debug, Clone)]
 pub enum McpTransport {
@@ -272,7 +344,7 @@ pub enum McpTransport {
 }
 
 /// Local MCP server launched as a subprocess (stdio transport).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpStdioConfig {
     pub command: String,
@@ -280,10 +352,15 @@ pub struct McpStdioConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Working directory for the child process. Relative `command` / `args` are
+    /// resolved against this directory (then against the config file directory
+    /// when unset). Absolute paths are left unchanged.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
 }
 
 /// Remote MCP server over Streamable HTTP (protocol 2025-11-25).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpHttpConfig {
     pub url: String,
@@ -293,7 +370,7 @@ pub struct McpHttpConfig {
 }
 
 /// OAuth 2.1 client settings for a protected Streamable HTTP MCP server.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpOAuthConfig {
     /// Static OAuth client_id. Mutually exclusive with `client_id_metadata_url`.
@@ -321,6 +398,8 @@ struct McpServerConfigRaw {
     args: Vec<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+    #[serde(default)]
+    cwd: Option<PathBuf>,
     url: Option<String>,
     #[serde(default)]
     headers: HashMap<String, String>,
@@ -361,15 +440,17 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
                         .ok_or_else(|| "mcp transport `stdio` requires `command`".to_string())?,
                     args: raw.args,
                     env: raw.env,
+                    cwd: raw.cwd,
                 })
             }
             Some("http") => {
                 if !has_url {
                     return Err("mcp transport `http` requires `url`".to_string());
                 }
-                if has_command || !raw.args.is_empty() || !raw.env.is_empty() {
+                if has_command || !raw.args.is_empty() || !raw.env.is_empty() || raw.cwd.is_some() {
                     return Err(
-                        "mcp transport `http` must not set `command`/`args`/`env`".to_string()
+                        "mcp transport `http` must not set `command`/`args`/`env`/`cwd`"
+                            .to_string(),
                     );
                 }
                 McpTransport::Http(McpHttpConfig {
@@ -385,13 +466,20 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
                     "unknown mcp transport `{other}` (expected `stdio` or `http`)"
                 ));
             }
-            None if has_url && !has_command => McpTransport::Http(McpHttpConfig {
-                url: raw
-                    .url
-                    .ok_or_else(|| "mcp http entry requires `url`".to_string())?,
-                headers: raw.headers,
-                auth: raw.auth,
-            }),
+            None if has_url && !has_command => {
+                if raw.cwd.is_some() || !raw.args.is_empty() || !raw.env.is_empty() {
+                    return Err(
+                        "mcp http entry must not set `command`/`args`/`env`/`cwd`".to_string()
+                    );
+                }
+                McpTransport::Http(McpHttpConfig {
+                    url: raw
+                        .url
+                        .ok_or_else(|| "mcp http entry requires `url`".to_string())?,
+                    headers: raw.headers,
+                    auth: raw.auth,
+                })
+            }
             None if has_command && !has_url => {
                 if raw.auth.is_some() || !raw.headers.is_empty() {
                     return Err(
@@ -405,6 +493,7 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
                         .ok_or_else(|| "mcp stdio entry requires `command`".to_string())?,
                     args: raw.args,
                     env: raw.env,
+                    cwd: raw.cwd,
                 })
             }
             None if has_url && has_command => {
@@ -442,7 +531,7 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LoggingConfig {
     #[serde(default)]
     pub enable_ai_log: bool,
@@ -468,7 +557,7 @@ fn default_audit_max_string_chars() -> usize {
 }
 
 /// Policy for scrubbing structured AI/MCP audit JSONL before it is written.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuditRedactionConfig {
     /// When `false`, payloads are written unmodified (legacy full audit).
     #[serde(default = "default_audit_redaction_enabled")]
@@ -492,7 +581,7 @@ impl Default for AuditRedactionConfig {
 }
 
 /// Destination for structured AI/MCP event logs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LogSinkConfig {
     File { path: Option<PathBuf> },
@@ -505,11 +594,35 @@ impl Default for LogSinkConfig {
     }
 }
 
-/// Loads variables from a `.env` file in the current working directory when present.
+/// Loads `.env` with deterministic precedence: process env (already set) wins,
+/// then config-directory `.env`, then launch CWD `.env`.
 ///
-/// Existing process environment variables are not overwritten. A missing `.env` file is ignored;
-/// other I/O or parse failures are logged.
+/// Existing process environment variables are never overwritten. Missing files
+/// are ignored; other I/O or parse failures are logged.
+///
+/// Callers should pass a config path already aligned with run resolution (including
+/// `--project-root` → `{project}/.kuibysheff/...` when applicable).
 pub fn load_dotenv() {
+    load_dotenv_layered(None);
+}
+
+/// Like [`load_dotenv`], but prefers `{config_path.parent()}/.env` over CWD.
+pub fn load_dotenv_layered(config_path: Option<&Path>) {
+    if let Some(path) = config_path {
+        if let Some(dir) = path.parent() {
+            let env_file = dir.join(".env");
+            match dotenvy::from_path(&env_file) {
+                Ok(_) => {}
+                Err(err) if err.not_found() => {}
+                Err(err) => {
+                    eprintln!(
+                        "warning: failed to load .env from config dir `{}`: {err}",
+                        env_file.display()
+                    );
+                }
+            }
+        }
+    }
     match dotenvy::dotenv() {
         Ok(_) => {}
         Err(err) if err.not_found() => {}
@@ -533,25 +646,170 @@ pub fn load_config(path: &Path) -> Result<(AppConfig, ResolvedAccessPolicy), Con
         source,
     })?;
 
+    let cfg = parse_config_payload(&raw, path)?;
+    validate(&cfg)?;
+    let access = resolve_access_policy(cfg.access.as_ref(), config_parent_dir(path))?;
+    Ok((cfg, access))
+}
+
+/// Deserializes config bytes without validation or access resolution.
+///
+/// Used by `config import` to treat an external path as an untrusted payload until
+/// contents are written into the protected profile and validated there.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Parse`] when the payload is not valid YAML/JSON for [`AppConfig`].
+pub fn parse_config_payload(raw: &str, path_hint: &Path) -> Result<AppConfig, ConfigError> {
+    let extension = path_hint
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "json" => serde_json::from_str::<AppConfig>(raw)
+            .map_err(|err| ConfigError::Parse(err.to_string())),
+        "yaml" | "yml" => serde_yaml::from_str::<AppConfig>(raw)
+            .map_err(|err| ConfigError::Parse(err.to_string())),
+        _ => serde_yaml::from_str::<AppConfig>(raw)
+            .or_else(|_| serde_json::from_str::<AppConfig>(raw))
+            .map_err(|err| ConfigError::Parse(err.to_string())),
+    }
+}
+
+/// Starter profile config with [`AccessPolicyConfig::minimal_profile`] grants.
+#[must_use]
+pub fn bootstrap_app_config() -> AppConfig {
+    AppConfig {
+        provider: ProviderConfig {
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            api_key: None,
+            timeout_ms: 60_000,
+            max_retries: 3,
+            retry_base_delay_ms: 500,
+            history: ProviderHistoryConfig::default(),
+        },
+        mcp: Vec::new(),
+        event_mcp: crate::event_mcp::EventMcpConfig::default(),
+        billing: BillingConfig::default(),
+        limits: LimitsConfig {
+            max_iterations: 10,
+            max_tokens: 15_000,
+            max_duration_sec: 120,
+            max_cost: None,
+        },
+        logging: LoggingConfig {
+            enable_ai_log: true,
+            enable_mcp_log: true,
+            enable_chat_history: false,
+            output_dir: None,
+            sink: LogSinkConfig::default(),
+            ..Default::default()
+        },
+        access: Some(AccessPolicyConfig::minimal_profile()),
+    }
+}
+
+/// Ensures `cfg.access` is present, filling [`AccessPolicyConfig::minimal_profile`] when omitted.
+///
+/// Returns `true` when the payload already declared `access`.
+pub fn ensure_access_present(cfg: &mut AppConfig) -> bool {
+    if cfg.access.is_some() {
+        true
+    } else {
+        cfg.access = Some(AccessPolicyConfig::minimal_profile());
+        false
+    }
+}
+
+/// Serializes and atomically writes `cfg` to `path` as YAML or JSON by extension.
+///
+/// YAML files (`.yaml` / `.yml`, or unrecognized extensions) get an optional header
+/// comment. JSON is used for `.json`. Validation and [`ConfigSafetyValidator`] run
+/// before any bytes are written.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when validation/safety fails or the file cannot be written.
+pub fn save_config(path: &Path, cfg: &AppConfig) -> Result<(), ConfigError> {
+    validate(cfg)?;
+    ConfigSafetyValidator::check(cfg)?;
+
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    let cfg = match extension.as_str() {
-        "json" => serde_json::from_str::<AppConfig>(&raw)
-            .map_err(|err| ConfigError::Parse(err.to_string()))?,
-        "yaml" | "yml" => serde_yaml::from_str::<AppConfig>(&raw)
-            .map_err(|err| ConfigError::Parse(err.to_string()))?,
-        _ => serde_yaml::from_str::<AppConfig>(&raw)
-            .or_else(|_| serde_json::from_str::<AppConfig>(&raw))
-            .map_err(|err| ConfigError::Parse(err.to_string()))?,
+    let contents = match extension.as_str() {
+        "json" => {
+            serde_json::to_string_pretty(cfg).map_err(|err| ConfigError::Parse(err.to_string()))?
+        }
+        _ => {
+            // `.yaml` / `.yml` and unrecognized extensions serialize as YAML.
+            let body =
+                serde_yaml::to_string(cfg).map_err(|err| ConfigError::Parse(err.to_string()))?;
+            format!("# Managed by agent_Kuibysheff config\n{body}")
+        }
     };
 
-    validate(&cfg)?;
-    let access = resolve_access_policy(cfg.access.as_ref(), config_parent_dir(path))?;
-    Ok((cfg, access))
+    atomic_write(path, contents.as_bytes())
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
+    let parent = config_parent_dir(path);
+    if !parent.as_os_str().is_empty() && parent != Path::new(".") {
+        fs::create_dir_all(parent).map_err(|source| ConfigError::WriteFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+    }
+
+    let file_stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config");
+    let tmp_name = format!(
+        ".{file_stem}.{}.{}.tmp",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp_path = parent.join(tmp_name);
+
+    if let Err(source) = fs::write(&tmp_path, contents) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ConfigError::WriteFile {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+
+    // Windows `rename` does not replace an existing destination.
+    if path.exists() {
+        if let Err(source) = fs::remove_file(path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(ConfigError::WriteFile {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    }
+
+    if let Err(source) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ConfigError::WriteFile {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+
+    Ok(())
 }
 
 /// Returns the directory that relative `access` host paths resolve against.
@@ -842,6 +1100,7 @@ mod tests {
                     command: "mcp-server".to_string(),
                     args: vec![],
                     env: HashMap::new(),
+                    cwd: None,
                 }),
             }],
             event_mcp: crate::event_mcp::EventMcpConfig::default(),
@@ -1407,5 +1666,24 @@ mcp:
             err.to_string().contains("command") || err.to_string().contains("url"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn save_config_round_trips_yaml() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("agent-config.yaml");
+        let cfg = sample_config();
+        save_config(&path, &cfg).expect("save");
+        let raw = fs::read_to_string(&path).expect("read");
+        assert!(raw.starts_with("# Managed by agent_Kuibysheff config\n"));
+        let (loaded, _) = load_config(&path).expect("load");
+        assert_eq!(loaded.provider.model, cfg.provider.model);
+        assert_eq!(loaded.mcp[0].name, "local");
+        match &loaded.mcp[0].transport {
+            McpTransport::Stdio(stdio) => assert_eq!(stdio.command, "mcp-server"),
+            McpTransport::Http(_) => panic!("expected stdio"),
+        }
     }
 }

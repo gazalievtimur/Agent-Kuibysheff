@@ -40,8 +40,7 @@ def yaml_provider_api_key(text: str) -> str:
 
 
 def provider_api_key_available(text: str) -> bool:
-    if yaml_provider_api_key(text):
-        return True
+    """True when the configured api_key_env is present in the environment."""
     api_key_env = yaml_scalar(text, "api_key_env", "OPENAI_API_KEY")
     return bool(os.environ.get(api_key_env, "").strip())
 

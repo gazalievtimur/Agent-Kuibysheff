@@ -5,6 +5,10 @@
 # Task bank and run artifacts stay outside git (local/aoc-bank, local/aoc-runs).
 # This script is the eval harness — it is not cargo test / CI.
 #
+# Identity: each task uses project_root=local/aoc-runs/<run>/<task> with
+# agent_Kuibysheff run --project-root … --agent <id> --home homes/work.
+# --config / --settings-dir are import/render sources only.
+#
 # Usage:
 #   ./scripts/aoc-eval.sh
 #   ./scripts/aoc-eval.sh --task-id 2024-01-1
@@ -19,6 +23,8 @@ TASK_IDS=()
 BANK_DIR=""
 CONFIG=""
 SETTINGS_DIR=""
+AGENT_ID="referent"
+HOME_REL="homes/work"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,12 +44,20 @@ while [[ $# -gt 0 ]]; do
       SETTINGS_DIR="${2:-}"
       shift 2
       ;;
+    --agent)
+      AGENT_ID="${2:-}"
+      shift 2
+      ;;
+    --home)
+      HOME_REL="${2:-}"
+      shift 2
+      ;;
     --repo-root)
       REPO_ROOT="$(cd "${2:-}" && pwd)"
       shift 2
       ;;
     -h|--help)
-      sed -n '2,14p' "$0"
+      sed -n '2,18p' "$0"
       exit 0
       ;;
     *)
@@ -119,11 +133,15 @@ BASE_CONFIG_TEXT="$(cat "$CONFIG")"
 PROVIDER_BASE_URL="$(yaml_scalar "base_url" "https://polza.ai/api/v1" <<<"$BASE_CONFIG_TEXT")"
 PROVIDER_MODEL="$(yaml_scalar "model" "deepseek/deepseek-v4-flash" <<<"$BASE_CONFIG_TEXT")"
 PROVIDER_API_KEY_ENV="$(yaml_scalar "api_key_env" "POLZA_API_KEY" <<<"$BASE_CONFIG_TEXT")"
-PROVIDER_API_KEY="$(yaml_provider_api_key <<<"$BASE_CONFIG_TEXT")"
 PROVIDER_TIMEOUT_MS="$(yaml_scalar "timeout_ms" "180000" <<<"$BASE_CONFIG_TEXT")"
 MAX_ITERATIONS="$(yaml_scalar "max_iterations" "40" <<<"$BASE_CONFIG_TEXT")"
 MAX_TOKENS="$(yaml_scalar "max_tokens" "500000" <<<"$BASE_CONFIG_TEXT")"
 MAX_DURATION_SEC="$(yaml_scalar "max_duration_sec" "900" <<<"$BASE_CONFIG_TEXT")"
+
+if [[ -z "${!PROVIDER_API_KEY_ENV:-}" ]]; then
+  echo "provider API key missing: set env $PROVIDER_API_KEY_ENV (inline provider.api_key is rejected)" >&2
+  exit 1
+fi
 
 # On Linux, use the host interpreter directly (namespace mounts handle roots).
 PYTHON_EXE="$(resolve_python)"
@@ -173,7 +191,7 @@ FAILED=0
 REPORT_TASKS_JSON='[]'
 
 echo "AoC eval run=$RUN_ID bank=$BANK_DIR tasks=${#TASK_LINES[@]}"
-echo "config=$CONFIG settings=$SETTINGS_DIR model=$PROVIDER_MODEL"
+echo "config=$CONFIG settings=$SETTINGS_DIR agent=$AGENT_ID home=$HOME_REL model=$PROVIDER_MODEL"
 
 AGENT_BIN="$REPO_ROOT/target/release/agent_Kuibysheff"
 if [[ ! -x "$AGENT_BIN" ]]; then
@@ -185,27 +203,40 @@ escape_yaml_dq() {
   printf '%s' "$1" | sed 's/"/\\"/g'
 }
 
+ensure_profile() {
+  local project_root="$1"
+  local agent_id="$2"
+  local template_dir="$3"
+  local profile_dir="$project_root/.kuibysheff/protected/agents/$agent_id"
+  if [[ -f "$profile_dir/agent-config.yaml" && -f "$profile_dir/skills.dsl" ]]; then
+    return 0
+  fi
+  mkdir -p "$project_root"
+  "$AGENT_BIN" init "$agent_id" --project-root "$project_root" --force >/dev/null
+  "$AGENT_BIN" config --project-root "$project_root" --agent "$agent_id" \
+    import --from "$template_dir" --force
+}
+
 for meta in "${TASK_LINES[@]}"; do
   IFS=$'\t' read -r TASK_ID EXPECTED TASK_PATH <<<"$meta"
-  HOME_DIR="$RUNS_ROOT/$TASK_ID"
+  PROJECT_ROOT="$RUNS_ROOT/$TASK_ID"
+  HOME_DIR="$PROJECT_ROOT/.kuibysheff/$HOME_REL"
   LOG_DIR="$HOME_DIR/logs"
   mkdir -p "$HOME_DIR/in" "$HOME_DIR/out" "$LOG_DIR"
 
   export AOC_HOME_DIR="$HOME_DIR"
   export AOC_BANK_DIR="$BANK_DIR"
 
-  RUN_CONFIG_PATH="$HOME_DIR/agent-config.yaml"
-  PROVIDER_API_KEY_LINE=""
-  if [[ -n "$PROVIDER_API_KEY" ]]; then
-    ESCAPED_KEY="$(escape_yaml_dq "$PROVIDER_API_KEY")"
-    PROVIDER_API_KEY_LINE="  api_key: \"$ESCAPED_KEY\""$'\n'
-  fi
+  ensure_profile "$PROJECT_ROOT" "$AGENT_ID" "$SETTINGS_DIR"
+
+  RUN_CONFIG_PATH="$PROJECT_ROOT/.kuibysheff/protected/agents/$AGENT_ID/agent-config.yaml"
+  mkdir -p "$(dirname "$RUN_CONFIG_PATH")"
 
   cat >"$RUN_CONFIG_PATH" <<EOF
 provider:
   base_url: "$PROVIDER_BASE_URL"
   model: "$PROVIDER_MODEL"
-${PROVIDER_API_KEY_LINE}  api_key_env: "$PROVIDER_API_KEY_ENV"
+  api_key_env: "$PROVIDER_API_KEY_ENV"
   timeout_ms: $PROVIDER_TIMEOUT_MS
   max_retries: 3
   retry_base_delay_ms: 500
@@ -214,7 +245,7 @@ mcp:
   - name: "aoc"
     command: "node"
     args:
-      - "./mcp-aoc-tasks.js"
+      - "$REPO_ROOT/mcp-aoc-tasks.js"
       - "--bank-dir=$BANK_DIR"
       - "--home-dir=$HOME_DIR"
     env:
@@ -283,10 +314,10 @@ EOF
   set +e
   "$AGENT_BIN" \
     run \
-    --config "$RUN_CONFIG_PATH" \
-    --settings-dir "$SETTINGS_DIR" \
+    --project-root "$PROJECT_ROOT" \
+    --agent "$AGENT_ID" \
+    --home "$HOME_REL" \
     --prompt "$PROMPT" \
-    --home "$HOME_DIR" \
     --save-chat-history \
     >"$STDOUT_PATH" 2>"$STDERR_PATH"
   EXIT_CODE=$?

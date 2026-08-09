@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod paths;
+pub mod protected;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -23,6 +24,10 @@ pub use config::{
 };
 pub use paths::{
     workspace_root_for_run, HomeFsPolicy, InputFilesPolicy, PathGrantScope, WorkspaceFsPolicy,
+};
+pub use protected::{
+    apply_protected_dir_acl, ensure_protected_profile_dirs, is_denied_protected_path,
+    validate_workspace_excludes_protected, PROTECTED_DENY_REASON,
 };
 
 /// Errors while validating or resolving an access policy section.
@@ -723,7 +728,23 @@ fn resolve_workspace(
             root.as_path().display()
         )));
     }
+    if crate::access::is_denied_protected_path(None, root.as_path()) {
+        return Err(AccessError::Validation(
+            "`access.filesystem.workspace.root` must not be inside `.kuibysheff/protected/`"
+                .to_string(),
+        ));
+    }
     let read = resolve_relative_grants(&workspace.read, "filesystem.workspace.read")?;
+    if let Err(reason) = crate::access::validate_workspace_excludes_protected(
+        Path::new("."),
+        root.as_path(),
+        &workspace.read,
+    ) {
+        // Lexical grant checks that do not need a real project root.
+        if reason.contains("must not grant protected") {
+            return Err(AccessError::Validation(reason));
+        }
+    }
     Ok(Some(ResolvedWorkspacePolicy { root, read }))
 }
 

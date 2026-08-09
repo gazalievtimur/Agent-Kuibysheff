@@ -4,7 +4,7 @@
 
 **VS Code (ACP):** открыть папку продукта 1С, scaffold `.kuibysheff/` —
 [VSCODE.md](VSCODE.md)
-(`scripts/1c-dev-scaffold-project.ps1`, `1c-dev-acp-prepare.ps1`).
+(`.\scaffold-project.ps1`, `.\acp-prepare.ps1` или monorepo `scripts/1c-dev-*`).
 
 Four-stage external orchestrator around the stateless `agent_Kuibysheff` worker:
 
@@ -15,23 +15,38 @@ Four-stage external orchestrator around the stateless `agent_Kuibysheff` worker:
 
 Human gate between plan and coder: `-ApprovePlan` or `artifacts/plan/APPROVED`.
 
+## Copy unit
+
+This folder is the portable package. Defaults resolve from `-WorkflowRoot` (this
+directory). External dependencies: `agent_Kuibysheff` on PATH or `-AgentBin`,
+API/MCP tooling, and a product YAML (local `products/*.yaml` or project
+`.kuibysheff/product.yaml`).
+
+```powershell
+# From this folder (detached or monorepo):
+.\run.ps1 -Product demo -IssueKey PROJ-123 -Stage 1 -AgentBin C:\path\agent_Kuibysheff.exe
+
+# Monorepo UX (thin forward):
+.\scripts\1c-dev-run.ps1 -Product demo -IssueKey PROJ-123 -Stage 1
+```
+
 ## Quick start
 
 ```powershell
 # Preferred: product folder with .kuibysheff/ (after scaffold-project)
-.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -Stage 1
+.\run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -Stage 1
 
-# Legacy: products/<id>.yaml in this repo + test-agents profiles
-.\scripts\1c-dev-run.ps1 -Product demo -IssueKey PROJ-123 -Stage 1
+# Legacy: products/<id>.yaml + bundled agents/
+.\run.ps1 -Product demo -IssueKey PROJ-123 -Stage 1
 
 # Skip intake with an operator-provided task file:
-.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -TaskFile .\tz.md -Stage 2
+.\run.ps1 -ProjectRoot C:\path\to\ZUP -TaskFile .\tz.md -Stage 2
 
 # After reviewing artifacts/plan, continue:
-.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -RunId <id> -FromStage 3 -ApprovePlan
+.\run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -RunId <id> -FromStage 3 -ApprovePlan
 
 # Full conveyor after approval; copy/build CFE into the product task dir:
-.\scripts\1c-dev-run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -ApprovePlan -ApplyOut -BuildCfe
+.\run.ps1 -ProjectRoot C:\path\to\ZUP -IssueKey PROJ-123 -ApprovePlan -ApplyOut -BuildCfe
 ```
 
 CLI notes: `-Stage` / `-TaskFile` / `-Force` / `-ApplyOut` are aliases for `-WorkflowStage` / `-TaskFilePath` / `-ForceRerun` / `-DoApplyOut`.
@@ -41,16 +56,19 @@ Bash/WSL: `./scripts/1c-dev-run.sh --product demo --issue-key PROJ-123 --stage 1
 ## Layout
 
 ```text
-workflows/1c-dev/
-  schema/              artifact contracts per stage
-  products/            *.yaml.example (copy to *.yaml locally)
-  prompts/             stage prompt templates
-  adapters/default/    prepare-home, validate, apply-out
-  adapters/<product>/  optional product-specific overrides
-  runs/                gitignored run homes + report.json
+workflows/1c-dev/                 copy unit
+  run.ps1 / acp-prepare.ps1 / scaffold-project.ps1
+  1c-dev-run.ps1                 orchestrator
+  1c-dev-acp-prepare.ps1
+  1c-dev-scaffold-project.ps1
+  agents/1c-*                    bundled stage profiles
+  schema/                        artifact contracts per stage
+  products/                      *.yaml.example (copy to *.yaml locally)
+  prompts/                       stage prompt templates
+  adapters/default/              prepare-home, validate, apply-out
+  adapters/<product>/            optional product-specific overrides
+  runs/                          gitignored run homes + report.json
 ```
-
-Agent settings live under `test-agents/1c-{intake,analyst,coder,implementer}/`.
 
 ## Product adapter
 

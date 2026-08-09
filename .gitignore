@@ -4,17 +4,30 @@
 # Runtime logs and demo output
 /logs/
 /demo-home/out/
+/demo-home/searxng/out/
+/run/out/
+
+# Python bytecode
+**/__pycache__/
+*.py[cod]
 
 # Local secrets and overrides
 .env
 .env.*
 !.env.example
 agent-config.local.yaml
+# Provider-bound local AoC configs (keep *.aoc.example.yaml tracked)
+**/agent-config.aoc.yaml
+
+# IDE local MCP (keep mcp.json.example tracked)
+.cursor/mcp.json
 
 # AoC eval data and run artifacts (not committed)
 /local/aoc-bank/
 /local/aoc-runs/
 /local/aoc-sandbox-runtime/
+/local/aoc-live-project/
+/workflows/aoc-live/project/
 
 # 1C workflow run homes (not committed)
 /workflows/1c-dev/runs/*

@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -17,6 +19,8 @@ use crate::config::{McpServerConfig, McpStdioConfig, McpTransport};
 use crate::logging::SharedEventSink;
 use crate::mcp::http_client::McpHttpClient;
 use crate::mcp::Error;
+use crate::project_paths::{is_protected_path, mcp_runtime_dir};
+use crate::sandbox::SandboxRunner;
 use crate::tool_api::{ToolError, ToolExecutor};
 
 /// Maximum NDJSON frame size (JSON payload + trailing newline), matching SSE buffer default.
@@ -24,6 +28,13 @@ const MAX_STDIO_FRAME_BYTES: usize = 1024 * 1024;
 
 /// Extra time allowed for the actor to finish after the child grace period.
 const ACTOR_SHUTDOWN_SLACK: Duration = Duration::from_secs(2);
+
+/// Isolation inputs for MCP stdio children (protected-store boundary).
+#[derive(Debug, Clone, Default)]
+pub struct McpIsolationContext {
+    pub project_root: Option<PathBuf>,
+    pub agent_id: String,
+}
 
 /// Connected MCP servers and their discovered tools.
 ///
@@ -91,6 +102,9 @@ struct McpStdioClient {
 impl McpRegistry {
     /// Connects to all configured MCP servers and discovers their tools.
     ///
+    /// Relative stdio `command` / `args` resolve against each server's optional
+    /// `cwd`, otherwise `config_dir`, otherwise the process CWD.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::mcp::Error`] if a server fails to start, initialize, or list tools.
@@ -99,12 +113,61 @@ impl McpRegistry {
         logger: Option<SharedEventSink>,
         cancel: CancellationToken,
     ) -> Result<Self, Error> {
+        Self::connect_all_isolated(configs, logger, cancel, McpIsolationContext::default()).await
+    }
+
+    /// Like [`Self::connect_all`], with an explicit config-file directory for
+    /// resolving relative stdio MCP paths (legacy tests).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::mcp::Error`] if a server fails to start, initialize, or list tools.
+    pub async fn connect_all_with_config_dir(
+        configs: &[McpServerConfig],
+        logger: Option<SharedEventSink>,
+        cancel: CancellationToken,
+        config_dir: Option<&Path>,
+    ) -> Result<Self, Error> {
+        let mut isolation = McpIsolationContext::default();
+        if let Some(dir) = config_dir {
+            isolation.project_root = dir.parent().map(Path::to_path_buf);
+        }
+        Self::connect_all_isolated(configs, logger, cancel, isolation).await
+    }
+
+    /// Connect MCP servers with protected-store isolation for stdio children.
+    ///
+    /// Stdio MCP requires a working OS sandbox (`SandboxRunner::probe`) unless
+    /// `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` is set (dev/emergency only). Child cwd is
+    /// `mcp-runtime/{agent}/{server}/` under the project `.kuibysheff` tree; env is cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::mcp::Error`] if a server fails isolation, start, initialize, or list tools.
+    pub async fn connect_all_isolated(
+        configs: &[McpServerConfig],
+        logger: Option<SharedEventSink>,
+        cancel: CancellationToken,
+        isolation: McpIsolationContext,
+    ) -> Result<Self, Error> {
+        let needs_stdio = configs
+            .iter()
+            .any(|c| matches!(c.transport, McpTransport::Stdio(_)));
+        if needs_stdio {
+            ensure_stdio_sandbox_available(&isolation)?;
+        }
+
         let mut servers = HashMap::with_capacity(configs.len());
 
         for cfg in configs {
             let mut client = match &cfg.transport {
                 McpTransport::Stdio(stdio) => {
-                    let mut client = McpStdioClient::connect(&cfg.name, stdio, cfg.timeout_ms)?;
+                    let mut client = McpStdioClient::connect_isolated(
+                        &cfg.name,
+                        stdio,
+                        cfg.timeout_ms,
+                        &isolation,
+                    )?;
                     client.initialize().await?;
                     LiveClient::Stdio(Box::new(client))
                 }
@@ -449,16 +512,224 @@ impl ToolExecutor for McpRegistry {
     }
 }
 
+/// Fail closed unless an OS sandbox is available for stdio MCP children.
+fn ensure_stdio_sandbox_available(isolation: &McpIsolationContext) -> Result<(), Error> {
+    // Legacy/test connects without a project root skip the OS sandbox gate.
+    if isolation.project_root.is_none() {
+        return Ok(());
+    }
+    if std::env::var_os("KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP").is_some() {
+        warn!(
+            "KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP is set; stdio MCP runs without OS sandbox (dev only)"
+        );
+        return Ok(());
+    }
+    let runner = SandboxRunner::platform_default();
+    let label = if isolation.agent_id.is_empty() {
+        "stdio".to_string()
+    } else {
+        isolation.agent_id.clone()
+    };
+    runner.probe().map_err(|err| Error::SandboxUnavailable {
+        server: label,
+        reason: err.to_string(),
+    })?;
+    Ok(())
+}
+
+fn resolve_isolated_cwd(
+    server_name: &str,
+    cfg: &McpStdioConfig,
+    isolation: &McpIsolationContext,
+) -> Result<PathBuf, Error> {
+    let Some(project_root) = isolation.project_root.as_deref() else {
+        if let Some(cwd) = &cfg.cwd {
+            return Ok(cwd.clone());
+        }
+        return Ok(std::env::temp_dir()
+            .join("kuibysheff-mcp")
+            .join(server_name));
+    };
+    if isolation.agent_id.is_empty() {
+        return Err(Error::IsolationDenied {
+            server: server_name.to_string(),
+            reason: "agent id required for MCP runtime cwd".to_string(),
+        });
+    }
+    let runtime =
+        mcp_runtime_dir(project_root, &isolation.agent_id, server_name).map_err(|err| {
+            Error::IsolationDenied {
+                server: server_name.to_string(),
+                reason: err.to_string(),
+            }
+        })?;
+    if let Some(configured) = &cfg.cwd {
+        let resolved = if configured.is_absolute() {
+            configured.clone()
+        } else {
+            runtime.join(configured)
+        };
+        if is_protected_path(project_root, &resolved) {
+            return Err(Error::IsolationDenied {
+                server: server_name.to_string(),
+                reason: "mcp.cwd must not point into the protected agent store".to_string(),
+            });
+        }
+        if !crate::project_paths::path_is_within(&runtime, &resolved) {
+            return Err(Error::IsolationDenied {
+                server: server_name.to_string(),
+                reason: "mcp.cwd must resolve under mcp-runtime for this agent".to_string(),
+            });
+        }
+        return Ok(resolved);
+    }
+    Ok(runtime)
+}
+
+fn reject_protected_paths(
+    server_name: &str,
+    cfg: &McpStdioConfig,
+    child_cwd: &Path,
+    isolation: &McpIsolationContext,
+) -> Result<(), Error> {
+    let Some(root) = isolation.project_root.as_deref() else {
+        return Ok(());
+    };
+    if is_protected_path(root, child_cwd) {
+        return Err(Error::IsolationDenied {
+            server: server_name.to_string(),
+            reason: "MCP cwd is inside the protected agent store".to_string(),
+        });
+    }
+    let cmd_path = Path::new(&cfg.command);
+    if cmd_path.is_absolute() && is_protected_path(root, cmd_path) {
+        return Err(Error::IsolationDenied {
+            server: server_name.to_string(),
+            reason: "MCP command path is inside the protected agent store".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Prefer configured `cwd` (joined to `config_dir` when relative), otherwise
+/// `config_dir` itself.
+#[must_use]
+#[allow(dead_code)] // retained for unit tests of relative cwd resolution
+fn resolve_child_cwd(cfg: &McpStdioConfig, config_dir: Option<&Path>) -> Option<PathBuf> {
+    cfg.cwd
+        .as_ref()
+        .map(|p| {
+            if p.is_absolute() {
+                p.clone()
+            } else if let Some(dir) = config_dir {
+                dir.join(p)
+            } else {
+                p.clone()
+            }
+        })
+        .or_else(|| config_dir.map(Path::to_path_buf))
+}
+
+fn resolve_against_base(raw: &str, base: Option<&Path>) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(dir) = base {
+        return dir.join(path);
+    }
+    path.to_path_buf()
+}
+
+/// Whether `command` should be path-resolved (not a bare PATH lookup name).
+///
+/// Bare names like `node` keep a single component and are not absolute.
+#[must_use]
+fn stdio_command_is_path_like(command: &str) -> bool {
+    let path = Path::new(command);
+    path.is_absolute() || path.components().count() > 1
+}
+
+/// Whether an arg should be path-resolved against the child cwd.
+///
+/// Path-like iff absolute **or** contains `/` or `\`; bare tokens (flags, ids)
+/// are left unchanged.
+#[must_use]
+fn stdio_arg_is_path_like(arg: &str) -> bool {
+    let path = Path::new(arg);
+    path.is_absolute() || arg.contains('/') || arg.contains('\\')
+}
+
+/// Resolve stdio `command` to an [`OsString`] (no lossy UTF-8 conversion).
+#[must_use]
+fn resolve_stdio_command(command: &str, child_cwd: Option<&Path>) -> OsString {
+    if stdio_command_is_path_like(command) {
+        resolve_against_base(command, child_cwd).into_os_string()
+    } else {
+        // Bare executable name (e.g. "node", "python") — keep for PATH lookup.
+        OsString::from(command)
+    }
+}
+
+/// Resolve one stdio arg to an [`OsString`] (no lossy UTF-8 conversion).
+#[must_use]
+fn resolve_stdio_arg(arg: &str, child_cwd: Option<&Path>) -> OsString {
+    if stdio_arg_is_path_like(arg) {
+        resolve_against_base(arg, child_cwd).into_os_string()
+    } else {
+        OsString::from(arg)
+    }
+}
+
 impl McpStdioClient {
-    fn connect(server_name: &str, cfg: &McpStdioConfig, timeout_ms: u64) -> Result<Self, Error> {
-        let mut cmd = Command::new(&cfg.command);
-        cmd.args(&cfg.args);
+    fn connect_isolated(
+        server_name: &str,
+        cfg: &McpStdioConfig,
+        timeout_ms: u64,
+        isolation: &McpIsolationContext,
+    ) -> Result<Self, Error> {
+        let child_cwd = resolve_isolated_cwd(server_name, cfg, isolation)?;
+        reject_protected_paths(server_name, cfg, &child_cwd, isolation)?;
+
+        let command = resolve_stdio_command(&cfg.command, Some(child_cwd.as_path()));
+        let args: Vec<OsString> = cfg
+            .args
+            .iter()
+            .map(|arg| resolve_stdio_arg(arg, Some(child_cwd.as_path())))
+            .collect();
+
+        std::fs::create_dir_all(&child_cwd).map_err(|source| Error::Spawn {
+            server: server_name.to_string(),
+            source,
+        })?;
+
+        let mut cmd = Command::new(&command);
+        cmd.args(&args);
+        cmd.current_dir(&child_cwd);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        // Safety net when Drop runs without an awaited shutdown (see Drop impl).
         cmd.kill_on_drop(true);
+        cmd.env_clear();
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", path);
+        }
+        if let Ok(system_root) = std::env::var("SystemRoot") {
+            cmd.env("SystemRoot", system_root);
+        }
+        if let Ok(windir) = std::env::var("WINDIR") {
+            cmd.env("WINDIR", windir);
+        }
+        cmd.env("HOME", &child_cwd);
+        cmd.env("TMP", &child_cwd);
+        cmd.env("TEMP", &child_cwd);
         for (k, v) in &cfg.env {
+            if crate::access::is_forbidden_inherit_env_key(k) {
+                return Err(Error::IsolationDenied {
+                    server: server_name.to_string(),
+                    reason: format!("forbidden MCP env key `{k}`"),
+                });
+            }
             cmd.env(k, v);
         }
 
@@ -488,6 +759,20 @@ impl McpStdioClient {
             stdout: Some(BufReader::new(stdout)),
             next_id: AtomicU64::new(1),
         })
+    }
+
+    #[allow(dead_code)] // thin wrapper used by older unit tests
+    fn connect(
+        server_name: &str,
+        cfg: &McpStdioConfig,
+        timeout_ms: u64,
+        config_dir: Option<&Path>,
+    ) -> Result<Self, Error> {
+        let mut isolation = McpIsolationContext::default();
+        if let Some(dir) = config_dir {
+            isolation.project_root = dir.parent().map(|p| p.to_path_buf());
+        }
+        Self::connect_isolated(server_name, cfg, timeout_ms, &isolation)
     }
 
     /// Close stdin, wait for exit (with kill fallback), and log the status.
@@ -789,6 +1074,88 @@ where
 mod tests {
     use super::*;
     use tokio::io::BufReader;
+
+    #[test]
+    fn resolve_child_cwd_joins_relative_to_config_dir() {
+        let cfg = McpStdioConfig {
+            command: "node".into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: Some(PathBuf::from("servers/demo")),
+        };
+        let config_dir = Path::new("configs");
+        assert_eq!(
+            resolve_child_cwd(&cfg, Some(config_dir)),
+            Some(PathBuf::from("configs").join("servers/demo"))
+        );
+    }
+
+    #[test]
+    fn resolve_child_cwd_keeps_absolute() {
+        #[cfg(windows)]
+        let abs = PathBuf::from(r"C:\mcp\cwd");
+        #[cfg(not(windows))]
+        let abs = PathBuf::from("/mcp/cwd");
+        let cfg = McpStdioConfig {
+            command: "node".into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: Some(abs.clone()),
+        };
+        assert_eq!(
+            resolve_child_cwd(&cfg, Some(Path::new("configs"))),
+            Some(abs)
+        );
+    }
+
+    #[test]
+    fn resolve_child_cwd_falls_back_to_config_dir() {
+        let cfg = McpStdioConfig {
+            command: "node".into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: None,
+        };
+        assert_eq!(
+            resolve_child_cwd(&cfg, Some(Path::new("configs"))),
+            Some(PathBuf::from("configs"))
+        );
+        assert_eq!(resolve_child_cwd(&cfg, None), None);
+    }
+
+    #[test]
+    fn resolve_stdio_command_keeps_bare_name() {
+        assert_eq!(
+            resolve_stdio_command("node", Some(Path::new("base"))),
+            OsString::from("node")
+        );
+    }
+
+    #[test]
+    fn resolve_stdio_command_joins_path_like() {
+        let base = Path::new("base");
+        assert_eq!(
+            resolve_stdio_command("./bin/server", Some(base)),
+            base.join("./bin/server").into_os_string()
+        );
+    }
+
+    #[test]
+    fn resolve_stdio_arg_rewrites_path_like_only() {
+        let base = Path::new("base");
+        assert_eq!(
+            resolve_stdio_arg("./scripts/x.js", Some(base)),
+            base.join("./scripts/x.js").into_os_string()
+        );
+        assert_eq!(
+            resolve_stdio_arg("--verbose", Some(base)),
+            OsString::from("--verbose")
+        );
+        assert_eq!(
+            resolve_stdio_arg("event", Some(base)),
+            OsString::from("event")
+        );
+    }
 
     #[tokio::test]
     async fn call_tool_ok_when_audit_sink_fails() {

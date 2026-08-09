@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "code-index": {
+      "type": "stdio",
+      "command": "REQUIRED_BSL_INDEXER",
+      "args": ["serve", "--path", "REQUIRED_CF_ROOT"]
+    }
+  }
+}
