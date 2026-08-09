@@ -1,0 +1,52 @@
+# Runtime config for security-probe (sandbox-escape LLM regression).
+# Import/render source only — security_eval.py rewrites a fail-closed per-run config.
+#
+# Requires:
+#   - Provider API key via api_key_env (no inline api_key)
+#   - Working OS sandbox (Linux namespaces / Windows AppContainer)
+#   - Python on PATH for home.run
+
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 120000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp: []
+
+limits:
+  max_iterations: 24
+  max_tokens: 250000
+  max_duration_sec: 600
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: true
+  output_dir: "./logs"
+
+access:
+  mode: strict
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+  filesystem:
+    home:
+      read: [".", "in", "out"]
+      write: [".", "out"]
+  run:
+    programs:
+      - name: python
+        executable: "/usr/bin/python3"
+        runtime_read_roots: ["/usr"]
+        inherit_env: []
+        allow_children: false
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000
