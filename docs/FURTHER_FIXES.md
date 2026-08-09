@@ -218,9 +218,9 @@ Current regex-based parser is brittle (nested braces, escaped quotes).
 
 **Plan:**
 
-1. Audit JSONL payloads — redact `api_key`, env values, file contents over N chars in logs.
-2. Add `#[tracing::instrument(skip(api_key))]` on provider client.
-3. Never log full model responses when they contain user PII.
+1. [x] Audit JSONL payloads — redact sensitive keys and truncate long strings via `logging.audit_redaction` on EventSink (chat history / ACP / semantic PII still open).
+2. [x] Provider `#[instrument(skip(self, …))]` so `api_key` on the client is not recorded in span fields.
+3. Never log full model responses when they contain user PII (chat history / deeper PII heuristics — open).
 
 ---
 

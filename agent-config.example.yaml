@@ -78,6 +78,11 @@ logging:
   enable_ai_log: true
   enable_mcp_log: true
   enable_chat_history: false
+  # Scrub AI/MCP JSONL audit payloads (not chat_history / agent.trace.log).
+  # audit_redaction:
+  #   enabled: true          # default; set false for legacy full payloads
+  #   max_string_chars: 4096
+  #   extra_sensitive_keys: []
   # Optional legacy override. When omitted, logs go to ~/.agent-kuibysheff/logs.
   # output_dir: "./logs"
   sink:

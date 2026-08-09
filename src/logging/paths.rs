@@ -104,6 +104,7 @@ mod tests {
             sink: LogSinkConfig::File {
                 path: Some(sink.path().to_path_buf()),
             },
+            ..Default::default()
         };
 
         assert_eq!(
@@ -124,6 +125,7 @@ mod tests {
             sink: LogSinkConfig::File {
                 path: Some(sink_path.clone()),
             },
+            ..Default::default()
         };
 
         assert_eq!(resolve_base_dir(&config).expect("resolve"), sink_path);

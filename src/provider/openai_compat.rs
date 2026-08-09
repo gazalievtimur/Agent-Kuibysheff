@@ -277,6 +277,7 @@ struct AttemptDraft {
 
 #[async_trait]
 impl ModelClient for OpenAiCompatClient {
+    // `self` is skipped so `api_key` on the client never appears in span fields.
     #[instrument(skip(self, messages), fields(model = %self.cfg.model, message_count = messages.len()))]
     async fn complete(&self, messages: &[ChatMessage]) -> Result<ModelResponse, Error> {
         self.complete_accounted(messages)
@@ -285,6 +286,7 @@ impl ModelClient for OpenAiCompatClient {
             .map_err(|failure| failure.error)
     }
 
+    // `self` is skipped so `api_key` on the client never appears in span fields.
     #[instrument(skip(self, messages), fields(model = %self.cfg.model, message_count = messages.len()))]
     async fn complete_accounted(
         &self,
