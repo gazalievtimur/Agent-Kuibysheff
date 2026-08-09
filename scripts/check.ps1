@@ -1,5 +1,6 @@
 param(
     [switch]$Aoc,
+    [switch]$Swebench,
     [switch]$SkipDeny,
     # Deprecated alias: offline is now the default; -SkipAoc is a no-op kept for scripts.
     [switch]$SkipAoc
@@ -56,6 +57,17 @@ if ($runAoc) {
     }
 } else {
     Write-Host "Skipping live AoC regression (pass -Aoc or set RUN_AOC=1)."
+}
+
+$runSwebench = $Swebench -or ($env:RUN_SWEBENCH -eq "1")
+if ($runSwebench) {
+    Write-Host "Running SWE-bench agent regression (-Swebench / RUN_SWEBENCH=1)..."
+    & "$PSScriptRoot\swebench-regression.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+} else {
+    Write-Host "Skipping live SWE-bench regression (pass -Swebench or set RUN_SWEBENCH=1)."
 }
 
 Write-Host "All checks passed."

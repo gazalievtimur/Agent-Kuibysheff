@@ -3,9 +3,10 @@
 
 Container ID is taken only from SWEBENCH_CONTAINER_ID (set by the orchestrator).
 Tool arguments cannot retarget the container. All paths resolve under /testbed.
-"""
 
-from __future__ import annotations
+Note: do not enable ``from __future__ import annotations`` here — FastMCP
+inspects live type objects at tool registration time.
+"""
 
 import base64
 import os
@@ -279,7 +280,18 @@ def main() -> None:
     except WorkspaceError as exc:
         print(f"workspace MCP misconfigured: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    server = build_server()
+    try:
+        server = build_server()
+    except ModuleNotFoundError as exc:
+        print(
+            "workspace MCP missing dependency "
+            f"{exc.name!r}; install "
+            "`pip install -r workflows/swebench-verified/requirements.txt` "
+            "(user-site packages need PYTHONPATH/APPDATA forwarded by the "
+            "orchestrator into this cleared MCP child env).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
     server.run(transport="stdio")
 
 

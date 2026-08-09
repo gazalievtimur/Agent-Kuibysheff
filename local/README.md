@@ -60,30 +60,35 @@ chmod +x ./scripts/*.sh
 
 ### Regression gate
 
-AoC eval is part of the normal local quality gate:
+Live agent evals are opt-in local gates (not PR CI):
 
-- Windows: every `scripts/check.ps1` (unless `-SkipAoc`)
-- Linux: every `scripts/check.sh` (unless `--skip-aoc`)
+- **AoC:** `scripts/check.ps1 -Aoc` / `RUN_AOC=1`, or Linux `scripts/check.sh` (default; `--skip-aoc` to omit)
+- **SWE-bench (one Verified instance):** `scripts/check.ps1 -Swebench` / `RUN_SWEBENCH=1`, or `./scripts/check.sh --swebench`
 
 ```powershell
-$env:POLZA_API_KEY = "..."   # or set provider.api_key / .env
-.\scripts\check.ps1
-.\scripts\aoc-regression.ps1              # AoC-only
-.\scripts\check.ps1 -SkipAoc              # fmt/clippy/deny/cargo test only
-.\scripts\check.ps1 -SkipDeny             # skip cargo deny (supply-chain)
+$env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
+.\scripts\check.ps1                    # fmt/clippy/deny/cargo test (no live evals)
+.\scripts\check.ps1 -Aoc               # + AoC regression
+.\scripts\aoc-regression.ps1           # AoC-only
+.\scripts\check.ps1 -Swebench          # + SWE-bench regression (Docker + LLM)
+.\scripts\swebench-regression.ps1      # SWE-bench-only (sympy__sympy-20590)
+.\scripts\swebench-regression-linux-docker.ps1  # same gate as Linux ELF via Docker
+.\scripts\check.ps1 -SkipDeny          # skip cargo deny (supply-chain)
 ```
 
 ```bash
-export POLZA_API_KEY="..."   # or set provider.api_key / .env
-./scripts/check.sh
-./scripts/aoc-regression.sh              # AoC-only
-./scripts/check.sh --skip-aoc            # fmt/clippy/deny/cargo test only
-./scripts/check.sh --skip-deny           # skip cargo deny (supply-chain)
+export POLZA_API_KEY="..."   # or set provider api_key_env / .env
+./scripts/check.sh                     # includes AoC by default
+./scripts/aoc-regression.sh            # AoC-only
+./scripts/check.sh --skip-aoc          # fmt/clippy/deny/cargo test only
+./scripts/check.sh --swebench          # + SWE-bench regression (Docker + LLM)
+./scripts/swebench-regression.sh       # SWE-bench-only (sympy__sympy-20590)
+./scripts/check.sh --skip-deny         # skip cargo deny (supply-chain)
 ```
 
 Supply-chain policy lives in `deny.toml`. Install once: `cargo install --locked cargo-deny`.
 
-Requirements for the gate:
+#### AoC gate requirements
 
 - `local/aoc-bank/` with at least one task JSON
 - `agent-config.local.yaml` (preferred) or `test-agents/referent/agent-config.aoc.example.yaml`
@@ -91,7 +96,7 @@ Requirements for the gate:
 - Node.js + Python on `PATH` (resolved into sandboxed `home.run`)
 - OS sandbox available (Windows AppContainer / Linux namespaces)
 
-The harness:
+The AoC harness:
 
 1. Builds a fresh `target/release` agent (`aoc-regression.ps1` / `aoc-regression.sh`)
 2. Loads tasks from `local/aoc-bank`
@@ -101,7 +106,33 @@ The harness:
 5. Compares `RunOutput.result` to `expected`
 6. Writes `local/aoc-runs/<run-id>/report.json`
 
-On Linux the harness uses the host `python3` directly (namespace mounts cover
+#### SWE-bench gate requirements
+
+- Docker Desktop / Linux engine (x86_64 images)
+- `pip install -r workflows/swebench-verified/requirements.txt`
+- `agent-config.local.yaml` (preferred) or `test-agents/swebench-solver/agent-config.example.yaml`
+- Provider API key via `api_key_env`
+- Disk/time for the official instance image
+
+The SWE-bench harness (`swebench-regression.*`):
+
+1. Checks Docker Linux + Python deps + API key (no gold harness)
+2. Builds `target/release`
+3. Runs `generate → grade → report` for fixed instance `sympy__sympy-20590`
+4. Asserts `harness_resolved=true` via `workflows/swebench-verified/assert_regression.py`
+5. Prints UX summary (stop_reason, elapsed, usage/cost) even on failure
+
+**Windows native** uses the PE worker + `harness_bootstrap.py` (LF for grade scripts).
+**Linux native** uses `./scripts/swebench-regression.sh`.
+**Linux ELF from Windows** (no WSL): `.\scripts\swebench-regression-linux-docker.ps1` —
+builds inside `rust:1-bookworm`, isolates `CARGO_TARGET_DIR`, passes `--agent-bin`,
+and sets `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` for nested Docker without `clone3`.
+
+Pitfalls and layout details:
+[workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md)
+(section *Regression gate*).
+
+On Linux the AoC harness uses the host `python3` directly (namespace mounts cover
 runtime roots). See also [crates/sandbox-linux/TESTING.md](../crates/sandbox-linux/TESTING.md)
 for userns / AppArmor notes on lab hosts.
 

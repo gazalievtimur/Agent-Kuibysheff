@@ -39,12 +39,14 @@ function Import-LocalDotEnv([string]$Path) {
 
 Import-LocalDotEnv (Join-Path $WorkflowDir ".env")
 Import-LocalDotEnv (Join-Path (Get-Location) ".env")
-if ($RepoRoot) {
-    $RepoRoot = (Resolve-Path $RepoRoot).Path
-    Import-LocalDotEnv (Join-Path $RepoRoot ".env")
+$explicitRepoRoot = $RepoRoot
+$dotenvRoot = $RepoRoot
+if ($dotenvRoot) {
+    $dotenvRoot = (Resolve-Path $dotenvRoot).Path
+    Import-LocalDotEnv (Join-Path $dotenvRoot ".env")
 } elseif (Test-Path -LiteralPath (Join-Path $WorkflowDir "..\..\Cargo.toml")) {
-    $RepoRoot = (Resolve-Path (Join-Path $WorkflowDir "..\..")).Path
-    Import-LocalDotEnv (Join-Path $RepoRoot ".env")
+    $dotenvRoot = (Resolve-Path (Join-Path $WorkflowDir "..\..")).Path
+    Import-LocalDotEnv (Join-Path $dotenvRoot ".env")
 }
 
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -55,9 +57,16 @@ if (-not $python) {
     throw "python not found on PATH"
 }
 
+$winStubs = Join-Path $WorkflowDir "win_stubs"
+if (Test-Path -LiteralPath $winStubs -PathType Container) {
+    $env:PYTHONPATH = if ($env:PYTHONPATH) { "$winStubs;$env:PYTHONPATH" } else { "$winStubs" }
+}
+
 $script = Join-Path $WorkflowDir "swebench.py"
 $pyArgs = @($script, $Command)
-if ($RepoRoot) { $pyArgs += @("--repo-root", $RepoRoot) }
+if ($explicitRepoRoot) {
+    $pyArgs += @("--repo-root", (Resolve-Path $explicitRepoRoot).Path)
+}
 if ($AgentBin) { $pyArgs += @("--agent-bin", $AgentBin) }
 $pyArgs += $RemainingArgs
 

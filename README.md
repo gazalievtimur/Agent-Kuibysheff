@@ -118,7 +118,9 @@ VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
   [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md)
 - **Live Advent of Code** (ACP singleton: download → solve → submit → retry):
   [workflows/aoc-live/README.md](workflows/aoc-live/README.md)
-- **SWE-bench Verified** (Docker patches + official harness):
+- **SWE-bench Verified** (Docker patches + official harness; opt-in local regression via
+  `scripts/swebench-regression.*` / `check.* -Swebench`; Linux ELF from Windows via
+  `scripts/swebench-regression-linux-docker.ps1`):
   [workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
 
 ## Configuration

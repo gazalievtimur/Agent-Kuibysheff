@@ -21,6 +21,7 @@ from runtime import (  # noqa: E402
     check_docker_linux,
     default_run_id,
     docker_from_env,
+    ensure_windows_resource_stub_on_path,
     generate_batch,
     instance_paths,
     link_harness_logs,
@@ -304,6 +305,14 @@ def cmd_grade(args: argparse.Namespace) -> int:
     predictions = run_dir / "predictions.jsonl"
     if not predictions.is_file():
         raise SystemExit(f"missing predictions: {predictions}")
+    pred_text = predictions.read_text(encoding="utf-8").strip()
+    if not pred_text:
+        print(
+            "grade skipped: predictions.jsonl is empty "
+            "(no successful patches to evaluate)",
+            file=sys.stderr,
+        )
+        return 1
     model = _model_name(args, config)
 
     instance_ids = args.instance_ids or None
@@ -416,6 +425,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    ensure_windows_resource_stub_on_path()
     args = parse_args(argv)
     commands = {
         "preflight": cmd_preflight,

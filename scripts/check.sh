@@ -4,11 +4,13 @@
 # Usage:
 #   ./scripts/check.sh
 #   ./scripts/check.sh --skip-aoc
+#   ./scripts/check.sh --swebench
 #   ./scripts/check.sh --skip-deny
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKIP_AOC=0
+RUN_SWEBENCH_FLAG=0
 SKIP_DENY_FLAG=0
 
 while [[ $# -gt 0 ]]; do
@@ -17,12 +19,16 @@ while [[ $# -gt 0 ]]; do
       SKIP_AOC=1
       shift
       ;;
+    --swebench|-Swebench)
+      RUN_SWEBENCH_FLAG=1
+      shift
+      ;;
     --skip-deny|-SkipDeny)
       SKIP_DENY_FLAG=1
       shift
       ;;
     -h|--help)
-      sed -n '2,9p' "$0"
+      sed -n '2,10p' "$0"
       exit 0
       ;;
     *)
@@ -61,6 +67,13 @@ if [[ "$SKIP_AOC" -eq 1 ]]; then
 else
   echo "Running AoC agent regression..."
   "$SCRIPT_DIR/aoc-regression.sh"
+fi
+
+if [[ "$RUN_SWEBENCH_FLAG" -eq 1 || "${RUN_SWEBENCH:-}" == "1" ]]; then
+  echo "Running SWE-bench agent regression (--swebench / RUN_SWEBENCH=1)..."
+  "$SCRIPT_DIR/swebench-regression.sh"
+else
+  echo "Skipping live SWE-bench regression (pass --swebench or set RUN_SWEBENCH=1)."
 fi
 
 echo "All checks passed."

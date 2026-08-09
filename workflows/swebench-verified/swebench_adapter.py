@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import sys
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Optional, Sequence
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Optional, Sequence
+
+_ADAPTER_DIR = Path(__file__).resolve().parent
 
 DATASET_NAME = "SWE-bench/SWE-bench_Verified"
 DATASET_SPLIT = "test"
@@ -34,6 +39,30 @@ class SafeInstance:
 
     def to_dict(self) -> dict[str, str]:
         return asdict(self)
+
+
+@contextmanager
+def _installed_swebench_import_path() -> Iterator[None]:
+    """Prefer the pip package over the local workflow CLI file ``swebench.py``."""
+    here = _ADAPTER_DIR.resolve()
+    stubs = here / "win_stubs"
+    saved_path = sys.path[:]
+    filtered = [p for p in sys.path if not p or Path(p).resolve() != here]
+    if stubs.is_dir() and str(stubs) not in filtered:
+        filtered.insert(0, str(stubs))
+    sys.path[:] = filtered
+
+    for key in list(sys.modules):
+        if key != "swebench" and not key.startswith("swebench."):
+            continue
+        mod = sys.modules.get(key)
+        origin = getattr(mod, "__file__", None) if mod is not None else None
+        if origin and Path(origin).resolve().parent == here:
+            del sys.modules[key]
+    try:
+        yield
+    finally:
+        sys.path[:] = saved_path
 
 
 def swebench_version() -> str:
@@ -127,25 +156,29 @@ def load_verified_dataset(
 ) -> list[dict[str, Any]]:
     """Load the pinned SWE-bench Verified split via the swebench package."""
     try:
-        from swebench.harness.utils import load_swebench_dataset
+        with _installed_swebench_import_path():
+            from swebench.harness.utils import load_swebench_dataset
+
+            dataset = load_swebench_dataset(dataset_name, split)
     except ImportError as exc:  # pragma: no cover - env dependent
         raise RuntimeError(
             "swebench package is required; pip install -r "
             "workflows/swebench-verified/requirements.txt"
         ) from exc
 
-    dataset = load_swebench_dataset(dataset_name, split)
     return [dict(row) for row in dataset]
 
 
 def instance_image_key(raw: dict[str, Any], *, arch: str = "x86_64") -> str:
     """Resolve the official instance image key (no hand-rolled names)."""
     try:
-        from swebench.harness.test_spec.test_spec import make_test_spec
+        with _installed_swebench_import_path():
+            from swebench.harness.test_spec.test_spec import make_test_spec
+
+            spec = make_test_spec(raw, namespace="swebench", arch=arch)
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("swebench package is required for image keys") from exc
 
-    spec = make_test_spec(raw, namespace="swebench", arch=arch)
     return str(spec.instance_image_key)
 
 

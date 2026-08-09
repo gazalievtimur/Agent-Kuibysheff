@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -193,6 +194,71 @@ def posix(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/")
 
 
+def discover_python_site_paths(python_exe: Path) -> str:
+    """Return pathsep-joined site-packages visible to ``python_exe`` on the host."""
+    script = (
+        "import os, site\n"
+        "paths = []\n"
+        "try:\n"
+        "    paths.extend(site.getsitepackages())\n"
+        "except Exception:\n"
+        "    pass\n"
+        "try:\n"
+        "    us = site.getusersitepackages()\n"
+        "    if us:\n"
+        "        paths.append(us)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "seen = set()\n"
+        "out = []\n"
+        "for p in paths:\n"
+        "    if p and p not in seen and os.path.isdir(p):\n"
+        "        seen.add(p)\n"
+        "        out.append(p)\n"
+        "print(os.pathsep.join(out))\n"
+    )
+    try:
+        proc = subprocess.run(
+            [str(python_exe), "-c", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def mcp_child_env(python_exe: Path) -> dict[str, str]:
+    """Host env the agent must forward into stdio MCP (child env is cleared).
+
+    Without this, user-site packages (``pip install --user``) and Docker client
+    config are invisible because HOME/USERPROFILE are rewritten to mcp-runtime.
+    """
+    env: dict[str, str] = {}
+    site_paths = discover_python_site_paths(python_exe)
+    if site_paths:
+        existing = os.environ.get("PYTHONPATH", "").strip()
+        env["PYTHONPATH"] = (
+            f"{site_paths}{os.pathsep}{existing}" if existing else site_paths
+        )
+    # Windows: APPDATA is required for user site; Docker config may need these too.
+    for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOME"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            env[key] = val
+    for key in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            env[key] = val
+    return env
+
+
 def file_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -224,7 +290,15 @@ def resolve_agent_binary(
             raise FileNotFoundError(f"agent binary not found: {path}")
         return path
 
-    for name in ("agent_Kuibysheff.exe", "agent_Kuibysheff"):
+    # Prefer the native name first: a shared Windows/Linux target/release can
+    # contain both agent_Kuibysheff.exe (PE) and agent_Kuibysheff (ELF). Picking
+    # the wrong one on Linux yields opaque WSL/vsock exec failures under Docker Desktop.
+    if platform.system() == "Windows":
+        names = ("agent_Kuibysheff.exe", "agent_Kuibysheff")
+    else:
+        names = ("agent_Kuibysheff", "agent_Kuibysheff.exe")
+
+    for name in names:
         found = shutil.which(name)
         if found:
             return Path(found).resolve()
@@ -243,10 +317,8 @@ def resolve_agent_binary(
             continue
         seen.add(root)
         release = root / "target" / "release"
-        for candidate in (
-            release / "agent_Kuibysheff.exe",
-            release / "agent_Kuibysheff",
-        ):
+        for name in names:
+            candidate = release / name
             if candidate.is_file():
                 return candidate.resolve()
 
@@ -262,6 +334,37 @@ def resolve_python() -> Path:
         if found and "WindowsApps" not in found:
             return Path(found).resolve()
     raise FileNotFoundError("python not found on PATH")
+
+
+def windows_resource_stub_dir() -> Path:
+    return WORKFLOW_DIR / "win_stubs"
+
+
+def ensure_windows_resource_stub_on_path() -> None:
+    """Prepend win_stubs so ``import resource`` works when grading on Windows."""
+    stubs = windows_resource_stub_dir()
+    if not stubs.is_dir():
+        return
+    stub = str(stubs.resolve())
+    if stub not in sys.path:
+        sys.path.insert(0, stub)
+    current = os.environ.get("PYTHONPATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    if stub not in parts:
+        os.environ["PYTHONPATH"] = os.pathsep.join([stub, *parts]) if parts else stub
+
+
+def harness_subprocess_env() -> dict[str, str]:
+    """Env for ``python -m swebench.harness.*`` (Windows resource stub + path)."""
+    env = os.environ.copy()
+    stubs = windows_resource_stub_dir()
+    if stubs.is_dir():
+        stub = str(stubs.resolve())
+        current = env.get("PYTHONPATH", "")
+        parts = [p for p in current.split(os.pathsep) if p]
+        if stub not in parts:
+            env["PYTHONPATH"] = os.pathsep.join([stub, *parts]) if parts else stub
+    return env
 
 
 def extract_json_object(raw: str) -> dict[str, Any]:
@@ -400,6 +503,16 @@ def render_run_config(
     max_tokens = yaml_scalar(base_config_text, "max_tokens", "800000")
     max_duration_sec = yaml_scalar(base_config_text, "max_duration_sec", "1800")
 
+    child_env = mcp_child_env(python_exe)
+    env_lines = [
+        f'      SWEBENCH_CONTAINER_ID: "{escape_yaml_double(container_id)}"',
+    ]
+    for key in sorted(child_env):
+        if key == "SWEBENCH_CONTAINER_ID":
+            continue
+        env_lines.append(f'      {key}: "{escape_yaml_double(child_env[key])}"')
+    env_block = "\n".join(env_lines)
+
     # Inline provider.api_key is rejected by ConfigSafetyValidator — api_key_env only.
     return f"""provider:
   base_url: "{escape_yaml_double(provider_base_url)}"
@@ -415,7 +528,7 @@ mcp:
     args:
       - "{posix(mcp_script)}"
     env:
-      SWEBENCH_CONTAINER_ID: "{escape_yaml_double(container_id)}"
+{env_block}
     timeout_ms: 180000
 
 limits:
@@ -899,10 +1012,11 @@ def run_official_grade(
         if isinstance(predictions_path, str)
         else str(predictions_path)
     )
+    # Use harness_bootstrap.py so eval.sh / patches are written with LF on Windows.
+    bootstrap = WORKFLOW_DIR / "harness_bootstrap.py"
     cmd = [
         str(resolve_python()),
-        "-m",
-        "swebench.harness.run_evaluation",
+        str(bootstrap),
         "--dataset_name",
         dataset_name,
         "--split",
@@ -920,6 +1034,7 @@ def run_official_grade(
     return subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
+        env=harness_subprocess_env(),
         capture_output=True,
         text=True,
         encoding="utf-8",

@@ -57,11 +57,12 @@ done
 
 import_dotenv "${SCRIPT_DIR}/.env"
 import_dotenv "$(pwd)/.env"
+EXPLICIT_REPO_ROOT="$REPO_ROOT"
 if [[ -n "$REPO_ROOT" ]]; then
   import_dotenv "${REPO_ROOT}/.env"
 elif [[ -f "${SCRIPT_DIR}/../../Cargo.toml" ]]; then
-  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-  import_dotenv "${REPO_ROOT}/.env"
+  DOTENV_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  import_dotenv "${DOTENV_ROOT}/.env"
 fi
 
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
@@ -70,8 +71,12 @@ if [[ -z "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+if [[ -d "${SCRIPT_DIR}/win_stubs" ]]; then
+  export PYTHONPATH="${SCRIPT_DIR}/win_stubs${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
 ARGS=("${SCRIPT_DIR}/swebench.py" "$COMMAND")
-[[ -n "$REPO_ROOT" ]] && ARGS+=(--repo-root "$REPO_ROOT")
+[[ -n "$EXPLICIT_REPO_ROOT" ]] && ARGS+=(--repo-root "$EXPLICIT_REPO_ROOT")
 [[ -n "$AGENT_BIN" ]] && ARGS+=(--agent-bin "$AGENT_BIN")
 ARGS+=("${EXTRA[@]+"${EXTRA[@]}"}")
 

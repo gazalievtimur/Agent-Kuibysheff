@@ -17,14 +17,17 @@ workflows/swebench-verified/          copy unit (portable)
   runtime.py                          runs layout, config render, patch extract, report
   swebench_adapter.py                 pinned dataset + safe projection + image keys
   docker_workspace_mcp.py             fail-closed workspace.* MCP (one container)
+  assert_regression.py                resolved gate + UX summary for local regression
+  harness_bootstrap.py                LF newline shim for official harness on Windows
   solver/                             bundled solver profile (defaults)
   requirements.txt                    pinned swebench / docker / mcp
   test_smoke_offline.py               offline unit checks
   runs/                               gitignored artifacts
 
 scripts/swebench-verified-run.*       thin forwards to the copy unit (monorepo UX)
+scripts/swebench-regression.*         opt-in one-instance capability gate (native OS)
+scripts/swebench-regression-linux-docker.*  Linux ELF gate via Docker (Windows hosts)
 ```
-
 External dependencies (not part of the copy unit): `agent_Kuibysheff` on PATH or
 `--agent-bin`, Docker Linux engine, provider API key, Python deps from
 `requirements.txt`.
@@ -139,6 +142,64 @@ Optional Docker smoke (fixture alpine/git image, no LLM):
 ```powershell
 python workflows/swebench-verified/test_docker_smoke.py
 ```
+
+### Regression gate (opt-in, local only)
+
+Capability check on one Verified instance (`sympy__sympy-20590`): live generate →
+official grade → fail unless `harness_resolved=true`. Not part of PR CI.
+
+#### Windows host (native PE worker)
+
+On Windows, grading goes through [`harness_bootstrap.py`](harness_bootstrap.py) so
+`eval.sh` / patches are written with Unix LF (upstream `Path.write_text` would
+otherwise emit CRLF and break bash inside Linux containers).
+
+```powershell
+.\scripts\swebench-regression.ps1
+.\scripts\check.ps1 -Swebench
+# or: $env:RUN_SWEBENCH = "1"; .\scripts\check.ps1
+```
+
+#### Native Linux host
+
+```bash
+./scripts/swebench-regression.sh
+./scripts/check.sh --swebench
+# or: RUN_SWEBENCH=1 ./scripts/check.sh
+```
+
+#### Linux ELF from Windows (Docker runner)
+
+When you need the Linux binary path without WSL, launch a disposable
+`rust:1-bookworm` container that mounts the repo + Docker socket:
+
+```powershell
+.\scripts\swebench-regression-linux-docker.ps1
+# optional:
+.\scripts\swebench-regression-linux-docker.ps1 -InstanceId sympy__sympy-20590
+```
+
+Inner entrypoint: [`scripts/swebench-regression-linux-docker.sh`](../../scripts/swebench-regression-linux-docker.sh).
+It builds into `CARGO_TARGET_DIR=/tmp/...` (avoids mixing PE/ELF under
+`target/release`), installs `agent_Kuibysheff` on PATH, and sets
+`KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` because nested Docker Desktop kernels lack
+`clone3` for `crates/sandbox-linux`.
+
+Artifacts land under `workflows/swebench-verified/runs/regression-<timestamp>/`
+(`report.json` includes stop_reason, elapsed, usage/cost).
+
+#### Known pitfalls (keep these fixed)
+
+| Symptom | Cause | Fix / location |
+| --- | --- | --- |
+| `pipefail\r` / bash syntax error in grade | Windows CRLF in `eval.sh` | `harness_bootstrap.py` (LF writes + strip CR) |
+| `ModuleNotFoundError: resource` on Windows | Unix-only stdlib | `win_stubs/resource.py` on `PYTHONPATH` |
+| `import swebench` loads local `swebench.py` | Path shadowing | `swebench_adapter` / harness bootstrap import path |
+| MCP stdio EOF right after start | Cleared child env hides user-site packages; or `from __future__ import annotations` breaks FastMCP | `runtime.mcp_child_env()`; no `__future__` in `docker_workspace_mcp.py` |
+| Linux runner exec → WSL `UtilBindVsockAnyPort` | Shared `target/release` has both `.exe` and ELF; resolver picked PE | `resolve_agent_binary` prefers native name; docker runner uses `--agent-bin` + isolated `CARGO_TARGET_DIR` |
+| `clone3 syscall is unavailable` in docker runner | Nested container has no Linux sandbox | `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (docker launcher sets this) |
+| `/usr/bin/env: 'bash\r'` | CRLF shebang on bind-mounted `.sh` | linux-docker entrypoint strips `\r` before invoke |
+| PowerShell eats `$PATH` in `bash -lc "..."` | Double-quoted expansion | Prefer mounted `.sh` entrypoint; avoid `$VAR` in double-quoted `bash -lc` from PowerShell |
 
 Manual checklist:
 

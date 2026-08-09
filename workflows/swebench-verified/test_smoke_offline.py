@@ -99,7 +99,7 @@ def test_yaml_escape_and_config_render() -> None:
         mcp_script=WORKFLOW_DIR / "docker_workspace_mcp.py",
         container_id="cid123",
         log_dir=Path("/tmp/logs"),
-        python_exe=Path("/usr/bin/python"),
+        python_exe=Path(sys.executable),
     )
     assert "name: \"workspace\"" in text
     assert "SWEBENCH_CONTAINER_ID: \"cid123\"" in text
@@ -107,6 +107,8 @@ def test_yaml_escape_and_config_render() -> None:
     assert "home.run" not in text
     assert "\n  api_key:" not in text
     assert "api_key_env:" in text
+    # Stdio MCP children get a cleared env; site-packages must be forwarded.
+    assert "PYTHONPATH:" in text
 
 
 def test_reducer_deterministic() -> None:
@@ -188,6 +190,89 @@ def test_prompt_escaping_values() -> None:
     assert "deadbeef" in prompt
 
 
+def test_harness_bootstrap_lf_writes() -> None:
+    """Path.write_text after bootstrap patch must emit LF-only bytes on all OSes."""
+    import importlib.util
+
+    bootstrap_path = WORKFLOW_DIR / "harness_bootstrap.py"
+    spec = importlib.util.spec_from_file_location("harness_bootstrap", bootstrap_path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._install_lf_path_writes()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "eval.sh"
+        path.write_text("#!/bin/bash\nset -uxo pipefail\necho ok\n", encoding="utf-8")
+        raw = path.read_bytes()
+        assert b"\r" not in raw
+        assert raw.startswith(b"#!/bin/bash\n")
+
+
+def test_assert_regression_gate() -> None:
+    from assert_regression import main as assert_main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        report_path = Path(tmp) / "report.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "run_id": "regression-test",
+                    "resolved": 1,
+                    "graded": 1,
+                    "generated_patches": 1,
+                    "agent_errors": 0,
+                    "infrastructure_errors": 0,
+                    "per_instance": [
+                        {
+                            "instance_id": "sympy__sympy-20590",
+                            "status": "ok",
+                            "stop_reason": "goal_reached",
+                            "harness_resolved": True,
+                            "elapsed_sec": 12.5,
+                            "usage": {
+                                "total_tokens": 100,
+                                "cost": {
+                                    "status": "complete",
+                                    "amount": 0.01,
+                                    "currency": "USD",
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert assert_main([str(report_path), "--instance-id", "sympy__sympy-20590"]) == 0
+
+        fail_path = Path(tmp) / "fail.json"
+        fail_path.write_text(
+            json.dumps(
+                {
+                    "run_id": "regression-fail",
+                    "resolved": 0,
+                    "graded": 1,
+                    "generated_patches": 1,
+                    "agent_errors": 0,
+                    "infrastructure_errors": 0,
+                    "per_instance": [
+                        {
+                            "instance_id": "sympy__sympy-20590",
+                            "status": "ok",
+                            "stop_reason": "goal_reached",
+                            "harness_resolved": False,
+                            "elapsed_sec": 9,
+                            "usage": {},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert assert_main([str(fail_path), "--instance-id", "sympy__sympy-20590"]) == 1
+
+
 def main() -> int:
     test_projection_strips_oracle()
     test_duplicate_instance_ids_rejected()
@@ -198,6 +283,8 @@ def main() -> int:
     test_runoutput_parser_nonzero_exit()
     test_mcp_path_guards()
     test_prompt_escaping_values()
+    test_harness_bootstrap_lf_writes()
+    test_assert_regression_gate()
     print("OK: offline smoke checks passed")
     return 0
 

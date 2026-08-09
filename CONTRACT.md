@@ -133,7 +133,9 @@ Settings under `.kuibysheff/protected/` are readable/writable only by the
 `local_tools.*`, `--files`) hard-deny that tree. `home.run` sandbox specs must
 not grant it. Stdio MCP children use `mcp-runtime/{agent}/{server}/` with a
 cleared environment and require a working OS sandbox probe unless
-`KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (dev/emergency only).
+`KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (dev/emergency only; also required for the
+nested Docker Desktop Linux SWE-bench runner, which lacks `clone3` —
+`scripts/swebench-regression-linux-docker.*`).
 
 Exit code `0` for `check` only when every probe is `ok` or intentionally `skip`.
 
