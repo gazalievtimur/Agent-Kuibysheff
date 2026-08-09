@@ -11,26 +11,30 @@ extraction, resume, grading, and reports.
 ## Layout
 
 ```text
-workflows/swebench-verified/
-  swebench.py                 CLI entry (preflight|generate|grade|report|run)
-  runtime.py                  runs layout, config render, patch extract, report
-  swebench_adapter.py         pinned dataset + safe projection + image keys
-  docker_workspace_mcp.py     fail-closed workspace.* MCP (one container)
-  requirements.txt            pinned swebench / docker / mcp
-  test_smoke_offline.py       offline unit checks
-  runs/                       gitignored artifacts
+workflows/swebench-verified/          copy unit (portable)
+  swebench.py                         CLI entry (preflight|generate|grade|report|run)
+  run.ps1 / run.sh                    local launchers
+  runtime.py                          runs layout, config render, patch extract, report
+  swebench_adapter.py                 pinned dataset + safe projection + image keys
+  docker_workspace_mcp.py             fail-closed workspace.* MCP (one container)
+  solver/                             bundled solver profile (defaults)
+  requirements.txt                    pinned swebench / docker / mcp
+  test_smoke_offline.py               offline unit checks
+  runs/                               gitignored artifacts
 
-test-agents/swebench-solver/  solver profile (settings-dir)
-scripts/swebench-verified-run.ps1
-scripts/swebench-verified-run.sh
+scripts/swebench-verified-run.*       thin forwards to the copy unit (monorepo UX)
 ```
+
+External dependencies (not part of the copy unit): `agent_Kuibysheff` on PATH or
+`--agent-bin`, Docker Linux engine, provider API key, Python deps from
+`requirements.txt`.
 
 ## Requirements (MVP)
 
 - Docker Desktop with **Linux** engine (x86_64 images)
 - Python 3.10+
 - Release binary: `cargo build --release` → `target/release/agent_Kuibysheff`
-- Provider API key via `.env` / `OPENAI_API_KEY` (or `api_key` in config)
+- Provider API key via `.env` / env named by `provider.api_key_env` (inline `api_key` rejected)
 - Disk/time for SWE-bench instance images (large)
 
 Pinned Python deps:
@@ -65,7 +69,10 @@ Common flags:
 | `--workers N` | Parallel generate/grade workers |
 | `--run-id ID` | Explicit run identity |
 | `--resume` | Skip terminal `ok` instances with a valid patch |
-| `--agent-bin`, `--config`, `--settings-dir` | Overrides |
+| `--agent` | Agent id (default `swebench-solver`) |
+| `--home` | Relative under `.kuibysheff/` (default `homes/work`) |
+| `--agent-bin` | Override binary path |
+| `--config`, `--settings-dir` | Import/render sources only (never passed to agent) |
 
 Default: **one model attempt** per instance. Only infrastructure failures are
 retried via `--resume`. Do not cherry-pick the best of N without marking the
@@ -99,7 +106,15 @@ runs/<run-id>/
     run-output.json
     agent.stderr.txt
     provenance.json
-    home/                   # per-task agent home + logs
+    .kuibysheff/
+      protected/agents/swebench-solver/   # imported profile + generated config
+      homes/work/                         # relative --home
+```
+
+Each instance directory is the `--project-root`. The agent is invoked as:
+
+```text
+agent_Kuibysheff run --project-root <instance_dir> --agent swebench-solver --home homes/work ...
 ```
 
 ## Security

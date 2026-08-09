@@ -4,8 +4,7 @@ Use these as `--prompt` values when calling the CLI or when configuring an
 external orchestrator.
 
 Every example assumes:
-- `--settings-dir ./settings`
-- `--home <sandbox>`
+- `--project-root <DIR> --agent <ID>` (profile under `.kuibysheff/protected/agents/<id>/`)
 - JSON-only replies from the model
 - file writes through `home.write` and command execution through `home.run`
   with `server: "home"`
@@ -45,11 +44,17 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
+cargo run --bin agent_Kuibysheff -- init demo --project-root . --force
+cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo `
+  import --from .\settings --force
+cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo `
+  import --from .\agent-config.local-demo.yaml --force
+
 cargo run --bin agent_Kuibysheff -- run `
-  --config .\agent-config.local-demo.yaml `
-  --settings-dir .\settings `
+  --project-root . `
+  --agent demo `
+  --home homes/demo-run `
   --prompt "Summarize the attached README in 5-8 bullet points.`n`nRequired steps:`n1. First response: done=false, one home.write call creating out/summary.md`n2. Second response: done=false, one home.write call creating out/manifest.json`n3. Third response: done=true with a short result`n`nReturn JSON only on every turn." `
-  --home .\demo-home `
   --files .\README.md
 ```
 

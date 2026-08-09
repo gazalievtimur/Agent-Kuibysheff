@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::billing::Money;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LimitsConfig {
     pub max_iterations: u32,
     pub max_tokens: u64,

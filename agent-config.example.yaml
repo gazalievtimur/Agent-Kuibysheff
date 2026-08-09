@@ -128,8 +128,8 @@ access:
     # Example program alias (uncomment and adjust paths for your host):
     # programs:
     #   - name: python
-    #     executable: "C:/Python312/python.exe"   # or /usr/bin/python3
-    #     runtime_read_roots: ["C:/Python312"]    # interpreter install / libs
+    #     executable: "python"   # or absolute path to interpreter
+    #     runtime_read_roots: ["REQUIRED_PYTHON_ROOT"]    # interpreter install / libs
     #     inherit_env: ["SYSTEMROOT"]             # Windows; Linux often needs none
     #     allow_children: false
     max_args: 32

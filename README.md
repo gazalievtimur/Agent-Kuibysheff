@@ -6,8 +6,8 @@ Minimal and reliable CLI agent worker in Rust.
 
 ## What it does
 
-- Takes runtime config, an agent settings directory, a prompt, read-only input
-  files, and an isolated home workspace.
+- Takes `--project-root` + `--agent`, a prompt, read-only input files, and an
+  isolated home workspace (profile under `.kuibysheff/protected/agents/<id>/`).
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
 - Can invoke MCP tools as ordered Event-MCP middleware around context and response stages.
@@ -37,21 +37,20 @@ cargo build --release --bin agent_Kuibysheff
 ## Quick start
 
 ```powershell
-# Option A: .env file in repo root (loaded automatically)
+# Option A: .env beside the agent profile (loaded automatically)
 Copy-Item .env.example .env
 # edit .env and set POLZA_API_KEY=...
 
-# Option B: inline key in gitignored agent-config.local.yaml
-# provider:
-#   api_key: "your_key"
+# Scaffold a protected profile, then import or edit via `config`
+cargo run --bin agent_Kuibysheff -- init demo --project-root .
+# Optional: import an existing YAML/settings bundle
+# cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo import --from ./settings --force
 
-# Option C: explicit environment variable
 $env:POLZA_API_KEY = "your_api_key"
 cargo run --bin agent_Kuibysheff -- run `
-  --config ./agent-config.local-demo.yaml `
-  --settings-dir ./settings `
+  --project-root . `
+  --agent demo `
   --prompt "Summarize the attached README into out/summary.md" `
-  --home ./demo-home `
   --files ./README.md
 ```
 
@@ -71,8 +70,9 @@ cargo run --bin agent_Kuibysheff -- run <required arguments> `
 ```
 
 See [`agent-config.example.yaml`](agent-config.example.yaml),
-[`settings/`](settings/), [`test-agents/`](test-agents/), and
-[`prompt-examples.md`](prompt-examples.md).
+[`settings/`](settings/) (import sources), [`test-agents/`](test-agents/), and
+[`prompt-examples.md`](prompt-examples.md). Profile storage is always under
+`.kuibysheff/protected/agents/<id>/` — manage it with `config`, not by path flags.
 
 ## CLI
 
@@ -80,38 +80,34 @@ Worker (`run`):
 
 ```text
 agent_Kuibysheff run \
-  --config <FILE> \
-  --settings-dir <DIR> \
+  --project-root <DIR> \
+  --agent <ID> \
   --prompt <TEXT> \
-  --home <DIR> \
-  [--project-root <DIR>] \
+  [--home <REL_UNDER_KUIBYSHEFF>] \
   [--files <PATH>...] \
   [--run-id <ID>] \
   [--max-cost <CURRENCY:AMOUNT>]
 ```
 
-With `--project-root`, relative `--config` / `--settings-dir` / `--home` resolve
-under `{project-root}/.kuibysheff/`.
-
-Scaffold a profile, or probe config before a run:
+Scaffold, probe, or manage settings (no storage path flags):
 
 ```text
-agent_Kuibysheff init <agent-id> [--path DIR] [--force] [-i|--interactive]
-agent_Kuibysheff check --config <FILE> [--settings-dir <DIR>]
+agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
+agent_Kuibysheff check --project-root <DIR> --agent <ID>
+agent_Kuibysheff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
+agent_Kuibysheff config --project-root <DIR> --agent <ID> show
 ```
 
 ACP stdio server (VS Code, messengers, mail bridges):
 
 ```text
 agent_Kuibysheff acp \
-  --config <FILE> \
-  --settings-dir <DIR> \
-  --home <DIR> \
+  --agent <ID> \
   [--project-root <DIR>]
 ```
 
 `stdin`/`stdout` are ACP JSON-RPC only; put diagnostics on `stderr`. Prefer one
-long-lived process per config. Full bridge contract:
+long-lived process per agent. Full bridge contract:
 [CONTRACT.md](CONTRACT.md#acp-ide-messengers-mail-bridges).
 VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
 
@@ -155,3 +151,8 @@ for copyright. Contributions are under the same terms; see
 
 The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
 trademark use beyond reasonable attribution of origin.
+
+Canonical product / binary / repository names: **Kuibysheff**,
+`agent_Kuibysheff`, and `Agent-Kuibysheff`. Local folder spellings such as
+`Agent Kuibyshev` are legacy path aliases only and must not be used for
+discovery.

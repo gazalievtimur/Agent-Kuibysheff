@@ -4,19 +4,19 @@
 id: zup
 displayName: "ZUP"
 issueKeyRegex: '^[A-Z][A-Z0-9]+-\d+$'
-workspaceRoot: "D:/work/my-zup-workspace"
-productRoot: "D:/work/my-zup-workspace/product"
+workspaceRoot: "REQUIRED_WORKSPACE_ROOT"
+productRoot: "REQUIRED_PRODUCT_ROOT"
 cfSrc: "src/cf"
 cfeSrc: "src/cf/Extensions"
 stagingReleaseBranch: ""
-stagingDbPath: "D:/1C/Bases/ZUP_Local"
+stagingDbPath: "REQUIRED_STAGING_DB_PATH"
 taskDirPattern: "{workspaceRoot}/{issueKey}"
 extensionNamePattern: "{issueKey}"
 mcp:
   codeIndexPath: "{productRoot}/src/cf"
-  sntxSemConfig: "D:/tools/1c-sntx-sem/config.yaml"
+  sntxSemConfig: "REQUIRED_SNTX_SEM_CONFIG"
   searxngUrl: "http://127.0.0.1:3000/mcp"
-  codeIndexCommand: "D:/tools/code-index/bsl-indexer.exe"
+  codeIndexCommand: "REQUIRED_BSL_INDEXER"
 apply:
   # Prefer copying out/cfe into productRoot/cfeSrc/<extensionName>/
   # instead of task _work/src + external BuildCfe script.

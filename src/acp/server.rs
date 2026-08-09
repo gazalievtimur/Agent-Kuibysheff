@@ -19,7 +19,7 @@ use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
 use crate::app::{run_agent_prompt, AgentPromptArgs};
 use crate::cli::AcpArgs;
 use crate::output::StopReason;
-use crate::project_paths::{effective_project_root, resolve_agent_paths};
+use crate::project_paths::{effective_project_root, resolve_agent_identity};
 
 struct SessionSlot {
     cancel: RunCancel,
@@ -65,8 +65,8 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
     let runtime = Arc::new(AcpRuntime::new(args));
 
     info!(
-        config = %runtime.args.config.display(),
-        home = %runtime.args.home.display(),
+        agent = %runtime.args.agent,
+        home = ?runtime.args.home.as_ref().map(|p| p.display().to_string()),
         project_root = ?runtime.args.project_root.as_ref().map(|p| p.display().to_string()),
         "starting ACP agent on stdio"
     );
@@ -182,13 +182,29 @@ async fn handle_prompt(
     let project_root = effective_project_root(
         Some(session_cwd.as_path()),
         runtime.args.project_root.as_deref(),
-    );
-    let (config, settings_dir, home) = resolve_agent_paths(
-        project_root.as_deref(),
-        &runtime.args.config,
-        &runtime.args.settings_dir,
-        &runtime.args.home,
-    );
+    )
+    .ok_or_else(|| {
+        AcpError::invalid_params().data(serde_json::Value::String(
+            "project root is required (session cwd or --project-root)".to_string(),
+        ))
+    });
+    let project_root = match project_root {
+        Ok(root) => root,
+        Err(err) => return responder.respond_with_error(err),
+    };
+
+    let paths = match resolve_agent_identity(
+        &project_root,
+        &runtime.args.agent,
+        runtime.args.home.as_deref(),
+    ) {
+        Ok(paths) => paths,
+        Err(err) => {
+            return responder.respond_with_error(
+                AcpError::invalid_params().data(serde_json::Value::String(err.to_string())),
+            );
+        }
+    };
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let events = AgentEventTx::from_sender(event_tx);
@@ -207,9 +223,11 @@ async fn handle_prompt(
     });
 
     let prompt_args = AgentPromptArgs {
-        config,
-        settings_dir,
-        home,
+        config: paths.config,
+        settings_dir: paths.settings_dir,
+        home: paths.home,
+        project_root: Some(paths.project_root),
+        agent_id: paths.agent_id,
         prompt,
         run_id: None,
         files: Vec::new(),

@@ -97,8 +97,7 @@ export async function openAgentConfigEditor(
           }
           const result = await runAgentCheck({
             workspaceRoot,
-            configRelative: `agents/${agentId}/agent-config.yaml`,
-            settingsDirRelative: `agents/${agentId}`,
+            agentId,
           });
           const text = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
           panel.webview.postMessage({

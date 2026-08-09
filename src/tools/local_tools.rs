@@ -10,7 +10,14 @@ use crate::access::paths::{is_within_root, relative_components};
 use crate::access::{PathOperation, WorkspaceFsPolicy};
 use crate::tools::LocalToolsError;
 
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "logs", ".cursor"];
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "logs",
+    ".cursor",
+    "protected",
+];
 const SKIP_EXTENSIONS: &[&str] = &[
     "exe", "dll", "so", "dylib", "png", "jpg", "jpeg", "gif", "webp", "ico", "pdf", "zip", "gz",
     "7z", "tar", "rar", "woff", "woff2", "ttf", "otf", "bin", "lock", "pyc", "class", "o", "a",
@@ -458,6 +465,12 @@ fn ensure_within_root(
     canonical: &Path,
     requested: &Path,
 ) -> Result<(), LocalToolsError> {
+    if crate::access::is_denied_protected_path(None, canonical) {
+        return Err(local_path(
+            requested.display().to_string(),
+            crate::access::PROTECTED_DENY_REASON,
+        ));
+    }
     if is_within_root(root, canonical) {
         Ok(())
     } else {

@@ -295,6 +295,9 @@ impl InputFilesPolicy {
     ///
     /// Returns a reason when the file is outside all roots in strict mode.
     pub fn allows_canonical_file(&self, canonical: &Path) -> Result<(), String> {
+        if crate::access::protected::is_denied_protected_path(None, canonical) {
+            return Err(crate::access::PROTECTED_DENY_REASON.to_string());
+        }
         if self.unrestricted {
             return Ok(());
         }
@@ -314,13 +317,26 @@ impl InputFilesPolicy {
 }
 
 /// Resolves workspace host root for local tools.
+///
+/// Prefer configured `access.filesystem.workspace.root`, then `project_root`,
+/// then the config file directory, and finally the process CWD.
 #[must_use]
-pub fn workspace_root_for_run(access: &ResolvedAccessPolicy, current_dir: &Path) -> PathBuf {
+pub fn workspace_root_for_run(
+    access: &ResolvedAccessPolicy,
+    current_dir: &Path,
+    project_root: Option<&Path>,
+    config_dir: Option<&Path>,
+) -> PathBuf {
     if let Some(workspace) = access.workspace() {
-        workspace.root.as_path().to_path_buf()
-    } else {
-        current_dir.to_path_buf()
+        return workspace.root.as_path().to_path_buf();
     }
+    if let Some(root) = project_root {
+        return root.to_path_buf();
+    }
+    if let Some(dir) = config_dir {
+        return dir.to_path_buf();
+    }
+    current_dir.to_path_buf()
 }
 
 /// Helper used by tests and diagnostics.
@@ -332,6 +348,7 @@ pub fn canonical_roots(roots: &[CanonicalRoot]) -> Vec<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access::ResolvedAccessPolicy;
 
     #[test]
     fn sibling_prefix_out_does_not_match_outside() {
@@ -360,5 +377,23 @@ mod tests {
         assert!(scope
             .allows_relative(Path::new("outside/x.txt"), PathOperation::Write)
             .is_err());
+    }
+
+    #[test]
+    fn workspace_root_prefers_project_then_config_dir() {
+        let access = ResolvedAccessPolicy::legacy();
+        let cwd = Path::new("/launch");
+        let project = Path::new("/project");
+        let config_dir = Path::new("/config-dir");
+
+        assert_eq!(
+            workspace_root_for_run(&access, cwd, Some(project), Some(config_dir)),
+            project
+        );
+        assert_eq!(
+            workspace_root_for_run(&access, cwd, None, Some(config_dir)),
+            config_dir
+        );
+        assert_eq!(workspace_root_for_run(&access, cwd, None, None), cwd);
     }
 }

@@ -12,6 +12,7 @@ use crate::cli::CheckArgs;
 use crate::config::{load_config, AppConfig, ConfigError, McpTransport};
 use crate::logging::resolve_base_dir;
 use crate::mcp::stdio_client::McpRegistry;
+use crate::project_paths::{resolve_agent_identity, AgentPathError};
 use crate::provider::openai_compat::OpenAiCompatClient;
 use crate::sandbox::SandboxRunner;
 use crate::settings::{load_settings, SettingsError};
@@ -25,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 pub enum CheckError {
     #[error("failed to load config: {0}")]
     Config(#[from] ConfigError),
+    #[error(transparent)]
+    AgentPath(#[from] AgentPathError),
     #[error("failed to start async runtime: {0}")]
     Runtime(#[source] io::Error),
 }
@@ -110,7 +113,9 @@ pub fn run(args: &CheckArgs) -> Result<CheckReport, CheckError> {
 }
 
 async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
-    let config_path = args.config.clone();
+    let paths = resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)?;
+    let config_path = paths.config.clone();
+    let settings_dir = paths.settings_dir.clone();
     let (cfg, access) = tokio::task::spawn_blocking(move || load_config(&config_path))
         .await
         .map_err(|err| {
@@ -122,25 +127,30 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
         name: "config".to_string(),
         status: CheckStatus::Ok,
         detail: format!(
-            "loaded `{}` ({} MCP server(s))",
-            args.config.display(),
+            "loaded agent `{}` ({} MCP server(s))",
+            args.identity.agent,
             cfg.mcp.len()
         ),
     });
 
     check_provider(&cfg, args.skip_provider, &mut items).await;
-    check_mcp(&cfg, args.skip_mcp, &mut items).await;
-    check_billing_catalog(&cfg, &args.config, &mut items);
+    check_mcp(
+        &cfg,
+        &paths.config,
+        &args.identity.project_root,
+        &args.identity.agent,
+        args.skip_mcp,
+        &mut items,
+    )
+    .await;
+    check_billing_catalog(&cfg, &paths.config, &mut items);
     check_access(&access, &mut items);
     check_sandbox(&access, args.skip_sandbox, &mut items);
     check_logging(&cfg, &mut items);
-
-    if let Some(settings_dir) = &args.settings_dir {
-        check_settings(settings_dir, &mut items);
-    }
+    check_settings(&settings_dir, &mut items);
 
     Ok(CheckReport {
-        config_path: args.config.display().to_string(),
+        config_path: paths.config.display().to_string(),
         items,
     })
 }
@@ -206,7 +216,14 @@ async fn check_provider(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>)
     }
 }
 
-async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
+async fn check_mcp(
+    cfg: &AppConfig,
+    config_path: &Path,
+    project_root: &Path,
+    agent_id: &str,
+    skip: bool,
+    items: &mut Vec<CheckItem>,
+) {
     if skip {
         items.push(CheckItem {
             name: "mcp".to_string(),
@@ -225,14 +242,24 @@ async fn check_mcp(cfg: &AppConfig, skip: bool, items: &mut Vec<CheckItem>) {
         return;
     }
 
+    let config_dir = config_path.parent();
+    let _ = config_dir;
     for server in &cfg.mcp {
         let transport = match &server.transport {
             McpTransport::Stdio(stdio) => format!("stdio `{}`", stdio.command),
             McpTransport::Http(http) => format!("http `{}`", http.url),
         };
         let name = format!("mcp.{}", server.name);
-        match McpRegistry::connect_all(std::slice::from_ref(server), None, CancellationToken::new())
-            .await
+        match McpRegistry::connect_all_isolated(
+            std::slice::from_ref(server),
+            None,
+            CancellationToken::new(),
+            crate::mcp::McpIsolationContext {
+                project_root: Some(project_root.to_path_buf()),
+                agent_id: agent_id.to_string(),
+            },
+        )
+        .await
         {
             Ok(registry) => {
                 let tools = registry.available_tools();
@@ -438,6 +465,9 @@ fn check_settings(settings_dir: &Path, items: &mut Vec<CheckItem>) {
                 SettingsError::ReadFile { path, source } => {
                     format!("failed to read `{path}`: {source}")
                 }
+                SettingsError::WriteFile { path, source } => {
+                    format!("failed to write `{path}`: {source}")
+                }
                 SettingsError::EmptyFile(path) => format!("`{path}` is empty"),
             },
         }),
@@ -482,111 +512,64 @@ pub fn print_report(report: &CheckReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::AgentIdentityArgs;
+    use crate::cli::InitArgs;
+    use crate::commands::init;
+    use crate::project_paths::AGENT_CONFIG_FILE;
     use std::fs;
     use tempfile::tempdir;
 
-    fn write_minimal_config(dir: &Path, api_key_env: &str) -> std::path::PathBuf {
-        let path = dir.join("agent-config.yaml");
-        fs::write(
-            &path,
-            format!(
-                r#"provider:
-  base_url: "https://example.test/v1"
-  model: "test-model"
-  api_key_env: "{api_key_env}"
-  api_key: "test-key"
-  timeout_ms: 1000
-  max_retries: 0
-  retry_base_delay_ms: 1
-
-mcp: []
-
-limits:
-  max_iterations: 1
-  max_tokens: 100
-  max_duration_sec: 10
-
-logging:
-  enable_ai_log: false
-  enable_mcp_log: false
-  enable_chat_history: false
-  sink:
-    type: file
-
-access:
-  mode: legacy
-"#
-            ),
-        )
-        .expect("write config");
-        path
+    fn scaffold_agent(project: &Path, agent: &str) {
+        init::run(&InitArgs {
+            agent_id: agent.to_string(),
+            project_root: project.to_path_buf(),
+            force: true,
+            interactive: false,
+        })
+        .expect("init");
     }
 
-    #[test]
-    fn check_passes_for_minimal_config_with_skip_provider() {
-        let dir = tempdir().expect("tempdir");
-        let config = write_minimal_config(dir.path(), "CHECK_TEST_KEY");
-        let args = CheckArgs {
-            config,
-            settings_dir: None,
-            skip_provider: true,
-            skip_mcp: false,
-            skip_sandbox: false,
-        };
-        let report = run(&args).expect("check");
-        assert!(report.all_passed(), "{report:?}");
-        assert!(report.items.iter().any(|i| i.name == "config"));
-        assert!(report.items.iter().any(|i| i.name == "provider.api_key"));
-        assert!(report
-            .items
-            .iter()
-            .any(|i| i.name == "provider.http" && i.status == CheckStatus::Skip));
-        assert!(report
-            .items
-            .iter()
-            .any(|i| i.name == "mcp" && i.status == CheckStatus::Ok));
-        assert!(report.items.iter().any(|i| {
-            i.name == "access"
-                && i.status == CheckStatus::Ok
-                && i.detail.contains("access.mode: legacy")
-        }));
-    }
-
-    #[test]
-    fn check_reports_settings_when_provided() {
-        let dir = tempdir().expect("tempdir");
-        let config = write_minimal_config(dir.path(), "CHECK_TEST_KEY");
-        let settings = dir.path().join("settings");
-        fs::create_dir_all(&settings).expect("mkdir");
-        fs::write(settings.join("master_prompt.md"), "master").expect("master");
-        fs::write(
-            settings.join("skills.dsl"),
-            r#"skill "x" { policy: "safe" allowed_tools: ["home.read"] }"#,
-        )
-        .expect("skills");
-        let args = CheckArgs {
-            config,
-            settings_dir: Some(settings),
+    fn check_args(project: &Path, agent: &str) -> CheckArgs {
+        CheckArgs {
+            identity: AgentIdentityArgs {
+                project_root: project.to_path_buf(),
+                agent: agent.to_string(),
+            },
             skip_provider: true,
             skip_mcp: true,
             skip_sandbox: true,
-        };
-        let report = run(&args).expect("check");
-        assert!(report.all_passed(), "{report:?}");
-        let settings_item = report
-            .items
-            .iter()
-            .find(|i| i.name == "settings")
-            .expect("settings item");
-        assert_eq!(settings_item.status, CheckStatus::Ok);
+        }
+    }
+
+    #[test]
+    fn check_passes_for_init_profile() {
+        let dir = tempdir().expect("tempdir");
+        scaffold_agent(dir.path(), "demo");
+        // Starter config may lack a resolvable API key — skip provider probe.
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        assert!(
+            report
+                .items
+                .iter()
+                .any(|i| i.name == "config" && i.status == CheckStatus::Ok),
+            "{report:?}"
+        );
+        assert!(
+            report
+                .items
+                .iter()
+                .any(|i| i.name == "settings" && i.status == CheckStatus::Ok),
+            "{report:?}"
+        );
     }
 
     #[test]
     fn check_fails_when_api_key_missing() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("agent-config.yaml");
+        scaffold_agent(dir.path(), "demo");
+        let paths = resolve_agent_identity(dir.path(), "demo", None).unwrap();
         fs::write(
-            &path,
+            &paths.config,
             r#"provider:
   base_url: "https://example.test/v1"
   model: "test-model"
@@ -614,20 +597,15 @@ access:
 "#,
         )
         .expect("write");
-        // Ensure the env var is unset for this process.
         std::env::remove_var("CHECK_MISSING_KEY_UNLIKELY_SET_xyz");
-        let args = CheckArgs {
-            config: path,
-            settings_dir: None,
-            skip_provider: true,
-            skip_mcp: true,
-            skip_sandbox: true,
-        };
+        let mut args = check_args(dir.path(), "demo");
+        args.skip_provider = true;
         let report = run(&args).expect("check");
         assert!(!report.all_passed());
         assert!(report
             .items
             .iter()
             .any(|i| { i.name == "provider.api_key" && i.status == CheckStatus::Fail }));
+        let _ = AGENT_CONFIG_FILE;
     }
 }

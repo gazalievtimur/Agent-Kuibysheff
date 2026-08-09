@@ -20,7 +20,7 @@ export function kuibysheffRoot(workspaceRoot: string): string {
 }
 
 export function agentsRoot(workspaceRoot: string): string {
-  return path.join(kuibysheffRoot(workspaceRoot), "agents");
+  return path.join(kuibysheffRoot(workspaceRoot), "protected", "agents");
 }
 
 export function agentDir(workspaceRoot: string, agentId: string): string {

@@ -40,34 +40,39 @@ async fn acp_child_over_redirected_stdio_survives_sequential_prompts() {
         .await;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("logs");
-    let home = tmp.path().join("home");
-    let settings = tmp.path().join("settings");
-    let config_path = tmp.path().join("agent-config.yaml");
-    std::fs::create_dir_all(&settings).expect("settings dir");
+    let project = tmp.path();
+    let log_dir = project.join("logs");
     std::fs::create_dir_all(&log_dir).expect("log dir");
 
-    std::fs::write(
-        settings.join("master_prompt.md"),
-        "You are a test agent. Reply with one JSON object only.\n",
-    )
-    .expect("master_prompt");
-    std::fs::write(
-        settings.join("skills.dsl"),
-        r#"skill "workspace" {
-  policy: "Use home tools only."
-  allowed_tools: ["home.list", "home.read", "home.write"]
-}
-"#,
-    )
-    .expect("skills");
+    let init_out = std::process::Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
+        .args([
+            "init",
+            "acpdemo",
+            "--project-root",
+            project.to_str().expect("utf-8"),
+            "--force",
+        ])
+        .output()
+        .expect("init");
+    assert!(
+        init_out.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init_out.stderr)
+    );
+
+    let config_path = project
+        .join(".kuibysheff")
+        .join("protected")
+        .join("agents")
+        .join("acpdemo")
+        .join("agent-config.yaml");
     std::fs::write(
         &config_path,
         format!(
             r#"provider:
   base_url: "{}/v1"
   model: "mock-model"
-  api_key: "test-key"
+  api_key_env: "ACP_TEST_API_KEY"
   timeout_ms: 5000
   max_retries: 0
   retry_base_delay_ms: 1
@@ -99,14 +104,14 @@ access:
     let mut child = Command::new(&bin)
         .args([
             "acp",
-            "--config",
-            config_path.to_str().expect("utf-8 config"),
-            "--settings-dir",
-            settings.to_str().expect("utf-8 settings"),
-            "--home",
-            home.to_str().expect("utf-8 home"),
+            "--project-root",
+            project.to_str().expect("utf-8 project"),
+            "--agent",
+            "acpdemo",
         ])
         .env("AGENT_LOG_DIR", &log_dir)
+        .env("ACP_TEST_API_KEY", "test-key")
+        .env("KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -156,13 +161,14 @@ access:
         .connect_with(
             transport,
             |cx: ConnectionTo<agent_client_protocol::Agent>| {
+                let session_cwd = project.to_path_buf();
                 async move {
                     cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
                         .block_task()
                         .await?;
 
                     let session = cx
-                        .send_request(NewSessionRequest::new(std::env::temp_dir()))
+                        .send_request(NewSessionRequest::new(session_cwd))
                         .block_task()
                         .await?;
 

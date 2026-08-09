@@ -14,6 +14,8 @@ if str(WORKFLOW_DIR) not in sys.path:
     sys.path.insert(0, str(WORKFLOW_DIR))
 
 from runtime import (  # noqa: E402
+    DEFAULT_AGENT_ID,
+    DEFAULT_HOME_REL,
     build_manifest,
     build_report,
     check_docker_linux,
@@ -44,12 +46,15 @@ from swebench_adapter import (  # noqa: E402
     swebench_version,
 )
 
-DEFAULT_CONFIG = "test-agents/swebench-solver/agent-config.example.yaml"
-DEFAULT_SETTINGS = "test-agents/swebench-solver"
+DEFAULT_CONFIG = str(WORKFLOW_DIR / "solver" / "agent-config.example.yaml")
+DEFAULT_SETTINGS = str(WORKFLOW_DIR / "solver")
 
 
-def _repo_guess() -> Path:
-    return WORKFLOW_DIR.parent.parent
+def _repo_guess() -> str:
+    """Optional monorepo root when package lives under workflows/<name>/."""
+    if WORKFLOW_DIR.parent.name == "workflows":
+        return str(WORKFLOW_DIR.parent.parent)
+    return ""
 
 
 def add_common_filters(parser: argparse.ArgumentParser) -> None:
@@ -74,14 +79,35 @@ def add_common_filters(parser: argparse.ArgumentParser) -> None:
         help="Skip terminal ok instances with valid patches",
     )
     parser.add_argument("--agent-bin", default="", help="Path to agent_Kuibysheff")
-    parser.add_argument("--config", default=DEFAULT_CONFIG, help="Base agent config")
     parser.add_argument(
-        "--settings-dir", default=DEFAULT_SETTINGS, help="Solver settings directory"
+        "--agent",
+        default=DEFAULT_AGENT_ID,
+        help=f"Agent id under protected/agents/ (default: {DEFAULT_AGENT_ID})",
+    )
+    parser.add_argument(
+        "--project-root",
+        default="",
+        help="Unused for generate (each instance dir is the project); kept for CLI symmetry",
+    )
+    parser.add_argument(
+        "--home",
+        default=DEFAULT_HOME_REL,
+        help=f"Relative home under .kuibysheff/ (default: {DEFAULT_HOME_REL})",
+    )
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG,
+        help="Provider config template (import/render source only; not passed to agent)",
+    )
+    parser.add_argument(
+        "--settings-dir",
+        default=DEFAULT_SETTINGS,
+        help="Solver template dir imported into the protected profile (not passed to agent)",
     )
     parser.add_argument(
         "--repo-root",
-        default=str(_repo_guess()),
-        help="Repository root",
+        default=_repo_guess(),
+        help="Optional monorepo root for Cargo binary / .env fallback",
     )
     parser.add_argument(
         "--model-name",
@@ -116,14 +142,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
-    repo_root = Path(args.repo_root).resolve()
-    load_dotenv(repo_root / ".env")
+    unit_root = WORKFLOW_DIR
+    load_dotenv(unit_root / ".env")
+    load_dotenv(Path.cwd() / ".env")
+    repo_root = Path(args.repo_root).resolve() if args.repo_root else unit_root
+    if args.repo_root:
+        load_dotenv(repo_root / ".env")
     config = Path(args.config)
     if not config.is_absolute():
-        config = (repo_root / config).resolve()
+        config = (unit_root / config).resolve()
     settings = Path(args.settings_dir)
     if not settings.is_absolute():
-        settings = (repo_root / settings).resolve()
+        settings = (unit_root / settings).resolve()
     runs_root = WORKFLOW_DIR / "runs"
     return repo_root, config, settings, runs_root
 
@@ -150,15 +180,19 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     if not config.is_file():
         raise SystemExit(f"config not found: {config}")
     if not provider_api_key_available(config.read_text(encoding="utf-8")):
-        raise SystemExit("provider API key missing (set api_key or api_key_env)")
-    print("API key present (value not logged)")
+        raise SystemExit(
+            "provider API key missing: set the env named by provider.api_key_env "
+            "(inline provider.api_key is rejected)"
+        )
+    print("API key present via api_key_env (value not logged)")
 
-    print("== preflight: settings ==")
+    print("== preflight: import template (settings) ==")
     for name in ("master_prompt.md", "skills.dsl", "rules.md"):
         path = settings / name
         if not path.is_file():
             raise SystemExit(f"missing settings file: {path}")
         print(f"ok {path.name}")
+    print(f"agent_id={args.agent} home_rel={args.home}")
 
     print("== preflight: dataset ==")
     rows = load_verified_dataset()
@@ -234,6 +268,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
         model_name_or_path=model,
         workers=args.workers,
         resume=args.resume,
+        agent_id=args.agent,
+        home_rel=args.home,
     )
     pred = reduce_predictions(run_dir, model_name_or_path=model)
     print(f"predictions={pred} statuses={len(statuses)}")

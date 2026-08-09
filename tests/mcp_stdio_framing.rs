@@ -22,6 +22,7 @@ async fn mcp_stdio_ndjson_connect_lists_tools() {
             command: fixture_bin(),
             args: vec![],
             env: HashMap::new(),
+            cwd: None,
         }),
     }];
 
@@ -41,6 +42,7 @@ async fn mcp_stdio_rejects_content_length_framing() {
             command: fixture_bin(),
             args: vec!["content-length".to_string()],
             env: HashMap::new(),
+            cwd: None,
         }),
     }];
 
@@ -88,6 +90,7 @@ async fn mcp_stdio_registry_shutdown_terminates_fixture() {
             command: fixture_bin(),
             args: vec![],
             env,
+            cwd: None,
         }),
     }];
 

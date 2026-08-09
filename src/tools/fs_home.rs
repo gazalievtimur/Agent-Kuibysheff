@@ -390,6 +390,12 @@ impl HomeFs {
     }
 
     fn ensure_within_home(&self, canonical: &Path, requested: &Path) -> Result<(), HomeFsError> {
+        if crate::access::is_denied_protected_path(None, canonical) {
+            return Err(invalid_path(
+                requested,
+                crate::access::PROTECTED_DENY_REASON,
+            ));
+        }
         if is_within_root(&self.root, canonical) {
             Ok(())
         } else {

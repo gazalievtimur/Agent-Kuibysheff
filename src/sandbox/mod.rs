@@ -192,6 +192,18 @@ fn validate_spec(spec: &SandboxSpec) -> Result<(), SandboxError> {
             });
         }
     }
+    reject_protected_sandbox_path(&spec.cwd)?;
+    for path in spec
+        .home_read
+        .iter()
+        .chain(spec.home_write.iter())
+        .chain(std::iter::once(&spec.executable))
+    {
+        reject_protected_sandbox_path(path)?;
+    }
+    for root in &spec.runtime_read_roots {
+        reject_protected_sandbox_path(root.as_path())?;
+    }
     for key in spec.env.keys() {
         if is_forbidden_env_key(key) {
             return Err(SandboxError::PolicyDenied {
@@ -214,6 +226,15 @@ fn validate_spec(spec: &SandboxSpec) -> Result<(), SandboxError> {
 
 fn is_forbidden_env_key(key: &str) -> bool {
     is_forbidden_inherit_env_key(key)
+}
+
+fn reject_protected_sandbox_path(path: &Path) -> Result<(), SandboxError> {
+    if crate::access::is_denied_protected_path(None, path) {
+        return Err(SandboxError::PolicyDenied {
+            reason: crate::access::PROTECTED_DENY_REASON.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Backend that always reports unavailable (fail-closed default).

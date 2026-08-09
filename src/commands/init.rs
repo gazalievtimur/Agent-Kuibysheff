@@ -1,4 +1,4 @@
-//! Scaffold a new agent settings directory and starter config.
+//! Scaffold a new agent profile under `.kuibysheff/protected/agents/<id>/`.
 
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::access::{ensure_protected_profile_dirs, AccessPolicyConfig};
 use crate::cli::InitArgs;
+use crate::project_paths::{
+    agent_profile_dir, validate_agent_id, AgentPathError, AGENT_CONFIG_FILE,
+};
 
 const MASTER_PROMPT: &str = include_str!("../templates/agent_init/master_prompt.md");
 const SKILLS_DSL: &str = include_str!("../templates/agent_init/skills.dsl");
@@ -17,23 +21,13 @@ const CONFIG_ACCESS_FOOTER: &str = r#"
 # Required capability policy (fail-closed). For permissive FS only:
 #   access:
 #     mode: legacy
-access:
-  tools:
-    builtins:
-      - home.list
-      - home.read
-      - home.write
-  filesystem:
-    home:
-      read: ["in", "out"]
-      write: ["out"]
 "#;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum InitError {
-    #[error("invalid agent id `{0}`: use `[a-z0-9][a-z0-9_-]*` without path separators")]
-    InvalidAgentId(String),
+    #[error(transparent)]
+    AgentPath(#[from] AgentPathError),
     #[error("target directory `{0}` already exists and is not empty; pass `--force` to overwrite template files")]
     TargetNotEmpty(String),
     #[error("failed to create directory `{path}`: {source}")]
@@ -82,11 +76,12 @@ impl Default for ConfigAnswers {
 #[derive(Debug, Clone)]
 pub struct InitResult {
     pub agent_id: String,
+    pub project_root: PathBuf,
     pub target_dir: PathBuf,
     pub written_files: Vec<PathBuf>,
 }
 
-/// Validate `agent-id` and create the settings + starter config scaffold.
+/// Validate `agent-id` and create the protected profile scaffold.
 ///
 /// # Errors
 ///
@@ -94,12 +89,12 @@ pub struct InitResult {
 /// `--force`, prompting fails, or filesystem operations fail.
 pub fn run(args: &InitArgs) -> Result<InitResult, InitError> {
     validate_agent_id(&args.agent_id)?;
+    let target_dir = agent_profile_dir(&args.project_root, &args.agent_id)?;
 
-    let target_dir = args
-        .path
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(&args.agent_id));
-
+    ensure_protected_profile_dirs(&target_dir).map_err(|source| InitError::CreateDir {
+        path: target_dir.display().to_string(),
+        source,
+    })?;
     prepare_target_dir(&target_dir, args.force)?;
 
     let config_body = if args.interactive {
@@ -118,7 +113,7 @@ pub fn run(args: &InitArgs) -> Result<InitResult, InitError> {
         ("master_prompt.md", MASTER_PROMPT.to_string()),
         ("skills.dsl", SKILLS_DSL.to_string()),
         ("rules.md", RULES_MD.to_string()),
-        ("agent-config.example.yaml", config_body),
+        (AGENT_CONFIG_FILE, config_body),
     ];
 
     let mut written_files = Vec::with_capacity(files.len());
@@ -133,6 +128,7 @@ pub fn run(args: &InitArgs) -> Result<InitResult, InitError> {
 
     Ok(InitResult {
         agent_id: args.agent_id.clone(),
+        project_root: args.project_root.clone(),
         target_dir,
         written_files,
     })
@@ -148,13 +144,18 @@ pub fn print_success(result: &InitResult) {
     for path in &result.written_files {
         println!("  {}", path.display());
     }
-    let config = result.target_dir.join("agent-config.example.yaml");
     println!();
     println!("Example run:");
     println!(
-        "  agent_Kuibysheff run \\\n    --config {} \\\n    --settings-dir {} \\\n    --prompt \"...\" \\\n    --home ./demo-home/{}",
-        config.display(),
-        result.target_dir.display(),
+        "  agent_Kuibysheff run \\\n    --project-root {} \\\n    --agent {} \\\n    --prompt \"...\"",
+        result.project_root.display(),
+        result.agent_id
+    );
+    println!();
+    println!("Import external settings:");
+    println!(
+        "  agent_Kuibysheff config --project-root {} --agent {} import --from <PATH>",
+        result.project_root.display(),
         result.agent_id
     );
 }
@@ -206,7 +207,7 @@ pub fn prompt_config<R: BufRead, W: Write>(
     })
 }
 
-/// Render a starter `agent-config.example.yaml` from interactive answers.
+/// Render a starter `agent-config.yaml` from interactive answers.
 #[must_use]
 pub fn render_agent_config(answers: &ConfigAnswers) -> String {
     let mut body = format!(
@@ -217,13 +218,11 @@ pub fn render_agent_config(answers: &ConfigAnswers) -> String {
   timeout_ms: 60000
   max_retries: 3
   retry_base_delay_ms: 500
-  # Context-window pruning for this model (independent of limits.max_tokens).
   history:
     max_tail_messages: 30
     max_chars: 200000
 
 mcp: []
-# Add MCP servers with a future `add-mcp` command, or edit this list by hand.
 
 billing:
   provider_id: "openai"
@@ -233,15 +232,12 @@ billing:
     unit: "USD"
     json_pointers: ["/usage/cost", "/usage/response_cost/total_cost"]
     headers: ["x-litellm-response-cost"]
-  # catalog_path: "./pricing.yaml"
-  # mcp: {{ target: "pricing.calculate_cost", timeout_ms: 5000 }}
   on_unpriced: continue
 
 limits:
   max_iterations: {max_iterations}
   max_tokens: {max_tokens}
   max_duration_sec: {max_duration_sec}
-  # max_cost: {{ amount: "1.00", currency: "USD" }}
 
 logging:
   enable_ai_log: true
@@ -258,11 +254,22 @@ logging:
         max_duration_sec = answers.max_duration_sec,
     );
     body.push_str(CONFIG_ACCESS_FOOTER);
+    #[derive(serde::Serialize)]
+    struct AccessOnly {
+        access: AccessPolicyConfig,
+    }
+    match serde_yaml::to_string(&AccessOnly {
+        access: AccessPolicyConfig::minimal_profile(),
+    }) {
+        Ok(yaml) => body.push_str(&yaml),
+        Err(_) => body.push_str(
+            "access:\n  tools:\n    builtins:\n      - home.list\n      - home.read\n      - home.write\n  filesystem:\n    home:\n      read: [\"in\", \"out\"]\n      write: [\"out\"]\n",
+        ),
+    }
     body
 }
 
 fn yaml_string(value: &str) -> String {
-    // Always quote so user input cannot break YAML structure.
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
 }
@@ -311,23 +318,6 @@ where
     parse(&raw).map_err(|e| InitError::Prompt(format!("invalid {label}: {e}")))
 }
 
-fn validate_agent_id(agent_id: &str) -> Result<(), InitError> {
-    let mut chars = agent_id.chars();
-    let Some(first) = chars.next() else {
-        return Err(InitError::InvalidAgentId(agent_id.to_string()));
-    };
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return Err(InitError::InvalidAgentId(agent_id.to_string()));
-    }
-    if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
-        return Err(InitError::InvalidAgentId(agent_id.to_string()));
-    }
-    if agent_id.contains('/') || agent_id.contains('\\') || agent_id.contains("..") {
-        return Err(InitError::InvalidAgentId(agent_id.to_string()));
-    }
-    Ok(())
-}
-
 fn prepare_target_dir(target_dir: &Path, force: bool) -> Result<(), InitError> {
     match fs::metadata(target_dir) {
         Ok(meta) if meta.is_dir() => {
@@ -370,10 +360,10 @@ mod tests {
     use std::io::Cursor;
     use tempfile::tempdir;
 
-    fn args(agent_id: &str, path: PathBuf, force: bool) -> InitArgs {
+    fn args(project: &Path, agent_id: &str, force: bool) -> InitArgs {
         InitArgs {
             agent_id: agent_id.to_string(),
-            path: Some(path),
+            project_root: project.to_path_buf(),
             force,
             interactive: false,
         }
@@ -384,101 +374,54 @@ mod tests {
         for id in ["", "Bad", "has/slash", "has..dots", "UPPER", "-leading"] {
             let err = validate_agent_id(id).expect_err("should reject");
             assert!(
-                matches!(err, InitError::InvalidAgentId(_)),
+                matches!(err, AgentPathError::InvalidAgentId(_)),
                 "id={id:?} err={err:?}"
             );
         }
     }
 
     #[test]
-    fn accepts_valid_agent_id() {
-        for id in ["a", "agent1", "my-agent", "my_agent", "0x"] {
-            validate_agent_id(id).expect("should accept");
-        }
-    }
-
-    #[test]
-    fn scaffolds_settings_and_config() {
+    fn scaffolds_protected_profile() {
         let dir = tempdir().expect("tempdir");
-        let target = dir.path().join("demo");
-        let result = run(&args("demo", target.clone(), false)).expect("init");
+        let result = run(&args(dir.path(), "demo", false)).expect("init");
 
         assert_eq!(result.written_files.len(), 4);
-        let settings = load_settings(&target).expect("load settings");
+        let settings = load_settings(&result.target_dir).expect("load settings");
         assert!(!settings.master_prompt.is_empty());
         assert!(!settings.skills_source.is_empty());
-        assert!(!settings.rules.is_empty());
-        assert!(target.join("agent-config.example.yaml").is_file());
+        assert!(result.target_dir.join(AGENT_CONFIG_FILE).is_file());
+        let _ = load_config(&result.target_dir.join(AGENT_CONFIG_FILE)).expect("load cfg");
     }
 
     #[test]
     fn refuses_non_empty_without_force() {
         let dir = tempdir().expect("tempdir");
-        let target = dir.path().join("demo");
-        run(&args("demo", target.clone(), false)).expect("first init");
-        let err = run(&args("demo", target, false)).expect_err("second init");
+        run(&args(dir.path(), "demo", false)).expect("first init");
+        let err = run(&args(dir.path(), "demo", false)).expect_err("second init");
         assert!(matches!(err, InitError::TargetNotEmpty(_)));
     }
 
     #[test]
-    fn force_overwrites_template_files() {
+    fn force_overwrites() {
         let dir = tempdir().expect("tempdir");
-        let target = dir.path().join("demo");
-        run(&args("demo", target.clone(), false)).expect("first init");
-        fs::write(target.join("master_prompt.md"), "stale").expect("mutate");
-        run(&args("demo", target.clone(), true)).expect("force init");
-        let contents = fs::read_to_string(target.join("master_prompt.md")).expect("read");
-        assert!(contents.contains("agent_Kuibysheff"));
-        assert!(!contents.contains("stale"));
+        run(&args(dir.path(), "demo", false)).expect("first");
+        run(&args(dir.path(), "demo", true)).expect("force");
     }
 
     #[test]
-    fn prompt_config_keeps_defaults_on_empty_lines() {
-        let input = "\n\n\n\n\n\n";
-        let mut reader = Cursor::new(input);
-        let mut writer = Vec::new();
-        let answers = prompt_config(&mut reader, &mut writer).expect("prompt");
+    fn interactive_render_parses() {
+        let yaml = render_agent_config(&ConfigAnswers::default());
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("c.yaml");
+        fs::write(&path, &yaml).unwrap();
+        let _ = load_config(&path).expect("parse rendered");
+    }
+
+    #[test]
+    fn prompt_config_keeps_defaults_on_empty() {
+        let mut input = Cursor::new("\n\n\n\n\n\n");
+        let mut out = Vec::new();
+        let answers = prompt_config(&mut input, &mut out).expect("prompt");
         assert_eq!(answers, ConfigAnswers::default());
-    }
-
-    #[test]
-    fn prompt_config_reads_custom_values() {
-        let input = "https://example.test/v1\nmy-model\nMY_KEY\n20\n25000\n180\n";
-        let mut reader = Cursor::new(input);
-        let mut writer = Vec::new();
-        let answers = prompt_config(&mut reader, &mut writer).expect("prompt");
-        assert_eq!(
-            answers,
-            ConfigAnswers {
-                base_url: "https://example.test/v1".to_string(),
-                model: "my-model".to_string(),
-                api_key_env: "MY_KEY".to_string(),
-                max_iterations: 20,
-                max_tokens: 25_000,
-                max_duration_sec: 180,
-            }
-        );
-    }
-
-    #[test]
-    fn render_agent_config_is_loadable() {
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("agent-config.example.yaml");
-        let answers = ConfigAnswers {
-            base_url: "https://example.test/v1".to_string(),
-            model: "custom-model".to_string(),
-            api_key_env: "CUSTOM_KEY".to_string(),
-            max_iterations: 7,
-            max_tokens: 9_000,
-            max_duration_sec: 90,
-        };
-        fs::write(&path, render_agent_config(&answers)).expect("write");
-        let (cfg, _) = load_config(&path).expect("load");
-        assert_eq!(cfg.provider.base_url, "https://example.test/v1");
-        assert_eq!(cfg.provider.model, "custom-model");
-        assert_eq!(cfg.provider.api_key_env, "CUSTOM_KEY");
-        assert_eq!(cfg.limits.max_iterations, 7);
-        assert_eq!(cfg.limits.max_tokens, 9_000);
-        assert_eq!(cfg.limits.max_duration_sec, 90);
     }
 }

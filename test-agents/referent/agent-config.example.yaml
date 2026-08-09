@@ -35,3 +35,17 @@ logging:
   enable_ai_log: true
   enable_mcp_log: true
   output_dir: "./logs"
+
+# Required capability policy (fail-closed). Escape hatch for permissive FS:
+#   access:
+#     mode: legacy
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]

@@ -23,7 +23,7 @@ pub enum SkillsError {
     Parse(String),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillDefinition {
     pub name: String,
     pub policy: String,
@@ -31,7 +31,7 @@ pub struct SkillDefinition {
     pub allowed_tools: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SkillsCatalog {
     pub skills: Vec<SkillDefinition>,
 }
@@ -102,6 +102,27 @@ impl SkillsCatalog {
         }
 
         Ok(Self { skills })
+    }
+
+    /// Emits canonical skills DSL source.
+    ///
+    /// Skills are separated by a blank line. Tool lists use qualified `server.tool` names.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut blocks = Vec::with_capacity(self.skills.len());
+        for skill in &self.skills {
+            let tools = skill
+                .allowed_tools
+                .iter()
+                .map(|tool| format!("\"{tool}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            blocks.push(format!(
+                "skill \"{}\" {{\n  policy: \"{}\"\n  allowed_tools: [{tools}]\n}}",
+                skill.name, skill.policy
+            ));
+        }
+        blocks.join("\n\n")
     }
 
     #[must_use]
@@ -180,5 +201,28 @@ mod tests {
         )
         .expect_err("bare names");
         assert!(err.to_string().contains("qualified"));
+    }
+
+    #[test]
+    fn render_round_trips_through_parse() {
+        let src = r#"
+            skill "research" {
+              policy: "use_mcp_tools_first"
+              allowed_tools: ["local_tools.search_docs", "local_tools.read_file"]
+            }
+
+            skill "edit" {
+              policy: "prefer_small_diffs"
+              allowed_tools: ["home.write_file"]
+            }
+            "#;
+        let parsed = SkillsCatalog::parse(src).expect("initial parse");
+        let rendered = parsed.render();
+        let round_trip = SkillsCatalog::parse(&rendered).expect("parse rendered");
+        assert_eq!(round_trip, parsed);
+        assert!(rendered.contains("skill \"research\" {"));
+        assert!(rendered
+            .contains("allowed_tools: [\"local_tools.search_docs\", \"local_tools.read_file\"]"));
+        assert!(rendered.contains("\n\nskill \"edit\""));
     }
 }

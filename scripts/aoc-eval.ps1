@@ -15,10 +15,17 @@
   Path to JSON task bank. Default: ./local/aoc-bank
 
 .PARAMETER Config
-  Agent runtime config. Default: ./test-agents/referent/agent-config.aoc.example.yaml
+  Provider config template (import/render source only). Default: referent AoC example.
 
 .PARAMETER SettingsDir
-  Agent settings directory. Default: ./test-agents/referent
+  Template directory imported into the protected profile. Default: ./test-agents/referent
+
+.PARAMETER Agent
+  Agent id (default: referent).
+
+.PARAMETER HomeRel
+  Relative home under .kuibysheff/ (default: homes/work).
+  Named HomeRel because PowerShell's automatic $Home/$HOME is read-only.
 
 .PARAMETER RepoRoot
   Repository root (for cargo run and relative MCP paths). Default: parent of scripts/
@@ -28,6 +35,8 @@ param(
     [string]$BankDir = "",
     [string]$Config = "",
     [string]$SettingsDir = "",
+    [string]$Agent = "referent",
+    [string]$HomeRel = "homes/work",
     [string]$RepoRoot = ""
 )
 
@@ -97,11 +106,14 @@ $baseConfigText = Get-Content -LiteralPath $Config -Raw -Encoding UTF8
 $providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://polza.ai/api/v1"
 $providerModel = Get-YamlScalar $baseConfigText "model" "deepseek/deepseek-v4-flash"
 $providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "POLZA_API_KEY"
-$providerApiKey = Get-YamlProviderApiKey $baseConfigText
 $providerTimeoutMs = Get-YamlScalar $baseConfigText "timeout_ms" "180000"
 $maxIterations = Get-YamlScalar $baseConfigText "max_iterations" "40"
 $maxTokens = Get-YamlScalar $baseConfigText "max_tokens" "500000"
 $maxDurationSec = Get-YamlScalar $baseConfigText "max_duration_sec" "900"
+
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($providerApiKeyEnv))) {
+    throw "provider API key missing: set env $providerApiKeyEnv (inline provider.api_key is rejected)"
+}
 
 function Resolve-PythonForSandbox {
     $candidates = @()
@@ -226,12 +238,42 @@ $passed = 0
 $failed = 0
 
 Write-Host "AoC eval run=$runId bank=$BankDir tasks=$($tasks.Count)"
-Write-Host "config=$Config settings=$SettingsDir model=$providerModel"
+Write-Host "config=$Config settings=$SettingsDir agent=$Agent home=$HomeRel model=$providerModel"
+
+function Ensure-AgentProfile {
+    param(
+        [string]$AgentBin,
+        [string]$ProjectRoot,
+        [string]$AgentId,
+        [string]$TemplateDir
+    )
+    $profileDir = Join-Path $ProjectRoot ".kuibysheff\protected\agents\$AgentId"
+    $configPath = Join-Path $profileDir "agent-config.yaml"
+    $skillsPath = Join-Path $profileDir "skills.dsl"
+    if ((Test-Path -LiteralPath $configPath -PathType Leaf) -and (Test-Path -LiteralPath $skillsPath -PathType Leaf)) {
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $ProjectRoot | Out-Null
+    & $AgentBin init $AgentId --project-root $ProjectRoot --force 2>$null | Out-Null
+    & $AgentBin config --project-root $ProjectRoot --agent $AgentId import --from $TemplateDir --force
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to import agent profile $AgentId from $TemplateDir"
+    }
+}
 
 Push-Location $RepoRoot
 try {
+    $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibysheff.exe"
+    if (-not (Test-Path -LiteralPath $agentExe -PathType Leaf)) {
+        throw "Release binary missing: $agentExe (run cargo build --release first)"
+    }
+    $mcpJs = Join-Path $RepoRoot "mcp-aoc-tasks.js"
+    $mcpJsPosix = ($mcpJs -replace '\\', '/')
+
     foreach ($task in $tasks) {
-        $homeDir = Join-Path $runsRoot $task.Id
+        $projectRoot = Join-Path $runsRoot $task.Id
+        $homeRel = $HomeRel -replace '\\', '/'
+        $homeDir = Join-Path $projectRoot (".kuibysheff\" + ($homeRel -replace '/', '\'))
         New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $homeDir "in") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $homeDir "out") | Out-Null
@@ -243,22 +285,20 @@ try {
         $env:AOC_HOME_DIR = $homeDir
         $env:AOC_BANK_DIR = $BankDir
 
+        Ensure-AgentProfile -AgentBin $agentExe -ProjectRoot $projectRoot -AgentId $Agent -TemplateDir $SettingsDir
+
         # Explicit env in a per-run config (MCP subprocess may not see parent env
         # reliably across shells); paths use forward slashes for YAML safety.
         $bankPosix = ($BankDir -replace '\\', '/')
         $homePosix = ($homeDir -replace '\\', '/')
         $logDirPosix = ($logDir -replace '\\', '/')
-        $runConfigPath = Join-Path $homeDir "agent-config.yaml"
-        $providerApiKeyLine = ""
-        if (-not [string]::IsNullOrWhiteSpace($providerApiKey)) {
-            $escapedApiKey = $providerApiKey.Replace('"', '\"')
-            $providerApiKeyLine = "  api_key: `"$escapedApiKey`"`n"
-        }
+        $runConfigPath = Join-Path $projectRoot ".kuibysheff\protected\agents\$Agent\agent-config.yaml"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runConfigPath) | Out-Null
         $runConfigBody = @"
 provider:
   base_url: "$providerBaseUrl"
   model: "$providerModel"
-$providerApiKeyLine  api_key_env: "$providerApiKeyEnv"
+  api_key_env: "$providerApiKeyEnv"
   timeout_ms: $providerTimeoutMs
   max_retries: 3
   retry_base_delay_ms: 500
@@ -267,7 +307,7 @@ mcp:
   - name: "aoc"
     command: "node"
     args:
-      - "./mcp-aoc-tasks.js"
+      - "$mcpJsPosix"
       - "--bank-dir=$bankPosix"
       - "--home-dir=$homePosix"
     env:
@@ -332,9 +372,6 @@ access:
         $stdoutPath = Join-Path $homeDir "agent.stdout.json"
         $stderrPath = Join-Path $homeDir "agent.stderr.txt"
 
-        $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibysheff.exe"
-        $effectiveConfig = $runConfigPath
-
         $entry = [ordered]@{
             id           = $task.Id
             expected     = $task.Expected
@@ -344,6 +381,8 @@ access:
             usage        = $null
             error        = $null
             home         = $homeDir
+            project_root = $projectRoot
+            agent        = $Agent
             log_dir      = $logDir
             logs         = $null
             elapsed_ms   = $null
@@ -356,17 +395,12 @@ access:
             $prevEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                # Always prefer a freshly built release binary so sandbox/access
-                # changes are exercised (do not silently reuse a stale exe).
-                if (-not (Test-Path -LiteralPath $agentExe -PathType Leaf)) {
-                    throw "Release binary missing: $agentExe (run cargo build --release first)"
-                }
                 $allOutput = & $agentExe `
                     run `
-                    --config $effectiveConfig `
-                    --settings-dir $SettingsDir `
+                    --project-root $projectRoot `
+                    --agent $Agent `
+                    --home $homeRel `
                     --prompt $prompt `
-                    --home $homeDir `
                     --save-chat-history `
                     2>&1
                 $exitCode = $LASTEXITCODE
@@ -468,6 +502,8 @@ $report = [ordered]@{
     bank_dir   = $BankDir
     config     = $Config
     settings   = $SettingsDir
+    agent      = $Agent
+    home_rel   = $HomeRel
     passed     = $passed
     failed     = $failed
     total      = $results.Count

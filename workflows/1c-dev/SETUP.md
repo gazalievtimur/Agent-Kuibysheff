@@ -235,11 +235,16 @@ CONFLUENCE_PERSONAL_TOKEN=...
 ```powershell
 $env:JIRA_URL = "..."
 # ... остальные env
+cargo run --bin agent_Kuibysheff -- init 1c-intake --project-root . --force
+cargo run --bin agent_Kuibysheff -- config --project-root . --agent 1c-intake `
+  import --from .\test-agents\1c-intake --force
+# при необходимости: import локального agent-config.local.yaml поверх шаблона
+
 cargo run --bin agent_Kuibysheff -- run `
-  --config .\test-agents\1c-intake\agent-config.local.yaml `
-  --settings-dir .\test-agents\1c-intake `
-  --prompt "Собери первичную информацию по задаче PROJ-123" `
-  --home .\workflows\1c-dev\runs\manual-intake
+  --project-root . `
+  --agent 1c-intake `
+  --home homes/manual-intake `
+  --prompt "Собери первичную информацию по задаче PROJ-123"
 ```
 
 Если Jira на новой машине недоступна — работайте через `-TaskFile` (intake пропускается).

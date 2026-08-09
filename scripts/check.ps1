@@ -1,6 +1,8 @@
 param(
-    [switch]$SkipAoc,
-    [switch]$SkipDeny
+    [switch]$Aoc,
+    [switch]$SkipDeny,
+    # Deprecated alias: offline is now the default; -SkipAoc is a no-op kept for scripts.
+    [switch]$SkipAoc
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,14 +34,28 @@ if ($SkipDeny -or $env:SKIP_DENY -eq "1") {
 Write-Host "Running tests..."
 cargo test --workspace
 
-if ($SkipAoc) {
-    Write-Host "Skipping AoC agent regression (-SkipAoc)."
-} else {
-    Write-Host "Running AoC agent regression..."
+Write-Host "Running portability guardrails..."
+& "$PSScriptRoot\check-portability.ps1"
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+python "$PSScriptRoot\test_detached_workflows.py"
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+$runAoc = $Aoc -or ($env:RUN_AOC -eq "1")
+if ($SkipAoc -and $runAoc) {
+    Write-Host "Note: -SkipAoc ignored because -Aoc / RUN_AOC=1 was set."
+}
+if ($runAoc) {
+    Write-Host "Running AoC agent regression (-Aoc / RUN_AOC=1)..."
     & "$PSScriptRoot\aoc-regression.ps1"
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+} else {
+    Write-Host "Skipping live AoC regression (pass -Aoc or set RUN_AOC=1)."
 }
 
 Write-Host "All checks passed."

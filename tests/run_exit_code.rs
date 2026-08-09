@@ -8,20 +8,17 @@ use tempfile::tempdir;
 #[test]
 fn run_prints_error_json_and_exits_nonzero() {
     let tmp = tempdir().expect("tempdir");
-    let missing_config = tmp.path().join("missing-config.yaml");
-    let home = tmp.path().join("home");
+    let project = tmp.path();
 
     let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
         .args([
             "run",
-            "--config",
-            missing_config.to_str().expect("utf-8 path"),
-            "--settings-dir",
-            tmp.path().to_str().expect("utf-8 path"),
+            "--project-root",
+            project.to_str().expect("utf-8 path"),
+            "--agent",
+            "missing-agent",
             "--prompt",
             "should fail before the agent loop",
-            "--home",
-            home.to_str().expect("utf-8 path"),
         ])
         .output()
         .expect("spawn agent_Kuibysheff");
@@ -46,13 +43,15 @@ fn run_prints_error_json_and_exits_nonzero() {
 #[test]
 fn check_keeps_its_own_exit_semantics() {
     let tmp = tempdir().expect("tempdir");
-    let missing_config = tmp.path().join("missing-config.yaml");
+    let project = tmp.path();
 
     let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
         .args([
             "check",
-            "--config",
-            missing_config.to_str().expect("utf-8 path"),
+            "--project-root",
+            project.to_str().expect("utf-8 path"),
+            "--agent",
+            "missing-agent",
             "--skip-provider",
             "--skip-mcp",
             "--skip-sandbox",
@@ -62,7 +61,7 @@ fn check_keeps_its_own_exit_semantics() {
 
     assert!(
         !output.status.success(),
-        "check with missing config should fail"
+        "check with missing agent profile should fail"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

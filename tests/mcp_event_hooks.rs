@@ -22,6 +22,7 @@ fn fixture_server(name: &str, handler_id: &str) -> McpServerConfig {
             command: fixture_bin(),
             args: vec!["event".to_string()],
             env: HashMap::from([("MCP_FIXTURE_HANDLER_ID".to_string(), handler_id.to_string())]),
+            cwd: None,
         }),
     }
 }
