@@ -2,6 +2,9 @@
 
 Manage Kuibysheff agent parameters and the 1C ACP workflow from the sidebar.
 
+Extension package version (`0.1.0` in `package.json`) is **independent** of the
+CLI crate version (`0.2.x`).
+
 This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host still talks ACP to `agent_Kuibysheff acp`. The extension configures YAML, syncs `acp.agents`, scaffolds `.kuibysheff/`, and runs prepare / promote / validate / approve via the existing PowerShell scripts.
 
 ## Features

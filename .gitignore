@@ -22,11 +22,20 @@ agent-config.local.yaml
 # IDE local MCP (keep mcp.json.example tracked)
 .cursor/mcp.json
 
+# Local Cursor plans (may contain machine paths / internal notes)
+.cursor/plans/
+
+# Local LLM regression reports (not committed)
+/deepseek__*.json
+
 # AoC eval data and run artifacts (not committed)
 /local/aoc-bank/
 /local/aoc-runs/
 /local/aoc-sandbox-runtime/
 /local/aoc-live-project/
+/local/security-bank/
+/local/security-runs/
+/local/security-host-canary/
 /workflows/aoc-live/project/
 
 # 1C workflow run homes (not committed)
@@ -40,6 +49,10 @@ agent-config.local.yaml
 # SWE-bench Verified workflow run artifacts (not committed)
 /workflows/swebench-verified/runs/*
 !/workflows/swebench-verified/runs/.gitkeep
+/workflows/swebench-verified/artifacts/
+
+# Local secret-scan reports (not committed)
+/local/gitleaks-report.json
 
 # Local product adapter paths (keep *.yaml.example in git)
 /workflows/1c-dev/products/*.yaml

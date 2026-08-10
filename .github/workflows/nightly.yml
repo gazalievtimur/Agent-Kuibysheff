@@ -5,6 +5,9 @@ on:
     - cron: "0 4 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -18,13 +21,13 @@ jobs:
         os: [ubuntu-24.04, ubuntu-22.04]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Allow unprivileged userns mounts
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
@@ -38,19 +41,22 @@ jobs:
         run: cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
 
   fuzz-smoke:
-    name: Fuzz / mutation smoke
+    name: Fuzz / mutation smoke (non-gating)
     runs-on: ubuntu-24.04
+    continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install nightly + cargo-fuzz
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@cargo-mutants
+        uses: taiki-e/install-action@c7682d629719024b0772bf50172eb5f2bba9e5a5 # install-action
+        with:
+          tool: cargo-mutants
 
-      # Targets are opt-in; this job documents the lane and fails soft until fuzz targets land.
+      # Soft exploratory lane only — not a required release control until fuzz targets exist.
       - name: List cargo-mutants scope
         run: |
           cargo mutants --list -p agent_Kuibysheff --examine 'src/access/**' --examine 'src/config/**' 2>&1 | head -n 40 || true
@@ -60,13 +66,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - name: Build release binary
-        run: cargo build --release -p agent_Kuibysheff
+      - name: Build release binary (locked)
+        run: cargo build --release --locked -p agent_Kuibysheff
 
       - name: Smoke --help
         run: ./target/release/agent_Kuibysheff --help

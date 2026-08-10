@@ -1,0 +1,12 @@
+# CODEOWNERS — default reviewers for sensitive paths
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @gybson63
+
+/src/ @gybson63
+/crates/sandbox-linux/ @gybson63
+/crates/sandbox-windows/ @gybson63
+/.github/workflows/ @gybson63
+/SECURITY.md @gybson63
+/deny.toml @gybson63
+/workflows/security-sandbox/ @gybson63

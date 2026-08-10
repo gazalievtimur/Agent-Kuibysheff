@@ -1,0 +1,23 @@
+name: Security vulnerability
+description: How to report a security issue privately
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not** describe exploitable details here.
+
+        Report privately via [SECURITY.md](../SECURITY.md):
+
+        - [GitHub Private Vulnerability Reporting](https://github.com/gybson63/Agent-Kuibysheff/security/advisories/new)
+        - Or the security email listed in SECURITY.md
+
+        Use this form only to ask process questions (for example, whether
+        Private Vulnerability Reporting is enabled).
+  - type: textarea
+    id: question
+    attributes:
+      label: Non-sensitive question
+      description: Process-only questions. No PoCs, secrets, or exploit steps.
+    validations:
+      required: true

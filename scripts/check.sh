@@ -3,24 +3,35 @@
 #
 # Usage:
 #   ./scripts/check.sh
-#   ./scripts/check.sh --skip-aoc
+#   ./scripts/check.sh --aoc
 #   ./scripts/check.sh --swebench
+#   ./scripts/check.sh --security
 #   ./scripts/check.sh --skip-deny
+#   ./scripts/check.sh --skip-aoc   # deprecated no-op (AoC is opt-in)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKIP_AOC=0
+RUN_AOC_FLAG=0
 RUN_SWEBENCH_FLAG=0
+RUN_SECURITY_FLAG=0
 SKIP_DENY_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --aoc|-Aoc)
+      RUN_AOC_FLAG=1
+      shift
+      ;;
     --skip-aoc|-SkipAoc)
-      SKIP_AOC=1
+      # Deprecated: offline is the default; kept for older scripts.
       shift
       ;;
     --swebench|-Swebench)
       RUN_SWEBENCH_FLAG=1
+      shift
+      ;;
+    --security|-Security)
+      RUN_SECURITY_FLAG=1
       shift
       ;;
     --skip-deny|-SkipDeny)
@@ -28,7 +39,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,10p' "$0"
+      sed -n '2,12p' "$0"
       exit 0
       ;;
     *)
@@ -62,11 +73,16 @@ fi
 echo "Running tests..."
 cargo test --workspace
 
-if [[ "$SKIP_AOC" -eq 1 ]]; then
-  echo "Skipping AoC agent regression (--skip-aoc)."
-else
-  echo "Running AoC agent regression..."
+echo "Running portability guardrails..."
+chmod +x "$SCRIPT_DIR/check-portability.sh"
+"$SCRIPT_DIR/check-portability.sh"
+python3 "$SCRIPT_DIR/test_detached_workflows.py"
+
+if [[ "$RUN_AOC_FLAG" -eq 1 || "${RUN_AOC:-}" == "1" ]]; then
+  echo "Running AoC agent regression (--aoc / RUN_AOC=1)..."
   "$SCRIPT_DIR/aoc-regression.sh"
+else
+  echo "Skipping live AoC regression (pass --aoc or set RUN_AOC=1)."
 fi
 
 if [[ "$RUN_SWEBENCH_FLAG" -eq 1 || "${RUN_SWEBENCH:-}" == "1" ]]; then
@@ -74,6 +90,13 @@ if [[ "$RUN_SWEBENCH_FLAG" -eq 1 || "${RUN_SWEBENCH:-}" == "1" ]]; then
   "$SCRIPT_DIR/swebench-regression.sh"
 else
   echo "Skipping live SWE-bench regression (pass --swebench or set RUN_SWEBENCH=1)."
+fi
+
+if [[ "$RUN_SECURITY_FLAG" -eq 1 || "${RUN_SECURITY:-}" == "1" ]]; then
+  echo "Running security sandbox LLM regression (--security / RUN_SECURITY=1)..."
+  "$SCRIPT_DIR/security-regression.sh"
+else
+  echo "Skipping live security sandbox regression (pass --security or set RUN_SECURITY=1)."
 fi
 
 echo "All checks passed."

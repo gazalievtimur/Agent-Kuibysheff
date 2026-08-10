@@ -23,8 +23,8 @@
     {
       "id": "kuibysheffRoot",
       "type": "promptString",
-      "description": "Absolute path to Agent Kuibysheff install (for prepare script)",
-      "default": "C:/Git/Agent Kuibysheff"
+      "description": "Absolute path to Agent-Kuibysheff install (for prepare script)",
+      "default": ""
     }
   ],
   "tasks": [

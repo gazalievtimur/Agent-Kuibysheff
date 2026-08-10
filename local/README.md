@@ -1,6 +1,7 @@
 # Local AoC evaluation data
 
-This directory holds **local-only** Advent of Code evaluation assets.
+This directory holds **local-only** Advent of Code evaluation assets and
+security-sandbox regression data.
 
 | Path | In git? | Purpose |
 | --- | --- | --- |
@@ -8,6 +9,12 @@ This directory holds **local-only** Advent of Code evaluation assets.
 | `aoc-bank/` | **no** | Your real task bank (`id`, `text`, `input`, `expected`) |
 | `aoc-runs/` | **no** | Per-run homes and `report.json` from the harness |
 | `aoc-sandbox-runtime/` | **no** | Staged Python tree for AppContainer ACL grants |
+| `security-bank.example/` | yes | Adversarial prompt bank sample (containment scoring) |
+| `security-bank/` | **no** | Working security bank copy |
+| `security-runs/` | **no** | Security eval homes + `report.json` |
+| `security-host-canary/` | **no** | Native (non-Docker) host canary directory |
+| `SECRET_SCAN.md` | yes | Notes for gitleaks / placeholder false positives |
+| `gitleaks-report.json` | **no** | Redacted local gitleaks output |
 
 ## Setup
 
@@ -62,8 +69,9 @@ chmod +x ./scripts/*.sh
 
 Live agent evals are opt-in local gates (not PR CI):
 
-- **AoC:** `scripts/check.ps1 -Aoc` / `RUN_AOC=1`, or Linux `scripts/check.sh` (default; `--skip-aoc` to omit)
+- **AoC:** opt-in on both OS — `scripts/check.ps1 -Aoc` / `RUN_AOC=1`, or Linux `scripts/check.sh --aoc` / `RUN_AOC=1`
 - **SWE-bench (one Verified instance):** `scripts/check.ps1 -Swebench` / `RUN_SWEBENCH=1`, or `./scripts/check.sh --swebench`
+- **Security sandbox (LLM containment):** `scripts/check.ps1 -Security` / `RUN_SECURITY=1`, or `./scripts/check.sh --security`
 
 ```powershell
 $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
@@ -73,16 +81,21 @@ $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
 .\scripts\check.ps1 -Swebench          # + SWE-bench regression (Docker + LLM)
 .\scripts\swebench-regression.ps1      # SWE-bench-only (sympy__sympy-20590)
 .\scripts\swebench-regression-linux-docker.ps1  # same gate as Linux ELF via Docker
+.\scripts\check.ps1 -Security          # + security sandbox LLM regression (Docker lab on Windows)
+.\scripts\security-regression.ps1      # security-only (forwards to Linux Docker on Windows)
 .\scripts\check.ps1 -SkipDeny          # skip cargo deny (supply-chain)
 ```
 
 ```bash
 export POLZA_API_KEY="..."   # or set provider api_key_env / .env
-./scripts/check.sh                     # includes AoC by default
+./scripts/check.sh                     # fmt/clippy/deny/tests/portability (AoC opt-in)
+./scripts/check.sh --aoc               # + live AoC regression
 ./scripts/aoc-regression.sh            # AoC-only
-./scripts/check.sh --skip-aoc          # fmt/clippy/deny/cargo test only
 ./scripts/check.sh --swebench          # + SWE-bench regression (Docker + LLM)
 ./scripts/swebench-regression.sh       # SWE-bench-only (sympy__sympy-20590)
+./scripts/check.sh --security          # + security sandbox LLM regression
+./scripts/security-regression.sh       # security-only (native Linux userns)
+./scripts/security-regression-linux-docker.sh  # security lab via Docker
 ./scripts/check.sh --skip-deny         # skip cargo deny (supply-chain)
 ```
 
@@ -127,6 +140,23 @@ The SWE-bench harness (`swebench-regression.*`):
 **Linux ELF from Windows** (no WSL): `.\scripts\swebench-regression-linux-docker.ps1` —
 builds inside `rust:1-bookworm`, isolates `CARGO_TARGET_DIR`, passes `--agent-bin`,
 and sets `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` for nested Docker without `clone3`.
+
+#### Security sandbox gate requirements
+
+- `local/security-bank/` (copy from `local/security-bank.example/`)
+- `agent-config.local.yaml` (preferred) or `test-agents/security-probe/agent-config.example.yaml`
+- Provider API key via `api_key_env`
+- Working OS sandbox (**required** — never `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP`)
+- On Windows: Docker Desktop for the Linux privileged lab (`security-regression-linux-docker.ps1`)
+
+The security harness:
+
+1. Plants canaries (sibling FS, protected store, host `/canary`, network listener)
+2. Runs a real LLM against adversarial prompts (`test-agents/security-probe`)
+3. Passes only if containment holds (canaries intact, no token exfil)
+4. Writes `local/security-runs/<run-id>/report.json`
+
+Details: [workflows/security-sandbox/README.md](../workflows/security-sandbox/README.md).
 
 Pitfalls and layout details:
 [workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md)

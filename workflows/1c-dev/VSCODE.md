@@ -1,6 +1,6 @@
 # 1С-воркфлоу в VS Code: проект + `.kuibysheff`
 
-Открываете в VS Code **папку продукта** (например `C:\ПервыйБИТ\Первый.Гит\ЗУП`), а не репозиторий Kuibysheff. Настройки агентов (MCP, `workspace.root`, prompts) лежат в проекте и правятся под него. Ядро агента универсально и не знает про конкретные MCP.
+Открываете в VS Code **папку продукта** (например `path/to/your-1c-product`), а не репозиторий Kuibysheff. Настройки агентов (MCP, `workspace.root`, prompts) лежат в проекте и правятся под него. Ядро агента универсально и не знает про конкретные MCP.
 
 ```text
 ЗУП/                          ← VS Code workspace / --project-root
@@ -29,9 +29,9 @@ CLI и ACP адресуют агента так:
 ## 1. Один раз: установить Kuibysheff
 
 ```powershell
-cd C:\Git
-git clone https://github.com/gybson63/Agent-Kuibysheff.git "Agent Kuibysheff"
-cd "Agent Kuibysheff"
+cd $HOME\src   # or any directory you prefer
+git clone https://github.com/gybson63/Agent-Kuibysheff.git
+cd Agent-Kuibysheff
 cargo build --release --bin agent_Kuibysheff
 # добавьте target\release в PATH
 ```
@@ -47,7 +47,7 @@ cargo build --release --bin agent_Kuibysheff
 В репозитории есть расширение [`extensions/vscode/`](../../extensions/vscode/) — sidebar для параметров агентов, scaffold и prepare/promote/approve/validate.
 
 ```powershell
-cd "C:\Git\Agent Kuibysheff\extensions\vscode"
+cd path\to\Agent-Kuibysheff\extensions\vscode
 npm install
 npm run compile
 ```
@@ -70,8 +70,8 @@ npm run compile
 CLI (если без расширения):
 
 ```powershell
-cd "C:\Git\Agent Kuibysheff"
-.\scripts\1c-dev-scaffold-project.ps1 -ProjectRoot "C:\ПервыйБИТ\Первый.Гит\ЗУП"
+cd path\to\Agent-Kuibysheff
+.\scripts\1c-dev-scaffold-project.ps1 -ProjectRoot "path\to\your-1c-product"
 ```
 
 Скрипт создаёт:
@@ -103,11 +103,11 @@ cd "C:\Git\Agent Kuibysheff"
 4. Prepare (расширение **Prepare stage**, Task **1c: prepare stage**, или CLI):
 
 ```powershell
-& "C:\Git\Agent Kuibysheff\scripts\1c-dev-acp-prepare.ps1" `
-  -ProjectRoot "C:\ПервыйБИТ\Первый.Гит\ЗУП" `
-  -RepoRoot "C:\Git\Agent Kuibysheff" `
+& "path\to\Agent-Kuibysheff\scripts\1c-dev-acp-prepare.ps1" `
+  -ProjectRoot "path\to\your-1c-product" `
+  -RepoRoot "path\to\Agent-Kuibysheff" `
   -IssueKey PROJ-42 `
-  -TaskFile "C:\ПервыйБИТ\Первый.Гит\ЗУП\PROJ-42\tz.md" `
+  -TaskFile "path\to\your-1c-product\PROJ-42\tz.md" `
   -Stage 2
 ```
 

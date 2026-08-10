@@ -8,21 +8,22 @@ Miri CI runs only library unit tests (`cargo miri test -p sandbox-linux --lib`).
 Namespace integration tests need host `stat`/`unshare`/`fork` and are not
 Miri-isolatable.
 
-## Known lab host
+## Lab Linux host (generic)
 
-| Item | Value |
-|------|--------|
-| Address | `192.168.68.119` |
-| SSH alias | `ubuntu-laptop` (see `~/.ssh/config`) |
-| User | `aidev` |
-| Identity | `~/.ssh/id_ed25519` |
-| Kernel (observed) | `7.0.0-27-generic` |
-| Rust | rustup, `1.85.0` at `$HOME/.cargo/bin` |
+Use any Linux machine where you can enable unprivileged user namespaces.
+Do not commit real hostnames, LAN IPs, usernames, or SSH identity paths.
+
+| Item | Example placeholder |
+|------|---------------------|
+| SSH host alias | `YOUR_LINUX_HOST` (see `~/.ssh/config`) |
+| Remote user | `youruser` |
+| Identity file | `~/.ssh/id_ed25519` (or your key path) |
+| Rust | rustup on `PATH` (`$HOME/.cargo/bin`) |
 
 ```sshconfig
-Host ubuntu-laptop
-    HostName 192.168.68.119
-    User aidev
+Host YOUR_LINUX_HOST
+    HostName your.linux.host.example
+    User youruser
     IdentityFile ~/.ssh/id_ed25519
     ServerAliveInterval 60
     ServerAliveCountMax 3
@@ -31,7 +32,7 @@ Host ubuntu-laptop
 Smoke check:
 
 ```bash
-ssh ubuntu-laptop 'uname -r; rustc --version; cat /proc/sys/kernel/unprivileged_userns_clone; cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns'
+ssh YOUR_LINUX_HOST 'uname -r; rustc --version; cat /proc/sys/kernel/unprivileged_userns_clone; cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns'
 ```
 
 Expect `unprivileged_userns_clone=1`. For mounts inside a userns to work, either
@@ -55,26 +56,29 @@ supervisor is the trusted creator of namespaces; payloads stay tightly confined.
 Target model: AppArmor profile with `userns` for the agent helper only (same
 idea as `/etc/apparmor.d/bwrap-userns-restrict`).
 
-Passwordless sudo is not configured on the lab host; the sysctl must be set
+If passwordless sudo is not configured on the lab host, set the sysctl
 interactively on the machine.
 
 ## Sync from Windows (dev machine)
 
-Repo path contains a space (`Agent Kuibysheff`). Prefer extracting to a path
-**without** spaces on the Linux host.
+Prefer a checkout path **without** spaces on the Linux host. Clone or copy the
+repo to a local directory of your choice (examples below use placeholders).
 
 PowerShell (from the Windows checkout):
 
 ```powershell
+$repoRoot = "path\to\Agent-Kuibysheff"   # your local clone
 $dest = "$env:TEMP\agent-kuibysheff-linux.tgz"
 tar -czf $dest --exclude=target --exclude=.git --exclude=src/.code-index --exclude=.env `
-  -C "C:\Git" "Agent Kuibysheff"
-scp -o BatchMode=yes $dest ubuntu-laptop:/tmp/agent-kuibysheff-linux.tgz
-ssh -o BatchMode=yes ubuntu-laptop @"
+  -C (Split-Path $repoRoot -Parent) (Split-Path $repoRoot -Leaf)
+scp -o BatchMode=yes $dest YOUR_LINUX_HOST:/tmp/agent-kuibysheff-linux.tgz
+ssh -o BatchMode=yes YOUR_LINUX_HOST @"
 export PATH=`$HOME/.cargo/bin:`$PATH
 rm -rf `$HOME/src/agent-kuibysheff-test
-tar -xzf /tmp/agent-kuibysheff-linux.tgz -C /tmp
-mv '/tmp/Agent Kuibysheff' `$HOME/src/agent-kuibysheff-test
+mkdir -p /tmp/agent-kuibysheff-extract
+tar -xzf /tmp/agent-kuibysheff-linux.tgz -C /tmp/agent-kuibysheff-extract
+# Move the extracted top-level directory into place (name may vary).
+mv /tmp/agent-kuibysheff-extract/* `$HOME/src/agent-kuibysheff-test
 cd `$HOME/src/agent-kuibysheff-test
 cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
 "@
@@ -109,7 +113,7 @@ cp -Rn ./local/aoc-bank.example ./local/aoc-bank   # if bank missing
 # Provide API key via .env / agent-config.local.yaml / POLZA_API_KEY
 ./scripts/aoc-regression.sh
 ./scripts/aoc-regression.sh --task-id 2024-01-1
-./scripts/check.sh --skip-aoc   # fmt/clippy/cargo test only
+./scripts/check.sh            # fmt/clippy/cargo test; AoC is opt-in (--aoc)
 ```
 
 Requires Node.js + `python3` on `PATH`, a populated `local/aoc-bank/`, and working

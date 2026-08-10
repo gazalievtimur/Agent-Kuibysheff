@@ -1,5 +1,8 @@
 # Architecture review backlog
 
+> Engineering backlog (not product documentation). Status notes may be in
+> Russian or English.
+
 Индекс пунктов из архитектурной оценки `agent_Kuibysheff` (2026-08-02).
 Каждый пункт — отдельный файл; работаем по одному.
 

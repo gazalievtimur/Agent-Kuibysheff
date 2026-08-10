@@ -13,6 +13,11 @@ User-facing docs for `agent_Kuibysheff`.
 | [LOGGING.md](LOGGING.md) | Log files, sinks, and chat history |
 | [OUTPUT.md](OUTPUT.md) | `RunOutput` JSON and exit codes |
 | [RELEASING.md](RELEASING.md) | Prebuilt binaries and release tags |
+| [INSTALL.md](INSTALL.md) | Install / upgrade / uninstall |
+| [../CHANGELOG.md](../CHANGELOG.md) | Version history and migrations |
+| [../SECURITY.md](../SECURITY.md) | Vulnerability reporting |
+| [../SUPPORT.md](../SUPPORT.md) | Support policy |
+| [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md) | Public-release readiness checklist |
 
 ## Workflows and examples
 

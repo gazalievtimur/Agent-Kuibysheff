@@ -64,9 +64,9 @@
 
 ```powershell
 # Каталог на ваш вкус
-cd C:\Git
-git clone https://github.com/gybson63/Agent-Kuibysheff.git "Agent Kuibysheff"
-cd "Agent Kuibysheff"
+cd $HOME\src
+git clone https://github.com/gybson63/Agent-Kuibysheff.git
+cd Agent-Kuibysheff
 
 # Вариант A: собрать из исходников
 cargo build --release --bin agent_Kuibysheff
@@ -127,7 +127,7 @@ provider:
 Файлы `agent-config.example.yaml` содержат **плейсхолдеры путей**. На новом ПК:
 
 ```powershell
-cd "C:\Git\Agent Kuibysheff"
+cd path\to\Agent-Kuibysheff
 foreach ($a in @("1c-intake","1c-analyst","1c-coder","1c-implementer")) {
   Copy-Item ".\test-agents\$a\agent-config.example.yaml" `
             ".\test-agents\$a\agent-config.local.yaml"
@@ -339,14 +339,14 @@ docker run -d --name mcp-searxng -p 3000:3000 `
 
 ### 12.1. Без Jira — от файла задачи
 
-Создайте файл ТЗ, например `D:\tmp\task.md`, затем:
+Создайте файл ТЗ, например `path\to\task.md`, затем:
 
 ```powershell
-cd "C:\Git\Agent Kuibysheff"
+cd path\to\Agent-Kuibysheff
 
 .\scripts\1c-dev-run.ps1 `
   -Product demo `
-  -TaskFile D:\tmp\task.md `
+  -TaskFile path\to\task.md `
   -IssueKey PROJ-99999 `
   -Stage 2
 ```
