@@ -51,6 +51,15 @@ agent-config.local.yaml
 !/workflows/swebench-verified/runs/.gitkeep
 /workflows/swebench-verified/artifacts/
 
+# Scale-FS live regression (working banks / runs)
+/local/scale-fs-bank/
+/local/scale-fs-runs/
+/local/scale-fs-sandbox-runtime/
+
+# Scale-FS live workflow run homes (not committed)
+/workflows/scale-fs-live/runs/*
+!/workflows/scale-fs-live/runs/.gitkeep
+
 # Local secret-scan reports (not committed)
 /local/gitleaks-report.json
 

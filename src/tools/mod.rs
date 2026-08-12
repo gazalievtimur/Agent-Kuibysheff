@@ -6,6 +6,7 @@
 pub(crate) mod error;
 pub mod fs_home;
 pub mod local_tools;
+pub(crate) mod read_window;
 pub mod registry;
 
 pub use error::{ExternalToolError, HomeFsError, LocalToolsError, PolicyError, ToolError};

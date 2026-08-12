@@ -2,6 +2,7 @@ param(
     [switch]$Aoc,
     [switch]$Swebench,
     [switch]$Security,
+    [switch]$ScaleFs,
     [switch]$SkipDeny,
     # Deprecated alias: offline is now the default; -SkipAoc is a no-op kept for scripts.
     [switch]$SkipAoc
@@ -80,6 +81,17 @@ if ($runSecurity) {
     }
 } else {
     Write-Host "Skipping live security sandbox regression (pass -Security or set RUN_SECURITY=1)."
+}
+
+$runScaleFs = $ScaleFs -or ($env:RUN_SCALE_FS -eq "1")
+if ($runScaleFs) {
+    Write-Host "Running Scale-FS live LLM regression (-ScaleFs / RUN_SCALE_FS=1)..."
+    & "$PSScriptRoot\scale-fs-regression.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+} else {
+    Write-Host "Skipping live Scale-FS regression (pass -ScaleFs or set RUN_SCALE_FS=1)."
 }
 
 Write-Host "All checks passed."

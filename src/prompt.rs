@@ -81,7 +81,7 @@ fn prompt_line_for(
             ))
         }
         BuiltinPrompt::WorkspaceReadFile => Some(format!(
-            "- {} {{\"path\":\"relative/path\",\"max_chars\":6000}}. Reads from the workspace root (`{workspace}`), not from home.",
+            "- {} {{\"path\":\"relative/path\",\"offset\":0,\"max_chars\":6000}}. Reads a character window from the workspace root (`{workspace}`), not from home. If truncated, continue with next_offset.",
             descriptor.name,
             workspace = workspace.display()
         )),
