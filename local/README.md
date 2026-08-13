@@ -77,6 +77,11 @@ Live agent evals are opt-in local gates (not PR CI):
 - **Security sandbox (LLM containment):** `scripts/check.ps1 -Security` / `RUN_SECURITY=1`, or `./scripts/check.sh --security`
 - **Scale-FS (many files / large reads):** `scripts/check.ps1 -ScaleFs` / `RUN_SCALE_FS=1`, or `./scripts/check.sh --scale-fs`
 
+Security sandbox LLM regression is opt-in:
+
+- Windows: `scripts/check.ps1 -Security` / `RUN_SECURITY=1`
+- Linux: `./scripts/check.sh --security` / `RUN_SECURITY=1`
+
 ```powershell
 $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
 .\scripts\check.ps1                    # fmt/clippy/deny/cargo test (no live evals)
