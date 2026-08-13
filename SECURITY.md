@@ -55,9 +55,9 @@ Please include:
   AppContainer constrain `home.run` payloads; they are not a full VM isolation
   boundary and do not replace host hardening.
 
-See [CONTRACT.md](CONTRACT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-and [workflows/security-sandbox/README.md](workflows/security-sandbox/README.md)
-for operational detail.
+See [CONTRACT.md](CONTRACT.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for operational detail. Opt-in security LLM regression lives under the local
+`workflows/security-sandbox/` copy-unit (gitignored; restore from git history).
 
 ## Non-security bugs
 

@@ -1,7 +1,15 @@
-# Local AoC evaluation data
+# Local evaluation data
 
 This directory holds **local-only** Advent of Code evaluation assets,
 security-sandbox regression data, and Scale-FS live regression assets.
+
+Example orchestrator / harness copy-units live under repo-root `workflows/`
+and are **gitignored** (not part of the published product tree). Restore them
+from git history when you need offline smokes or opt-in live regressions:
+
+```bash
+git checkout <commit-before-untrack> -- workflows
+```
 
 | Path | In git? | Purpose |
 | --- | --- | --- |
@@ -135,7 +143,8 @@ The AoC harness:
 #### SWE-bench gate requirements
 
 - Docker Desktop / Linux engine (x86_64 images)
-- `pip install -r workflows/swebench-verified/requirements.txt`
+- Restored `workflows/swebench-verified/` (gitignored copy-unit) +
+  `pip install -r workflows/swebench-verified/requirements.txt`
 - `agent-config.local.yaml` (preferred) or `test-agents/swebench-solver/agent-config.example.yaml`
 - Provider API key via `api_key_env`
 - Disk/time for the official instance image
@@ -145,7 +154,7 @@ The SWE-bench harness (`swebench-regression.*`):
 1. Checks Docker Linux + Python deps + API key (no gold harness)
 2. Builds `target/release`
 3. Runs `generate → grade → report` for fixed instance `sympy__sympy-20590`
-4. Asserts `harness_resolved=true` via `workflows/swebench-verified/assert_regression.py`
+4. Asserts `harness_resolved=true` via the copy-unit `assert_regression.py`
 5. Prints UX summary (stop_reason, elapsed, usage/cost) even on failure
 
 **Windows native** uses the PE worker + `harness_bootstrap.py` (LF for grade scripts).
@@ -156,6 +165,7 @@ and sets `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` for nested Docker without `clone3`
 
 #### Security sandbox gate requirements
 
+- Restored `workflows/security-sandbox/` (gitignored copy-unit)
 - `local/security-bank/` (copy from `local/security-bank.example/`)
 - `agent-config.local.yaml` (preferred) or `test-agents/security-probe/agent-config.example.yaml`
 - Provider API key via `api_key_env`
@@ -169,10 +179,9 @@ The security harness:
 3. Passes only if containment holds (canaries intact, no token exfil)
 4. Writes `local/security-runs/<run-id>/report.json`
 
-Details: [workflows/security-sandbox/README.md](../workflows/security-sandbox/README.md).
-
 #### Scale-FS live gate requirements
 
+- Restored `workflows/scale-fs-live/` (gitignored copy-unit)
 - `local/scale-fs-bank/` (auto-copied from `local/scale-fs-bank.example/` by the script)
 - `agent-config.local.yaml` (preferred) or `test-agents/scale-fs-probe/agent-config.example.yaml`
 - Provider API key via `api_key_env`
@@ -186,12 +195,6 @@ The Scale-FS harness:
 3. Imports `test-agents/scale-fs-probe` and rewrites workspace paths
 4. Runs a real LLM; asserts planted `SF_NEEDLE_…` appears in `RunOutput.result`
 5. Writes `local/scale-fs-runs/<run-id>/report.json`
-
-Details: [workflows/scale-fs-live/README.md](../workflows/scale-fs-live/README.md).
-
-Pitfalls and layout details:
-[workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md)
-(section *Regression gate*).
 
 On Linux the AoC harness uses the host `python3` directly (namespace mounts cover
 runtime roots). See also [crates/sandbox-linux/TESTING.md](../crates/sandbox-linux/TESTING.md)

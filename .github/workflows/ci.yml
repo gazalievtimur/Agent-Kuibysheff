@@ -140,19 +140,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: AoC-live offline smoke
-        run: python workflows/aoc-live/test_smoke_offline.py
-
       - name: Coverage ratchet unit tests
         working-directory: scripts
         run: python -m unittest test_coverage_ratchet -v
-
-      - name: Security sandbox lib unit tests
-        working-directory: workflows/security-sandbox
-        run: python -m unittest test_security_lib -v
-
-      - name: Detached workflow unit tests
-        run: python scripts/test_detached_workflows.py
 
       - name: Portability guardrails (Linux)
         if: runner.os == 'Linux'

@@ -28,6 +28,18 @@ ALREADY_IN_LAB=0
 REQUIRE_LIMITS=0
 REQUIRE_COST_LIMIT=0
 TASK_IDS=()
+WORKFLOW_DIR="$REPO_ROOT/workflows/security-sandbox"
+
+if [[ ! -d "$WORKFLOW_DIR" ]]; then
+  cat >&2 <<'EOF'
+workflows/security-sandbox not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+EOF
+  exit 1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

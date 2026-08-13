@@ -71,6 +71,7 @@ Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-ao
 
 ## Scale-FS probe
 
-`test-agents/scale-fs-probe/` — профиль для live-регрессии на больших FS-корпусах
-(поиск по многим файлам, windowed `home.read`). См.
-[workflows/scale-fs-live/README.md](../workflows/scale-fs-live/README.md).
+`test-agents/scale-fs-probe/` — profile for live regression on large FS corpora
+(many-file search, windowed `home.read`). Harness:
+`scripts/scale-fs-regression.*` (requires local `workflows/scale-fs-live/`
+restored from git history). See [local/README.md](../local/README.md).

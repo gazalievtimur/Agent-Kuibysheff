@@ -34,6 +34,17 @@ Set-Location $RepoRoot
 . (Join-Path $PSScriptRoot "import-dotenv.ps1")
 Import-DotEnv (Join-Path $RepoRoot ".env")
 
+$WorkflowDir = Join-Path $RepoRoot "workflows\swebench-verified"
+if (-not (Test-Path -LiteralPath $WorkflowDir -PathType Container)) {
+    throw @"
+workflows/swebench-verified not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+"@
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "docker CLI is required to launch the Linux SWE-bench runner container."
 }

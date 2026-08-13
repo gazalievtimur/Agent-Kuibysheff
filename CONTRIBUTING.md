@@ -31,7 +31,7 @@ The Apache License does not grant rights to use the names **Kuibysheff**,
 | --- | --- |
 | Rust | **1.88+** (MSRV; see `rust-version` in `Cargo.toml`) |
 | Node.js | **20+** (VS Code extension under `extensions/vscode`) |
-| Python | **3.12+** (workflow / eval scripts) |
+| Python | **3.12+** (coverage ratchet / local eval scripts) |
 | Docker / WSL | Optional; required for some Linux sandbox / SWE-bench / security lab flows |
 
 Clone with submodules (Cursor rust-skills under `.cursor/skills/rust-skills`):
@@ -65,12 +65,21 @@ Run the offline quality gate before opening a PR:
 ./scripts/check.sh
 ```
 
-Both run `fmt`, Clippy, `cargo deny`, tests, portability, and detached-workflow
-unit tests. Live LLM regressions are **opt-in**:
+Both run `fmt`, Clippy, `cargo deny`, tests, and portability checks. When a local
+`workflows/` tree is present (gitignored copy-units), they also run detached
+workflow smoke tests. Live LLM regressions are **opt-in** and need the matching
+copy-unit restored from git history (except AoC, which uses `local/aoc-bank`):
 
 - AoC: `-Aoc` / `--aoc` or `RUN_AOC=1`
 - SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1`
 - Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1`
+- Scale-FS: `-ScaleFs` / `--scale-fs` or `RUN_SCALE_FS=1`
+
+Restore copy-units for local testing:
+
+```bash
+git checkout <commit-before-untrack> -- workflows
+```
 
 Install `cargo-deny` if needed: `cargo install --locked cargo-deny`.
 

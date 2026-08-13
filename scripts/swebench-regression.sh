@@ -30,6 +30,17 @@ INSTANCE_ID="sympy__sympy-20590"
 CONFIG=""
 AGENT_BIN=""
 
+if [[ ! -d "$WORKFLOW_DIR" ]]; then
+  cat >&2 <<'EOF'
+workflows/swebench-verified not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+EOF
+  exit 1
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)

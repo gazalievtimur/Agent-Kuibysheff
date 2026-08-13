@@ -6,11 +6,14 @@ external orchestrator.
 
 Multi-stage product workflows may chain several `run` invocations (different
 `--agent` / `--home` per stage under one `--project-root`) and hand off `out/`
-artifacts between them. An example is the 1C conveyor under
-[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`). The same
-four profiles can be driven from an IDE as **four ACP registrations** plus an
-external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
-[`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md).
+artifacts between them. An example is the 1C conveyor driven by
+[`scripts/1c-dev-run.ps1`](scripts/1c-dev-run.ps1) with stage profiles under
+[`test-agents/1c-*`](test-agents/). The same four profiles can be driven from an
+IDE as **four ACP registrations** plus an external prepare/promote helper
+([`scripts/1c-dev-acp-prepare.ps1`](scripts/1c-dev-acp-prepare.ps1)); see
+[`extensions/vscode/README.md`](extensions/vscode/README.md).
+The full 1C copy-unit (prompts, adapters, product YAML) is a local-only package
+under `workflows/1c-dev/` (gitignored; restore from git history for testing).
 
 ## Invocation
 
@@ -214,7 +217,7 @@ let mut child = Command::new("agent_Kuibysheff")
   sequential prompts do not panic; switching log directories mid-process is rejected.
 
 Example VS Code ACP Client settings when the **product folder** is the
-workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
+workspace (see [`extensions/vscode/README.md`](extensions/vscode/README.md)):
 
 ```json
 "acp.agents": {
