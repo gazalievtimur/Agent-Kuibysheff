@@ -10,7 +10,7 @@ serde = "1"
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 tempfile = "3"
 libc = "0.2"
-windows-sys = "0.59"
+windows-sys = "0.61"
 
 [package]
 name = "agent_Kuibysheff"
