@@ -26,6 +26,17 @@ DOCKER_STATIC_VERSION="${DOCKER_STATIC_VERSION:-27.5.1}"
 REPO_ROOT="${REPO_ROOT:-/work}"
 cd "$REPO_ROOT"
 
+if [[ ! -d "$REPO_ROOT/workflows/swebench-verified" ]]; then
+  cat >&2 <<'EOF'
+workflows/swebench-verified not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+EOF
+  exit 1
+fi
+
 # Host checkout on Windows often has CRLF shebangs; strip before bash executes them.
 if command -v sed >/dev/null 2>&1; then
   find scripts workflows/swebench-verified -type f -name '*.sh' -print0 \

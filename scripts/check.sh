@@ -40,10 +40,6 @@ while [[ $# -gt 0 ]]; do
       RUN_SCALE_FS_FLAG=1
       shift
       ;;
-    --security|-Security)
-      RUN_SECURITY_FLAG=1
-      shift
-      ;;
     --skip-deny|-SkipDeny)
       SKIP_DENY_FLAG=1
       shift
@@ -86,7 +82,11 @@ cargo test --workspace
 echo "Running portability guardrails..."
 chmod +x "$SCRIPT_DIR/check-portability.sh"
 "$SCRIPT_DIR/check-portability.sh"
-python3 "$SCRIPT_DIR/test_detached_workflows.py"
+if [[ -d "$SCRIPT_DIR/../workflows" ]]; then
+  python3 "$SCRIPT_DIR/test_detached_workflows.py"
+else
+  echo "Skipping detached workflow tests (workflows/ not present)."
+fi
 
 if [[ "$RUN_AOC_FLAG" -eq 1 || "${RUN_AOC:-}" == "1" ]]; then
   echo "Running AoC agent regression (--aoc / RUN_AOC=1)..."
@@ -114,13 +114,6 @@ if [[ "$RUN_SCALE_FS_FLAG" -eq 1 || "${RUN_SCALE_FS:-}" == "1" ]]; then
   "$SCRIPT_DIR/scale-fs-regression.sh"
 else
   echo "Skipping live Scale-FS regression (pass --scale-fs or set RUN_SCALE_FS=1)."
-fi
-
-if [[ "$RUN_SECURITY_FLAG" -eq 1 || "${RUN_SECURITY:-}" == "1" ]]; then
-  echo "Running security sandbox LLM regression (--security / RUN_SECURITY=1)..."
-  "$SCRIPT_DIR/security-regression.sh"
-else
-  echo "Skipping live security sandbox regression (pass --security or set RUN_SECURITY=1)."
 fi
 
 echo "All checks passed."

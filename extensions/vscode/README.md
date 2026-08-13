@@ -52,4 +52,6 @@ Or install a local VSIX after `npx @vscode/vsce package` from `extensions/vscode
 5. **Prepare stage** → copy chat starter → chat with the matching ACP agent (`1c-analyst`, …).
 6. Promote / Validate / Approve plan as needed.
 
-See also [workflows/1c-dev/VSCODE.md](https://github.com/gybson63/Agent-Kuibysheff/blob/main/workflows/1c-dev/VSCODE.md).
+See also monorepo scripts `scripts/1c-dev-scaffold-project.ps1` /
+`scripts/1c-dev-acp-prepare.ps1`. The full 1C copy-unit docs live under local
+`workflows/1c-dev/` when restored from git history.

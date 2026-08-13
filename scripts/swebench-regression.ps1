@@ -38,6 +38,15 @@ $WorkflowDir = Join-Path $RepoRoot "workflows\swebench-verified"
 $Requirements = Join-Path $WorkflowDir "requirements.txt"
 $AssertScript = Join-Path $WorkflowDir "assert_regression.py"
 
+if (-not (Test-Path -LiteralPath $WorkflowDir -PathType Container)) {
+    throw @"
+workflows/swebench-verified not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+"@
+}
 if (-not (Test-Path -LiteralPath $AssertScript -PathType Leaf)) {
     throw "assert_regression.py not found: $AssertScript"
 }

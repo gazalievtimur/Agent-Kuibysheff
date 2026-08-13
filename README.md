@@ -120,21 +120,25 @@ long-lived process per agent. Full bridge contract:
 [CONTRACT.md](CONTRACT.md#acp-ide-messengers-mail-bridges).
 VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
 
-## Example workflows
+## Local eval / copy-units
 
-- **1C development conveyor** (Jira/Confluence → analysis → coder → CFE):
-  [workflows/1c-dev/README.md](workflows/1c-dev/README.md),
-  [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md)
-- **Live Advent of Code** (ACP singleton: download → solve → submit → retry):
-  [workflows/aoc-live/README.md](workflows/aoc-live/README.md)
-- **SWE-bench Verified** (Docker patches + official harness; opt-in local regression via
-  `scripts/swebench-regression.*` / `check.* -Swebench`; Linux ELF from Windows via
-  `scripts/swebench-regression-linux-docker.ps1`):
-  [workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
-- **Security sandbox LLM regression** (adversarial prompts, containment canaries, Docker
-  outer lab; `scripts/security-regression.*` / `check.* -Security`; never weakens OS
-  sandbox probe):
-  [workflows/security-sandbox/README.md](workflows/security-sandbox/README.md)
+Example orchestrators and live LLM regression harnesses live under `workflows/`
+**locally only** (gitignored). They are not part of the published product tree.
+Restore from git history when you need them for testing:
+
+```bash
+git checkout <commit-before-untrack> -- workflows
+```
+
+Opt-in gates (require restored copy-units where applicable):
+
+- SWE-bench: `scripts/swebench-regression.*` / `check.* -Swebench`
+- Security sandbox: `scripts/security-regression.*` / `check.* -Security`
+- Scale-FS: `scripts/scale-fs-regression.*` / `check.* -ScaleFs`
+- AoC: `scripts/aoc-regression.*` / `check.* -Aoc` (uses `local/aoc-bank`, not `workflows/`)
+
+Agent profile templates: [test-agents/README.md](test-agents/README.md).
+Local banks and run artifacts: [local/README.md](local/README.md).
 
 ## Configuration
 

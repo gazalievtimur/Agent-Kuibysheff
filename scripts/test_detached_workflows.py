@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+WORKFLOWS = REPO / "workflows"
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
@@ -129,10 +130,39 @@ def test_1c_detached_scaffold() -> None:
         assert (project / ".kuibysheff" / "product.yaml").is_file()
 
 
+def test_security_scan_exfil_offline() -> None:
+    src = REPO / "workflows" / "security-sandbox"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        dest = root / "security-sandbox"
+        elsewhere = root / "elsewhere"
+        elsewhere.mkdir()
+        _copy_tree(src, dest)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(dest)
+        proc = subprocess.run(
+            [sys.executable, str(dest / "test_scan_exfil_offline.py")],
+            cwd=str(elsewhere),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "OK:" in proc.stdout
+
+
 def main() -> int:
+    if not WORKFLOWS.is_dir():
+        print(
+            "skip: workflows/ not present "
+            "(gitignored copy-units; restore from git history for local testing)"
+        )
+        return 0
     test_aoc_detached_prepare()
     test_swe_detached_defaults()
     test_1c_detached_scaffold()
+    test_security_scan_exfil_offline()
     print("OK: detached workflow copy-unit smokes passed")
     return 0
 

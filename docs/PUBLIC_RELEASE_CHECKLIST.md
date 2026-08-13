@@ -48,8 +48,8 @@
   массовый `git add .` перед первым публичным коммитом.
 - [ ] Не публиковать локальные отчёты
   `deepseek__deepseek-v4-flash.*.json`.
-- [ ] Не публиковать сгенерированный каталог
-  `workflows/swebench-verified/artifacts/`.
+- [ ] Убедиться, что корневой `/workflows/` в `.gitignore` (example copy-units
+  только локально; не коммитить).
 - [ ] Исключить `.cursor/plans/` либо очистить планы от локальных путей и
   внутреннего контекста.
 - [ ] Убедиться, что `local/security-runs/`, `local/security-bank/` и host
@@ -65,7 +65,7 @@ git status --short
 git ls-files --others --exclude-standard
 git check-ignore -v -- `
   "deepseek__deepseek-v4-flash.regression-20260809-132621.json" `
-  "workflows/swebench-verified/artifacts/_linux_init_probe" `
+  "workflows/" `
   ".cursor/plans"
 ```
 
@@ -227,10 +227,8 @@ rg -n "Agent-Kuibyshev|Agent-Kuibysheff|0\.1\.0|0\.2\.0" `
 - [ ] Добавить `cargo deny check` в CI и pre-release checks.
 - [ ] Добавить автоматический secret scan для push/PR и всей истории перед
   первым открытием.
-- [ ] Запускать offline
-  `workflows/security-sandbox/test_security_lib.py` без API key.
-- [ ] Запускать `scripts/test_detached_workflows.py` и portability checks в
-  кроссплатформенном виде.
+- [ ] Запускать portability checks в кроссплатформенном виде; detached
+  workflow / security-lib smokes — только локально при наличии `workflows/`.
 - [ ] Разобрать различия `scripts/check.ps1` и `scripts/check.sh`, включая
   разный default для AoC regression.
 - [ ] Добавить `npm audit` или эквивалентный контролируемый audit процесс для

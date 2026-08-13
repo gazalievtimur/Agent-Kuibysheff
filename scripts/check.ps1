@@ -42,9 +42,15 @@ Write-Host "Running portability guardrails..."
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-python "$PSScriptRoot\test_detached_workflows.py"
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+
+$workflowsRoot = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")) "workflows"
+if (Test-Path -LiteralPath $workflowsRoot -PathType Container) {
+    python "$PSScriptRoot\test_detached_workflows.py"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+} else {
+    Write-Host "Skipping detached workflow tests (workflows/ not present)."
 }
 
 $runAoc = $Aoc -or ($env:RUN_AOC -eq "1")

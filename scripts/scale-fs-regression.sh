@@ -17,6 +17,18 @@ import_dotenv "$REPO_ROOT/.env"
 
 CONFIG=""
 TASK_IDS=()
+WORKFLOW_DIR="$REPO_ROOT/workflows/scale-fs-live"
+
+if [[ ! -d "$WORKFLOW_DIR" ]]; then
+  cat >&2 <<'EOF'
+workflows/scale-fs-live not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+EOF
+  exit 1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
