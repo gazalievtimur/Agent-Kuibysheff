@@ -17,6 +17,8 @@ pub enum BuiltinPrompt {
     StaticArgs(&'static str),
     /// `home.run` — example needs the configured program aliases.
     HomeRun,
+    /// `home.read` — windowed home file read with next_offset pagination.
+    HomeRead,
     /// `local_tools.read_file` — example mentions the workspace root.
     WorkspaceReadFile,
 }
@@ -68,9 +70,7 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::Home,
-        prompt: BuiltinPrompt::StaticArgs(
-            r#"{"path":"relative/path","offset":0,"max_chars":50000}"#,
-        ),
+        prompt: BuiltinPrompt::HomeRead,
     },
     ToolDescriptor {
         name: "home.write",

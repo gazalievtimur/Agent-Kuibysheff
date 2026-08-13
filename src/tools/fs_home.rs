@@ -180,11 +180,7 @@ impl HomeFs {
         let path_display = path.display().to_string();
         let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .map_err(|error| HomeFsError::Io {
-                operation: "spawn_blocking".to_string(),
-                path: path_display.clone(),
-                source: std::io::Error::other(error.to_string()),
-            })?
+            .expect("BUG: read_char_window task panicked")
             .map_err(|error| home_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({

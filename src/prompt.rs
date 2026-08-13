@@ -80,6 +80,10 @@ fn prompt_line_for(
                 descriptor.name
             ))
         }
+        BuiltinPrompt::HomeRead => Some(format!(
+            "- {} {{\"path\":\"relative/path\",\"offset\":0,\"max_chars\":50000}}. Reads a character window from the agent home directory. If truncated, continue with next_offset.",
+            descriptor.name
+        )),
         BuiltinPrompt::WorkspaceReadFile => Some(format!(
             "- {} {{\"path\":\"relative/path\",\"offset\":0,\"max_chars\":6000}}. Reads a character window from the workspace root (`{workspace}`), not from home. If truncated, continue with next_offset.",
             descriptor.name,
@@ -135,6 +139,10 @@ mod tests {
         );
 
         assert!(rules.contains("- home.read"));
+        assert!(
+            rules.contains("If truncated, continue with next_offset."),
+            "home.read must teach window pagination: {rules}"
+        );
         assert!(!rules.contains("- home.write"));
         assert!(!rules.contains("- home.run"));
         assert!(!rules.contains("local_tools.search_docs"));
@@ -183,7 +191,7 @@ mod tests {
                 BuiltinPrompt::StaticArgs(args) => {
                     assert!(args.starts_with('{'), "static args for {}", descriptor.name);
                 }
-                BuiltinPrompt::WorkspaceReadFile => {}
+                BuiltinPrompt::HomeRead | BuiltinPrompt::WorkspaceReadFile => {}
                 BuiltinPrompt::HomeRun => {
                     panic!("home.run should set requires_programs");
                 }

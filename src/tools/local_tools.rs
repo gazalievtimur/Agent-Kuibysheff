@@ -29,7 +29,7 @@ const DEFAULT_MAX_RESULTS: usize = 8;
 const MIN_MAX_RESULTS: usize = 1;
 const MAX_MAX_RESULTS: usize = 100;
 const DEFAULT_READ_CHARS: usize = 6_000;
-const MIN_READ_CHARS: usize = 100;
+const MIN_READ_CHARS: usize = 1;
 const MAX_READ_CHARS: usize = 200_000;
 const MAX_SNIPPET_CHARS: usize = 300;
 
@@ -107,16 +107,13 @@ impl LocalTools {
         );
         let root = self.root.clone();
         let policy = self.policy.clone();
-        let root_display = root.display().to_string();
         let query = query.to_owned();
 
-        task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
-            .await
-            .map_err(|error| LocalToolsError::Io {
-                operation: "spawn_blocking".to_string(),
-                path: root_display,
-                source: std::io::Error::other(error.to_string()),
-            })
+        Ok(
+            task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
+                .await
+                .expect("BUG: search_docs task panicked"),
+        )
     }
 
     async fn read_file(
@@ -150,11 +147,7 @@ impl LocalTools {
         let path_display = path.display().to_string();
         let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .map_err(|error| LocalToolsError::Io {
-                operation: "spawn_blocking".to_string(),
-                path: path_display.clone(),
-                source: std::io::Error::other(error.to_string()),
-            })?
+            .expect("BUG: read_char_window task panicked")
             .map_err(|error| local_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({
@@ -650,6 +643,15 @@ mod tests {
         assert_eq!(second["content"], "a".repeat(50));
         assert_eq!(second["truncated"], false);
         assert!(second["next_offset"].is_null());
+
+        let tiny = tools
+            .call("read_file", json!({"path": "note.txt", "max_chars": 1}))
+            .await
+            .expect("min max_chars");
+        assert_eq!(tiny["content"], "a");
+        assert_eq!(tiny["chars_returned"], 1);
+        assert_eq!(tiny["truncated"], true);
+        assert_eq!(tiny["next_offset"], 1);
     }
 
     #[tokio::test]
