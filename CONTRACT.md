@@ -382,7 +382,7 @@ Tool calls use `server: "home"`:
 
 ```json
 {"server":"home","tool":"list","arguments":{"path":"."}}
-{"server":"home","tool":"read","arguments":{"path":"in/src/foo.rs","max_chars":50000}}
+{"server":"home","tool":"read","arguments":{"path":"in/src/foo.rs","offset":0,"max_chars":50000}}
 {"server":"home","tool":"write","arguments":{"path":"out/src/foo.rs","content":"..."}}
 {"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"],"timeout_ms":30000}}
 ```
@@ -390,6 +390,15 @@ Tool calls use `server: "home"`:
 Paths for `list` / `read` / `write` must be relative, cannot contain `..`, and
 are checked after filesystem canonicalization. Symlinks that resolve outside
 home (or outside a grant) are rejected.
+
+`home.read` and `local_tools.read_file` return a UTF-8 **character window**:
+`content`, `offset`, `chars_returned`, `truncated`, and `next_offset`. There is
+**no whole-file size reject** — large files are read gradually by passing
+`next_offset` from a truncated response as the next `offset`. Per-call
+`max_chars` is capped (200000) as a context-window guard only.
+`local_tools.search_docs` has no silent file-count / depth / per-file byte
+caps; only the explicit `max_results` argument limits how many hits are
+returned (default 8, max 100).
 
 `home.run` executes a **policy alias** (`program`) mapped to a pre-resolved
 host executable. Arguments are a raw argv vector (no shell, no `PATH`

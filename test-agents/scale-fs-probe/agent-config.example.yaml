@@ -1,0 +1,56 @@
+# Runtime config for scale-fs-probe (live Scale-FS LLM regression).
+# Import/render source only — eval.py rewrites a per-run config with absolute
+# workspace.root and a resolved python executable for home.run.
+#
+# Requires:
+#   - Provider API key via api_key_env (no inline api_key)
+#   - Built release binary: agent_Kuibysheff
+#   - OS sandbox for home.run (Windows AppContainer / Linux namespaces)
+#   - Python on PATH
+
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 120000
+  max_retries: 3
+  retry_base_delay_ms: 500
+  history:
+    max_tail_messages: 40
+    max_chars: 200000
+
+mcp: []
+
+limits:
+  max_iterations: 24
+  max_tokens: 120000
+  max_duration_sec: 600
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: true
+  output_dir: "./logs"
+
+# Import-safe stub: no workspace.root / python paths (those must be absolute and
+# host-specific). eval.py overwrites this file before each agent run.
+access:
+  mode: strict
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+      - local_tools.search_docs
+      - local_tools.read_file
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]
+  run:
+    programs: []
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000

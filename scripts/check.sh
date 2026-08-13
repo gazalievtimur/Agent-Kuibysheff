@@ -6,6 +6,7 @@
 #   ./scripts/check.sh --aoc
 #   ./scripts/check.sh --swebench
 #   ./scripts/check.sh --security
+#   ./scripts/check.sh --scale-fs
 #   ./scripts/check.sh --skip-deny
 #   ./scripts/check.sh --skip-aoc   # deprecated no-op (AoC is opt-in)
 set -euo pipefail
@@ -14,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_AOC_FLAG=0
 RUN_SWEBENCH_FLAG=0
 RUN_SECURITY_FLAG=0
+RUN_SCALE_FS_FLAG=0
 SKIP_DENY_FLAG=0
 
 while [[ $# -gt 0 ]]; do
@@ -34,12 +36,16 @@ while [[ $# -gt 0 ]]; do
       RUN_SECURITY_FLAG=1
       shift
       ;;
+    --scale-fs|-ScaleFs)
+      RUN_SCALE_FS_FLAG=1
+      shift
+      ;;
     --skip-deny|-SkipDeny)
       SKIP_DENY_FLAG=1
       shift
       ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,13p' "$0"
       exit 0
       ;;
     *)
@@ -97,6 +103,13 @@ if [[ "$RUN_SECURITY_FLAG" -eq 1 || "${RUN_SECURITY:-}" == "1" ]]; then
   "$SCRIPT_DIR/security-regression.sh"
 else
   echo "Skipping live security sandbox regression (pass --security or set RUN_SECURITY=1)."
+fi
+
+if [[ "$RUN_SCALE_FS_FLAG" -eq 1 || "${RUN_SCALE_FS:-}" == "1" ]]; then
+  echo "Running Scale-FS live LLM regression (--scale-fs / RUN_SCALE_FS=1)..."
+  "$SCRIPT_DIR/scale-fs-regression.sh"
+else
+  echo "Skipping live Scale-FS regression (pass --scale-fs or set RUN_SCALE_FS=1)."
 fi
 
 echo "All checks passed."

@@ -1,0 +1,14 @@
+{
+  "id": "large-read-01",
+  "prompt": "Read in/app.log under your home workspace. Extract the TRACE_ID near the end of the file (it looks like SF_NEEDLE_...). If a read is truncated, continue with next_offset (or raise max_chars within the per-call cap). Put only that TRACE_ID value in result.",
+  "corpus": {
+    "kind": "large_read",
+    "total_chars": 100000,
+    "path": "in/app.log",
+    "seed": 7
+  },
+  "expect": {
+    "result_contains_needle": true,
+    "stop_reason": "goal_reached"
+  }
+}

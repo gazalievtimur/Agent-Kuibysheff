@@ -1,7 +1,7 @@
 # Local AoC evaluation data
 
-This directory holds **local-only** Advent of Code evaluation assets and
-security-sandbox regression data.
+This directory holds **local-only** Advent of Code evaluation assets,
+security-sandbox regression data, and Scale-FS live regression assets.
 
 | Path | In git? | Purpose |
 | --- | --- | --- |
@@ -13,6 +13,9 @@ security-sandbox regression data.
 | `security-bank/` | **no** | Working security bank copy |
 | `security-runs/` | **no** | Security eval homes + `report.json` |
 | `security-host-canary/` | **no** | Native (non-Docker) host canary directory |
+| `scale-fs-bank.example/` | yes | Scale-FS corpus tasks (many files / large / oversize) |
+| `scale-fs-bank/` | **no** | Working Scale-FS bank copy |
+| `scale-fs-runs/` | **no** | Scale-FS eval homes + `report.json` |
 | `SECRET_SCAN.md` | yes | Notes for gitleaks / placeholder false positives |
 | `gitleaks-report.json` | **no** | Redacted local gitleaks output |
 
@@ -72,6 +75,7 @@ Live agent evals are opt-in local gates (not PR CI):
 - **AoC:** opt-in on both OS — `scripts/check.ps1 -Aoc` / `RUN_AOC=1`, or Linux `scripts/check.sh --aoc` / `RUN_AOC=1`
 - **SWE-bench (one Verified instance):** `scripts/check.ps1 -Swebench` / `RUN_SWEBENCH=1`, or `./scripts/check.sh --swebench`
 - **Security sandbox (LLM containment):** `scripts/check.ps1 -Security` / `RUN_SECURITY=1`, or `./scripts/check.sh --security`
+- **Scale-FS (many files / large reads):** `scripts/check.ps1 -ScaleFs` / `RUN_SCALE_FS=1`, or `./scripts/check.sh --scale-fs`
 
 ```powershell
 $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
@@ -83,6 +87,8 @@ $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
 .\scripts\swebench-regression-linux-docker.ps1  # same gate as Linux ELF via Docker
 .\scripts\check.ps1 -Security          # + security sandbox LLM regression (Docker lab on Windows)
 .\scripts\security-regression.ps1      # security-only (forwards to Linux Docker on Windows)
+.\scripts\check.ps1 -ScaleFs           # + Scale-FS live corpus regression
+.\scripts\scale-fs-regression.ps1      # Scale-FS-only
 .\scripts\check.ps1 -SkipDeny          # skip cargo deny (supply-chain)
 ```
 
@@ -96,6 +102,8 @@ export POLZA_API_KEY="..."   # or set provider api_key_env / .env
 ./scripts/check.sh --security          # + security sandbox LLM regression
 ./scripts/security-regression.sh       # security-only (native Linux userns)
 ./scripts/security-regression-linux-docker.sh  # security lab via Docker
+./scripts/check.sh --scale-fs          # + Scale-FS live corpus regression
+./scripts/scale-fs-regression.sh       # Scale-FS-only
 ./scripts/check.sh --skip-deny         # skip cargo deny (supply-chain)
 ```
 
@@ -157,6 +165,24 @@ The security harness:
 4. Writes `local/security-runs/<run-id>/report.json`
 
 Details: [workflows/security-sandbox/README.md](../workflows/security-sandbox/README.md).
+
+#### Scale-FS live gate requirements
+
+- `local/scale-fs-bank/` (auto-copied from `local/scale-fs-bank.example/` by the script)
+- `agent-config.local.yaml` (preferred) or `test-agents/scale-fs-probe/agent-config.example.yaml`
+- Provider API key via `api_key_env`
+- Python on `PATH` (corpus generator; optional for sandboxed `home.run`)
+- OS sandbox available if the profile still allowlists `home.run`
+
+The Scale-FS harness:
+
+1. Builds `target/release` agent
+2. Plants a generated corpus (many files / large / oversize) per task
+3. Imports `test-agents/scale-fs-probe` and rewrites workspace paths
+4. Runs a real LLM; asserts planted `SF_NEEDLE_…` appears in `RunOutput.result`
+5. Writes `local/scale-fs-runs/<run-id>/report.json`
+
+Details: [workflows/scale-fs-live/README.md](../workflows/scale-fs-live/README.md).
 
 Pitfalls and layout details:
 [workflows/swebench-verified/README.md](../workflows/swebench-verified/README.md)

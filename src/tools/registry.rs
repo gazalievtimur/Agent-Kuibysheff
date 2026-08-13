@@ -17,6 +17,8 @@ pub enum BuiltinPrompt {
     StaticArgs(&'static str),
     /// `home.run` — example needs the configured program aliases.
     HomeRun,
+    /// `home.read` — windowed home file read with next_offset pagination.
+    HomeRead,
     /// `local_tools.read_file` — example mentions the workspace root.
     WorkspaceReadFile,
 }
@@ -63,12 +65,12 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "home.read",
         server: "home",
         tool: "read",
-        description: "Read a file under the agent home directory.",
-        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"max_chars":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}"#,
+        description: "Read a UTF-8 character window from a file under the agent home directory. Use offset/next_offset to read large files in successive windows. There is no whole-file size reject.",
+        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_chars":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::Home,
-        prompt: BuiltinPrompt::StaticArgs(r#"{"path":"relative/path","max_chars":50000}"#),
+        prompt: BuiltinPrompt::HomeRead,
     },
     ToolDescriptor {
         name: "home.write",
@@ -96,8 +98,8 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "local_tools.search_docs",
         server: "local_tools",
         tool: "search_docs",
-        description: "Search documentation and source files in the workspace.",
-        schema_json: r#"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}"#,
+        description: "Search documentation and source files in the workspace. No silent file-count/depth/size caps; only max_results limits returned hits.",
+        schema_json: r#"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","minimum":1,"maximum":100}},"required":["query"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::LocalTools,
@@ -107,8 +109,8 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "local_tools.read_file",
         server: "local_tools",
         tool: "read_file",
-        description: "Read a file from the workspace root (not home).",
-        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"max_chars":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}"#,
+        description: "Read a UTF-8 character window from a workspace file (not home). Use offset/next_offset for large files. There is no whole-file size reject.",
+        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_chars":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::LocalTools,

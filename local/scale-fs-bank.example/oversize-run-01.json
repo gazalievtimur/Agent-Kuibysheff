@@ -1,0 +1,14 @@
+{
+  "id": "oversize-run-01",
+  "prompt": "The file in/huge.log is large. Use home.read with offset/max_chars windows (follow next_offset when truncated) to find the SECRET_TOKEN= line and put only that token value (SF_NEEDLE_...) in result.",
+  "corpus": {
+    "kind": "oversize",
+    "target_bytes": 900000,
+    "path": "in/huge.log",
+    "seed": 99
+  },
+  "expect": {
+    "result_contains_needle": true,
+    "stop_reason": "goal_reached"
+  }
+}

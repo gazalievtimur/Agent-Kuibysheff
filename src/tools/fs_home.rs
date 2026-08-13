@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
+use tokio::task;
 
 use crate::access::paths::{is_within_root, relative_components};
 use crate::access::{HomeFsPolicy, PathOperation, ProgramAlias};
@@ -13,6 +14,7 @@ use crate::sandbox::{
     absolute_home_grants, build_sandbox_env, SandboxError, SandboxOutput, SandboxRunner,
     SandboxSpec,
 };
+use crate::tools::read_window::read_char_window;
 use crate::tools::HomeFsError;
 
 const DEFAULT_MAX_CHARS: usize = 50_000;
@@ -90,7 +92,8 @@ impl HomeFs {
             }
             "read" => {
                 let args: ReadArgs = decode_args(tool, arguments)?;
-                self.read(Path::new(&args.path), args.max_chars).await
+                self.read(Path::new(&args.path), args.offset, args.max_chars)
+                    .await
             }
             "write" => {
                 let args: WriteArgs = decode_args(tool, arguments)?;
@@ -159,45 +162,34 @@ impl HomeFs {
         }))
     }
 
-    async fn read(&self, relative: &Path, max_chars: Option<usize>) -> Result<Value, HomeFsError> {
+    async fn read(
+        &self,
+        relative: &Path,
+        offset: Option<usize>,
+        max_chars: Option<usize>,
+    ) -> Result<Value, HomeFsError> {
         self.policy
             .read
             .allows_relative(relative, PathOperation::Read)
             .map_err(|reason| invalid_path(relative, reason))?;
         let path = self.resolve_existing(relative, PathOperation::Read).await?;
+        let offset = offset.unwrap_or(0);
         let max_chars = max_chars
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1, MAX_READ_CHARS);
-        // Hard ceiling uses MAX_READ_CHARS so a small max_chars only truncates, not rejects.
-        let max_bytes = (MAX_READ_CHARS as u64).saturating_mul(4);
-        let file_len = fs::metadata(&path)
+        let path_display = path.display().to_string();
+        let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .map_err(|error| home_io("metadata", &path, error))?
-            .len();
-        if file_len > max_bytes {
-            return Err(invalid_path(
-                relative,
-                format!(
-                    "file size {file_len} bytes exceeds read limit of {max_bytes} bytes \
-                     ({MAX_READ_CHARS} chars at UTF-8 worst case)"
-                ),
-            ));
-        }
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|error| home_io("read_to_string", &path, error))?;
-        let total_chars = content.chars().count();
-        let truncated = total_chars > max_chars;
-        let content = if truncated {
-            content.chars().take(max_chars).collect::<String>()
-        } else {
-            content
-        };
+            .expect("BUG: read_char_window task panicked")
+            .map_err(|error| home_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({
             "path": display_relative(relative),
-            "content": content,
-            "truncated": truncated
+            "content": window.content,
+            "offset": window.offset,
+            "chars_returned": window.chars_returned,
+            "truncated": window.truncated,
+            "next_offset": window.next_offset,
         }))
     }
 
@@ -431,6 +423,7 @@ struct ListArgs {
 #[derive(Deserialize)]
 struct ReadArgs {
     path: String,
+    offset: Option<usize>,
     max_chars: Option<usize>,
 }
 
@@ -594,12 +587,67 @@ mod tests {
             .await
             .expect("read");
         assert_eq!(read["content"], "fn main() {}");
+        assert_eq!(read["truncated"], false);
+        assert_eq!(read["offset"], 0);
 
         let list = home
             .call("list", json!({"path": "out/src"}))
             .await
             .expect("list");
         assert_eq!(list["entries"][0]["name"], "main.rs");
+    }
+
+    #[tokio::test]
+    async fn read_windows_large_file_without_reject() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
+
+        let content = format!("{}NEEDLE_HERE{}", "n".repeat(60_000), "t".repeat(50));
+        home.call("write", json!({"path": "in/big.log", "content": content}))
+            .await
+            .expect("write");
+
+        let first = home
+            .call("read", json!({"path": "in/big.log", "max_chars": 50_000}))
+            .await
+            .expect("first");
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"], 50_000);
+        assert!(!first["content"].as_str().unwrap().contains("NEEDLE_HERE"));
+
+        let second = home
+            .call(
+                "read",
+                json!({"path": "in/big.log", "offset": 50_000, "max_chars": 50_000}),
+            )
+            .await
+            .expect("second");
+        assert!(second["content"].as_str().unwrap().contains("NEEDLE_HERE"));
+        assert_eq!(second["truncated"], false);
+
+        let oversized = "z".repeat(900_000);
+        home.call(
+            "write",
+            json!({"path": "in/huge.log", "content": oversized}),
+        )
+        .await
+        .expect("write huge");
+        let window = home
+            .call(
+                "read",
+                json!({"path": "in/huge.log", "offset": 0, "max_chars": 1000}),
+            )
+            .await
+            .expect("oversized still readable");
+        assert_eq!(window["chars_returned"], 1000);
+        assert_eq!(window["truncated"], true);
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use tracing::debug;
 
 use crate::access::paths::{is_within_root, relative_components};
 use crate::access::{PathOperation, WorkspaceFsPolicy};
+use crate::tools::read_window::read_char_window;
 use crate::tools::LocalToolsError;
 
 const SKIP_DIRS: &[&str] = &[
@@ -23,15 +25,11 @@ const SKIP_EXTENSIONS: &[&str] = &[
     "7z", "tar", "rar", "woff", "woff2", "ttf", "otf", "bin", "lock", "pyc", "class", "o", "a",
     "rlib",
 ];
-const MAX_SEARCH_DEPTH: usize = 8;
-const MAX_SEARCH_FILES: usize = 600;
-/// Byte-size gate (conservative vs UTF-8 char counts) for files considered by search.
-const MAX_SEARCH_FILE_BYTES: u64 = 250_000;
 const DEFAULT_MAX_RESULTS: usize = 8;
 const MIN_MAX_RESULTS: usize = 1;
-const MAX_MAX_RESULTS: usize = 20;
+const MAX_MAX_RESULTS: usize = 100;
 const DEFAULT_READ_CHARS: usize = 6_000;
-const MIN_READ_CHARS: usize = 100;
+const MIN_READ_CHARS: usize = 1;
 const MAX_READ_CHARS: usize = 200_000;
 const MAX_SNIPPET_CHARS: usize = 300;
 
@@ -79,7 +77,8 @@ impl LocalTools {
             }
             "read_file" => {
                 let args: ReadFileArgs = decode_args(tool, arguments)?;
-                self.read_file(Path::new(&args.path), args.max_chars).await
+                self.read_file(Path::new(&args.path), args.offset, args.max_chars)
+                    .await
             }
             _ => Err(LocalToolsError::UnknownTool {
                 tool: tool.to_string(),
@@ -108,21 +107,19 @@ impl LocalTools {
         );
         let root = self.root.clone();
         let policy = self.policy.clone();
-        let root_display = root.display().to_string();
         let query = query.to_owned();
 
-        task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
-            .await
-            .map_err(|error| LocalToolsError::Io {
-                operation: "spawn_blocking".to_string(),
-                path: root_display,
-                source: std::io::Error::other(error.to_string()),
-            })
+        Ok(
+            task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
+                .await
+                .expect("BUG: search_docs task panicked"),
+        )
     }
 
     async fn read_file(
         &self,
         relative: &Path,
+        offset: Option<usize>,
         max_chars: Option<usize>,
     ) -> Result<Value, LocalToolsError> {
         let relative_display = display_relative_input(relative);
@@ -139,45 +136,27 @@ impl LocalTools {
             .map_err(|reason| local_path(relative.display().to_string(), reason))?;
 
         let path = self.resolve_existing_file(relative).await?;
+        let displayed = display_relative_path(&self.root, &path);
+        let offset = offset.unwrap_or(0);
         let max_chars = clamp_usize(
             max_chars,
             DEFAULT_READ_CHARS,
             MIN_READ_CHARS,
             MAX_READ_CHARS,
         );
-        // Hard ceiling uses MAX_READ_CHARS so a small max_chars only truncates, not rejects.
-        let max_bytes = (MAX_READ_CHARS as u64).saturating_mul(4);
-        let file_len = fs::metadata(&path)
+        let path_display = path.display().to_string();
+        let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .map_err(|error| local_io("metadata", &path, error))?
-            .len();
-        if file_len > max_bytes {
-            return Err(local_path(
-                relative.display().to_string(),
-                format!(
-                    "file size {file_len} bytes exceeds read limit of {max_bytes} bytes \
-                     ({MAX_READ_CHARS} chars at UTF-8 worst case)"
-                ),
-            ));
-        }
-
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|error| local_io("read_to_string", &path, error))?;
-
-        let total_chars = content.chars().count();
-        let content = if total_chars > max_chars {
-            let mut truncated = String::with_capacity(max_chars.saturating_add(16));
-            truncated.extend(content.chars().take(max_chars));
-            truncated.push_str("\n...[truncated]");
-            truncated
-        } else {
-            content
-        };
+            .expect("BUG: read_char_window task panicked")
+            .map_err(|error| local_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({
-            "path": display_relative_path(&self.root, &path),
-            "content": content,
+            "path": displayed,
+            "content": window.content,
+            "offset": window.offset,
+            "chars_returned": window.chars_returned,
+            "truncated": window.truncated,
+            "next_offset": window.next_offset,
         }))
     }
 
@@ -235,15 +214,11 @@ fn search_docs_blocking(
     let query_lower = query.to_lowercase();
     let ascii_needle = query_lower.is_ascii();
     let mut matches = Vec::with_capacity(max_results.min(MAX_MAX_RESULTS));
-    let mut files_seen = 0usize;
     let mut stack = initial_search_dirs(root, policy);
 
-    while let Some((dir, depth)) = stack.pop() {
-        if matches.len() >= max_results || files_seen >= MAX_SEARCH_FILES {
+    while let Some(dir) = stack.pop() {
+        if matches.len() >= max_results {
             break;
-        }
-        if depth > MAX_SEARCH_DEPTH {
-            continue;
         }
 
         if !directory_allowed(root, policy, &dir) {
@@ -259,7 +234,7 @@ fn search_docs_blocking(
         };
 
         for entry in reader {
-            if matches.len() >= max_results || files_seen >= MAX_SEARCH_FILES {
+            if matches.len() >= max_results {
                 break;
             }
 
@@ -284,7 +259,6 @@ fn search_docs_blocking(
                 if let Some(found) =
                     match_symlink_file(root, policy, &path, &query_lower, ascii_needle)
                 {
-                    files_seen = files_seen.saturating_add(1);
                     matches.push(found);
                 }
                 continue;
@@ -294,7 +268,7 @@ fn search_docs_blocking(
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
                 if !SKIP_DIRS.contains(&name.as_ref()) && directory_allowed(root, policy, &path) {
-                    stack.push((path, depth + 1));
+                    stack.push(path);
                 }
                 continue;
             }
@@ -303,7 +277,6 @@ fn search_docs_blocking(
                 continue;
             }
 
-            files_seen = files_seen.saturating_add(1);
             if !file_allowed(root, policy, &path) {
                 continue;
             }
@@ -320,9 +293,9 @@ fn search_docs_blocking(
     })
 }
 
-fn initial_search_dirs(root: &Path, policy: &WorkspaceFsPolicy) -> Vec<(PathBuf, usize)> {
+fn initial_search_dirs(root: &Path, policy: &WorkspaceFsPolicy) -> Vec<PathBuf> {
     if policy.read.is_legacy() {
-        return vec![(root.to_path_buf(), 0)];
+        return vec![root.to_path_buf()];
     }
     if policy.read.grants().is_empty() {
         return Vec::new();
@@ -336,7 +309,7 @@ fn initial_search_dirs(root: &Path, policy: &WorkspaceFsPolicy) -> Vec<(PathBuf,
             root.join(grant.as_path())
         };
         if path.is_dir() {
-            dirs.push((path, 0));
+            dirs.push(path);
         }
     }
     dirs
@@ -384,14 +357,13 @@ fn match_symlink_file(
 }
 
 fn match_file(root: &Path, path: &Path, query_lower: &str, ascii_needle: bool) -> Option<Value> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if metadata.len() > MAX_SEARCH_FILE_BYTES {
-        return None;
-    }
-
-    let text = std::fs::read_to_string(path).ok()?;
-    for (idx, line) in text.lines().enumerate() {
-        if line_matches(line, query_lower, ascii_needle) {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = io::BufReader::new(file);
+    for (idx, line) in reader.lines().enumerate() {
+        let Ok(line) = line else {
+            continue;
+        };
+        if line_matches(&line, query_lower, ascii_needle) {
             return Some(json!({
                 "file": display_relative_path(root, path),
                 "line": idx + 1,
@@ -444,6 +416,7 @@ struct SearchDocsArgs {
 #[derive(Deserialize)]
 struct ReadFileArgs {
     path: String,
+    offset: Option<usize>,
     max_chars: Option<usize>,
 }
 
@@ -634,7 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_file_returns_content_and_truncates() {
+    async fn read_file_returns_content_and_windows() {
         let (dir, tools) = fixture().await;
         let root = dir.path();
         let content = "a".repeat(150);
@@ -648,15 +621,113 @@ mod tests {
             .expect("read");
         assert_eq!(read["path"], "note.txt");
         assert_eq!(read["content"], content);
+        assert_eq!(read["truncated"], false);
+        assert!(read["next_offset"].is_null());
 
         let truncated = tools
             .call("read_file", json!({"path": "note.txt", "max_chars": 100}))
             .await
             .expect("truncated read");
-        assert_eq!(
-            truncated["content"],
-            format!("{}\n...[truncated]", "a".repeat(100))
-        );
+        assert_eq!(truncated["content"], "a".repeat(100));
+        assert_eq!(truncated["truncated"], true);
+        assert_eq!(truncated["chars_returned"], 100);
+        assert_eq!(truncated["next_offset"], 100);
+
+        let second = tools
+            .call(
+                "read_file",
+                json!({"path": "note.txt", "offset": 100, "max_chars": 100}),
+            )
+            .await
+            .expect("second window");
+        assert_eq!(second["content"], "a".repeat(50));
+        assert_eq!(second["truncated"], false);
+        assert!(second["next_offset"].is_null());
+
+        let tiny = tools
+            .call("read_file", json!({"path": "note.txt", "max_chars": 1}))
+            .await
+            .expect("min max_chars");
+        assert_eq!(tiny["content"], "a");
+        assert_eq!(tiny["chars_returned"], 1);
+        assert_eq!(tiny["truncated"], true);
+        assert_eq!(tiny["next_offset"], 1);
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_oversized_files_via_windows() {
+        let (dir, tools) = fixture().await;
+        // Larger than the old 800 KB hard reject (MAX_READ_CHARS * 4).
+        let content = "x".repeat(900_000);
+        fs::write(dir.path().join("huge.txt"), &content)
+            .await
+            .expect("write huge");
+
+        let first = tools
+            .call("read_file", json!({"path": "huge.txt", "max_chars": 1000}))
+            .await
+            .expect("first window");
+        assert_eq!(first["content"].as_str().unwrap().len(), 1000);
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"], 1000);
+
+        let mid = tools
+            .call(
+                "read_file",
+                json!({"path": "huge.txt", "offset": 899_500, "max_chars": 1000}),
+            )
+            .await
+            .expect("tail window");
+        assert_eq!(mid["content"], "x".repeat(500));
+        assert_eq!(mid["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn search_docs_finds_needle_in_large_file() {
+        let (dir, tools) = fixture().await;
+        let mut body = "noise line\n".repeat(30_000); // ~330 KB
+        body.push_str("unique_needle_token_xyz\n");
+        body.push_str(&"more noise\n".repeat(100));
+        fs::write(dir.path().join("big.log"), body)
+            .await
+            .expect("write big");
+
+        let result = tools
+            .call("search_docs", json!({"query": "unique_needle_token_xyz"}))
+            .await
+            .expect("search");
+        assert_eq!(result["total_matches"], 1);
+        assert_eq!(result["matches"][0]["file"], "big.log");
+    }
+
+    #[tokio::test]
+    async fn search_docs_finds_needle_beyond_old_file_cap() {
+        let (dir, tools) = fixture().await;
+        let root = dir.path();
+        // More than the old MAX_SEARCH_FILES=600 silent cap.
+        for i in 0..650 {
+            let bucket = format!("bucket-{:02}", i % 20);
+            let path = root.join(&bucket).join(format!("doc-{i:04}.txt"));
+            fs::create_dir_all(path.parent().unwrap())
+                .await
+                .expect("dir");
+            let text = if i == 640 {
+                "marker FINDME_DEEP"
+            } else {
+                "ordinary noise"
+            };
+            fs::write(&path, text).await.expect("write");
+        }
+
+        let result = tools
+            .call("search_docs", json!({"query": "FINDME_DEEP"}))
+            .await
+            .expect("search");
+        assert_eq!(result["total_matches"], 1);
+        assert!(result["matches"][0]["file"]
+            .as_str()
+            .unwrap()
+            .contains("doc-0640.txt"));
     }
 
     #[tokio::test]
