@@ -1,4 +1,0 @@
-# Python deps for the SWE-bench Verified workflow (pinned for reproducible harness).
-swebench==4.1.0
-docker==7.1.0
-mcp==1.9.4

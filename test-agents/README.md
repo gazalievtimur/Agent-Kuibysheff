@@ -68,3 +68,9 @@ Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-ao
 
 Оркестратор: [`scripts/aoc-eval.ps1`](../scripts/aoc-eval.ps1) (импортирует шаблон в
 `local/aoc-eval-project/.kuibysheff/protected/agents/…`).
+
+## Scale-FS probe
+
+`test-agents/scale-fs-probe/` — профиль для live-регрессии на больших FS-корпусах
+(поиск по многим файлам, windowed `home.read`). См.
+[workflows/scale-fs-live/README.md](../workflows/scale-fs-live/README.md).

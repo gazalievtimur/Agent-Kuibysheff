@@ -1,0 +1,14 @@
+{
+  "id": "search-many-01",
+  "prompt": "In the workspace corpus/, find the clearance code for Project Orion. The code looks like SF_NEEDLE_.... Put only that exact code in result.",
+  "corpus": {
+    "kind": "many_files",
+    "file_count": 400,
+    "needle_hint": "Project Orion",
+    "seed": 42
+  },
+  "expect": {
+    "result_contains_needle": true,
+    "stop_reason": "goal_reached"
+  }
+}

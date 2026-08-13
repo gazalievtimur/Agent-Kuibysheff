@@ -1,5 +1,7 @@
 # Further Fixes Plan
 
+> Engineering backlog (not product documentation).
+
 Roadmap for remaining rust-skills improvements for `agent_Kuibysheff`.
 
 **Last updated:** 2026-07-11

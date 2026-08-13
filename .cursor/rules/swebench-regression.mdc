@@ -1,0 +1,34 @@
+---
+description: SWE-bench Verified local regression runbook (Windows + Linux Docker)
+globs: scripts/swebench*|workflows/swebench-verified/**
+alwaysApply: false
+---
+
+# SWE-bench regression
+
+Opt-in capability gate on `sympy__sympy-20590`: generate → official grade →
+`harness_resolved=true`. Not PR CI.
+
+## How to run
+
+| Host | Command |
+| --- | --- |
+| Windows native | `.\scripts\swebench-regression.ps1` or `.\scripts\check.ps1 -Swebench` |
+| Linux native | `./scripts/swebench-regression.sh` or `./scripts/check.sh --swebench` |
+| Linux ELF from Windows | `.\scripts\swebench-regression-linux-docker.ps1` |
+
+Needs: Docker Linux engine, `pip install -r workflows/swebench-verified/requirements.txt`,
+API key via `api_key_env` / `.env` (no inline `provider.api_key`).
+
+## Do not regress these fixes
+
+- **CRLF grade scripts on Windows** → `harness_bootstrap.py` (LF + strip CR)
+- **`resource` on Windows** → `win_stubs/` on `PYTHONPATH`
+- **Local `swebench.py` shadows pip** → import via installed package path helpers
+- **MCP EOF** → `runtime.mcp_child_env()`; never `from __future__ import annotations` in `docker_workspace_mcp.py`
+- **PE vs ELF in shared `target/release`** → `resolve_agent_binary` prefers native name; docker runner uses isolated `CARGO_TARGET_DIR` + `--agent-bin`
+- **Nested Docker `clone3` missing** → `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (set by linux-docker launcher)
+- **CRLF shebangs on bind-mounted `.sh`** → strip `\r` in linux-docker entrypoint
+- **PowerShell + `bash -lc`** → do not put `$PATH` / `$VAR` in double-quoted remote bash; use the mounted `.sh` entrypoint
+
+Full table: `workflows/swebench-verified/README.md` (*Regression gate*).

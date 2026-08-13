@@ -24,15 +24,24 @@ target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface and
 
 ## Install
 
-Prebuilt Windows and Linux binaries are on
+Prebuilt **Windows x86_64** and **Linux x86_64** binaries are on
 [GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases).
-Archive names, checksums, and how to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
+macOS and Linux aarch64 are **unsupported**. Archive names, checksums, glibc
+baseline, and how to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
+Install / upgrade / uninstall (including user data under `.kuibysheff/`):
+[docs/INSTALL.md](docs/INSTALL.md).
 
 Or build from source (Rust MSRV **1.88**):
 
 ```powershell
+git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+cd Agent-Kuibysheff
 cargo build --release --bin agent_Kuibysheff
 ```
+
+Breaking changes and migration notes (including required `access` in **0.2.0**):
+[CHANGELOG.md](CHANGELOG.md). The VS Code extension is versioned independently
+(see `extensions/vscode/package.json`).
 
 ## Quick start
 
@@ -118,7 +127,9 @@ VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
   [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md)
 - **Live Advent of Code** (ACP singleton: download → solve → submit → retry):
   [workflows/aoc-live/README.md](workflows/aoc-live/README.md)
-- **SWE-bench Verified** (Docker patches + official harness):
+- **SWE-bench Verified** (Docker patches + official harness; opt-in local regression via
+  `scripts/swebench-regression.*` / `check.* -Swebench`; Linux ELF from Windows via
+  `scripts/swebench-regression-linux-docker.ps1`):
   [workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
 - **Security sandbox LLM regression** (adversarial prompts, containment canaries, Docker
   outer lab; `scripts/security-regression.*` / `check.* -Security`; never weakens OS
@@ -141,11 +152,18 @@ VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
 
 Model context-window pruning lives under `provider.history` (defaults
 `max_tail_messages: 30`, `max_chars: 200000`) and is independent of
-`limits.max_tokens`.
+`limits.max_tokens`. Optional `provider.effort` sets reasoning effort for
+compatible models (`reasoning_effort` in the Chat Completions request).
 
 ## Documentation
 
 Full index: [docs/README.md](docs/README.md).
+
+Security reports: [SECURITY.md](SECURITY.md). Support policy: [SUPPORT.md](SUPPORT.md).
+Contributing / CoC: [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+Engineering backlog notes (not product docs):
+[docs/architecture-review/](docs/architecture-review/), [docs/FURTHER_FIXES.md](docs/FURTHER_FIXES.md).
 
 ## License
 
