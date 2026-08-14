@@ -36,7 +36,7 @@ Or build from source (Rust MSRV **1.88**):
 ```powershell
 git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
-cargo build --release --bin agent_Kuibysheff
+cargo build --release --bin kbshff
 ```
 
 Breaking changes and migration notes (including required `access` in **0.2.0**):
@@ -46,17 +46,19 @@ Breaking changes and migration notes (including required `access` in **0.2.0**):
 ## Quick start
 
 ```powershell
-# Option A: .env beside the agent profile (loaded automatically)
+# Option A: interactive setup writes profile `.env` automatically
+#   kbshff
+# Option B: copy example and set OPENAI_API_KEY (or your api_key_env name)
 Copy-Item .env.example .env
-# edit .env and set POLZA_API_KEY=...
+# edit .env
 
 # Scaffold a protected profile, then import or edit via `config`
-cargo run --bin agent_Kuibysheff -- init demo --project-root .
+cargo run --bin kbshff -- init demo --project-root .
 # Optional: import an existing YAML/settings bundle
-# cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo import --from ./settings --force
+# cargo run --bin kbshff -- config --project-root . --agent demo import --from ./settings --force
 
-$env:POLZA_API_KEY = "your_api_key"
-cargo run --bin agent_Kuibysheff -- run `
+$env:OPENAI_API_KEY = "your_api_key"
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent demo `
   --prompt "Summarize the attached README into out/summary.md" `
@@ -74,7 +76,7 @@ $env:OPENAI_API_KEY = "your_api_key"
 Runtime limit overrides:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- run <required arguments> `
+cargo run --bin kbshff -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
@@ -85,10 +87,20 @@ See [`agent-config.example.yaml`](agent-config.example.yaml),
 
 ## CLI
 
+Interactive setup (no subcommand; TTY required):
+
+```text
+kbshff
+```
+
+Asks for the harness folder (default: current directory), checks or creates an
+agent profile, prints connected/available resources, then offers further
+configuration (MCP, provider, limits).
+
 Worker (`run`):
 
 ```text
-agent_Kuibysheff run \
+kbshff run \
   --project-root <DIR> \
   --agent <ID> \
   --prompt <TEXT> \
@@ -101,16 +113,16 @@ agent_Kuibysheff run \
 Scaffold, probe, or manage settings (no storage path flags):
 
 ```text
-agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
-agent_Kuibysheff check --project-root <DIR> --agent <ID>
-agent_Kuibysheff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
-agent_Kuibysheff config --project-root <DIR> --agent <ID> show
+kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
+kbshff check --project-root <DIR> --agent <ID>
+kbshff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
+kbshff config --project-root <DIR> --agent <ID> show
 ```
 
 ACP stdio server (VS Code, messengers, mail bridges):
 
 ```text
-agent_Kuibysheff acp \
+kbshff acp \
   --agent <ID> \
   [--project-root <DIR>]
 ```
@@ -179,6 +191,6 @@ The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
 trademark use beyond reasonable attribution of origin.
 
 Canonical product / binary / repository names: **Kuibysheff**,
-`agent_Kuibysheff`, and `Agent-Kuibysheff`. Local folder spellings such as
-`Agent Kuibyshev` are legacy path aliases only and must not be used for
-discovery.
+`agent_Kuibysheff` (crate), `kbshff` (CLI binary), and `Agent-Kuibysheff`.
+Local folder spellings such as `Agent Kuibyshev` are legacy path aliases only
+and must not be used for discovery.

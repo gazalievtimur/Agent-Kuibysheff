@@ -92,7 +92,7 @@ Set:
 }
 
 Write-Host "Building release agent..."
-cargo build --release -p agent_Kuibysheff --bin agent_Kuibysheff
+cargo build --release -p agent_Kuibysheff --bin kbshff
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

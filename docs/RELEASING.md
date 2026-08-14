@@ -15,7 +15,7 @@ Linux release binaries are produced on GitHub Actions `ubuntu-latest`
 (currently **Ubuntu 24.04**). Treat that runner’s **glibc** as the baseline;
 older distributions may need a newer glibc or a local from-source build.
 
-Each archive contains the `agent_Kuibysheff` binary. A matching
+Each archive contains the `kbshff` binary. A matching
 `.zip.sha256` checksum file is attached to the release.
 
 The VS Code extension under `extensions/vscode` is versioned **independently**
@@ -25,15 +25,15 @@ PowerShell (Windows):
 
 ```powershell
 # After downloading and extracting the zip:
-.\agent_Kuibysheff-v0.2.0-x86_64-pc-windows-msvc.exe --help
+.\kbshff.exe --help
 ```
 
 Bash (Linux):
 
 ```bash
 # After downloading and extracting the zip:
-chmod +x ./agent_Kuibysheff-v0.2.0-x86_64-unknown-linux-gnu
-./agent_Kuibysheff-v0.2.0-x86_64-unknown-linux-gnu --help
+chmod +x ./kbshff
+./kbshff --help
 ```
 
 To cut a release from a commit on `main`:
@@ -45,7 +45,7 @@ git push origin v0.2.0
 ```
 
 The [Release](../.github/workflows/release.yml) workflow builds
-`--release --locked --bin agent_Kuibysheff` on `windows-latest` and
+`--release --locked --bin kbshff` on `windows-latest` and
 `ubuntu-latest`, then uploads the zips to a GitHub Release for that tag.
 
 See [CHANGELOG.md](../CHANGELOG.md) for migration notes (including the 0.2.0

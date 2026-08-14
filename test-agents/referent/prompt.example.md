@@ -19,11 +19,11 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --bin kbshff -- init referent --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
 
-cargo run --bin agent_Kuibysheff -- run `
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent referent `
   --home homes/referent-demo `
@@ -72,13 +72,13 @@ PowerShell (or use `scripts/aoc-eval.ps1`):
 
 ```powershell
 $env:AOC_BANK_DIR = (Resolve-Path .\local\aoc-bank).Path
-cargo run --release --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --release --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --release --bin kbshff -- init referent --project-root . --force
+cargo run --release --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
-cargo run --release --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --release --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent\agent-config.aoc.example.yaml --force
 
-cargo run --release --bin agent_Kuibysheff -- run `
+cargo run --release --bin kbshff -- run `
   --project-root . `
   --agent referent `
   --home homes/aoc-manual-2024-01-1 `

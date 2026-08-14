@@ -32,7 +32,9 @@ pub const AGENT_CONFIG_FILE: &str = "agent-config.yaml";
 /// Errors when resolving or validating agent identity / home paths.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AgentPathError {
-    #[error("invalid agent id `{0}`: use `[a-z0-9][a-z0-9_-]*` without path separators")]
+    #[error(
+        "invalid agent id `{0}`: use letters/digits (any language), spaces, `_` or `-`; no path separators or reserved characters (`<>:\"/\\|?*`)"
+    )]
     InvalidAgentId(String),
     #[error("`--home` must be relative under `.kuibysheff/` and must not be under `protected/`")]
     InvalidHomePath,
@@ -42,23 +44,36 @@ pub enum AgentPathError {
     InvalidMcpServerName(String),
 }
 
-/// Validate `agent-id`: `[a-z0-9][a-z0-9_-]*`, no path separators.
+/// Validate `agent-id` for use as a single path segment under `protected/agents/`.
+///
+/// Allowed: Unicode letters and digits, spaces, `_`, and `-`. Must start with a
+/// letter or digit. Rejects empty ids, leading/trailing whitespace, path
+/// separators, `..`, control characters, and Windows-reserved filename chars.
 ///
 /// # Errors
 ///
 /// Returns [`AgentPathError::InvalidAgentId`] when the id is empty or malformed.
 pub fn validate_agent_id(agent_id: &str) -> Result<(), AgentPathError> {
+    if agent_id.is_empty() || agent_id != agent_id.trim() {
+        return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
+    }
+    if agent_id.contains('/')
+        || agent_id.contains('\\')
+        || agent_id.contains("..")
+        || agent_id
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
+    }
     let mut chars = agent_id.chars();
     let Some(first) = chars.next() else {
         return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
     };
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+    if !first.is_alphanumeric() {
         return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
     }
-    if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
-        return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
-    }
-    if agent_id.contains('/') || agent_id.contains('\\') || agent_id.contains("..") {
+    if !chars.all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' ') {
         return Err(AgentPathError::InvalidAgentId(agent_id.to_string()));
     }
     Ok(())
@@ -285,6 +300,43 @@ pub fn resolve_config_path_for_dotenv(config: &Path, launch_cwd: &Path) -> PathB
     }
 }
 
+/// List agent ids under `{project}/.kuibysheff/protected/agents/` that have
+/// a valid id and an `agent-config.yaml` file.
+///
+/// Missing agents root yields an empty list (not an error).
+///
+/// # Errors
+///
+/// Returns I/O errors while reading the agents directory.
+pub fn list_agent_ids(project_root: &Path) -> Result<Vec<String>, std::io::Error> {
+    let root = protected_agents_root(project_root);
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(id) = name.to_str() else {
+            continue;
+        };
+        if validate_agent_id(id).is_err() {
+            continue;
+        }
+        if entry.path().join(AGENT_CONFIG_FILE).is_file() {
+            ids.push(id.to_string());
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,8 +373,18 @@ mod tests {
     fn rejects_bad_agent_id() {
         assert!(validate_agent_id("").is_err());
         assert!(validate_agent_id("../x").is_err());
-        assert!(validate_agent_id("A").is_err());
+        assert!(validate_agent_id("has/slash").is_err());
+        assert!(validate_agent_id("has\\slash").is_err());
+        assert!(validate_agent_id("has..dots").is_err());
+        assert!(validate_agent_id("-leading").is_err());
+        assert!(validate_agent_id(" bad").is_err());
+        assert!(validate_agent_id("bad ").is_err());
+        assert!(validate_agent_id("a:b").is_err());
         assert!(validate_agent_id("ok-1").is_ok());
+        assert!(validate_agent_id("Mulder").is_ok());
+        assert!(validate_agent_id("Agent Mulder").is_ok());
+        assert!(validate_agent_id("Агент").is_ok());
+        assert!(validate_agent_id("エージェント").is_ok());
     }
 
     #[test]
@@ -373,6 +435,30 @@ mod tests {
         assert_eq!(
             resolve_config_path_for_dotenv(Path::new("a.yaml"), launch),
             PathBuf::from("launch").join("a.yaml")
+        );
+    }
+
+    #[test]
+    fn list_agent_ids_filters_valid_profiles() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        assert!(list_agent_ids(root).expect("empty").is_empty());
+
+        let demo = agent_profile_dir(root, "demo").unwrap();
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(demo.join(AGENT_CONFIG_FILE), "x: 1\n").unwrap();
+
+        let other = agent_profile_dir(root, "other").unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        // no config file → skipped
+
+        let bad = protected_agents_root(root).join("-leading");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join(AGENT_CONFIG_FILE), "x: 1\n").unwrap();
+
+        assert_eq!(
+            list_agent_ids(root).expect("list"),
+            vec!["demo".to_string()]
         );
     }
 }

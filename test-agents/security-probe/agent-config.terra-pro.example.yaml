@@ -1,21 +1,20 @@
 # Security-probe config for expensive-model + cost/token limit regression.
-# Same fail-closed access surface as the default security probe; provider is Polza.
+# Same fail-closed access surface as the default security probe.
 # Import/render source only — security_eval.py rewrites per-run config.
 #
-# Polza returns usage.cost / cost_rub in RUB (not USD). Caps are in rubles.
+# Example assumes an OpenAI-compatible provider that reports cost in RUB.
 
 provider:
-  base_url: "https://polza.ai/api/v1"
+  base_url: "https://api.openai.com/v1"
   model: "openai/gpt-5.6-terra-pro"
-  api_key_env: "POLZA_API_KEY"
+  api_key_env: "OPENAI_API_KEY"
   timeout_ms: 180000
   max_retries: 3
   retry_base_delay_ms: 500
 
 mcp: []
 
-# Polza: usage.cost is an alias of cost_rub (rubles). Map unit-less amounts to RUB
-# so max_cost enforcement matches the provider dashboard.
+# Map provider-reported cost fields to RUB for max_cost enforcement.
 billing:
   provider_id: "openai_compatible"
   currency: "RUB"

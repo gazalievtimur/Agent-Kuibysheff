@@ -16,7 +16,7 @@ The repository is a Cargo workspace with three crates:
 
 | Crate | Path | Role |
 |-------|------|------|
-| `agent_Kuibysheff` | repository root | Main library and CLI binary. Forbids `unsafe_code` at the lint level. |
+| `agent_Kuibysheff` | repository root | Main library and `kbshff` CLI binary. Forbids `unsafe_code` at the lint level. |
 | `sandbox-linux` | `crates/sandbox-linux` | Linux namespace sandbox with `libc` FFI. Contains all Linux-specific `unsafe`. |
 | `sandbox-windows` | `crates/sandbox-windows` | Windows AppContainer sandbox with `windows-sys` FFI. Contains all Windows-specific `unsafe`. |
 
@@ -107,8 +107,8 @@ server; Kuibysheff plugs in as an ACP agent. Bridges spawn the same `acp`
 subcommand with three separate pipes:
 
 ```text
-Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibysheff acp
-Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ agent_Kuibysheff acp
+Clients ←AHP→ VS Code Agent Host ←ACP stdio→ kbshff acp
+Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ kbshff acp
 ```
 
 `src/acp/` handles initialize / session lifecycle / prompt turns and forwards

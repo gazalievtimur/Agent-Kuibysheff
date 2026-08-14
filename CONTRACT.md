@@ -18,7 +18,7 @@ under `workflows/1c-dev/` (gitignored; restore from git history for testing).
 ## Invocation
 
 ```text
-agent_Kuibysheff run \
+kbshff run \
   --project-root <DIR> \
   --agent <ID> \
   --prompt <TEXT> \
@@ -90,12 +90,12 @@ agent_Kuibysheff help acp
 agent_Kuibysheff help config
 agent_Kuibysheff --help
 
-agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
+kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
 
-agent_Kuibysheff check --project-root <DIR> --agent <ID> \
+kbshff check --project-root <DIR> --agent <ID> \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
 
-agent_Kuibysheff acp \
+kbshff acp \
   --agent <ID> \
   [--project-root <DIR>] \
   [--home <REL>] \
@@ -105,7 +105,7 @@ agent_Kuibysheff acp \
   [--max-cost CURRENCY:AMOUNT] \
   [--save-chat-history]
 
-agent_Kuibysheff config --project-root <DIR> --agent <ID> [--format text|json] \
+kbshff config --project-root <DIR> --agent <ID> [--format text|json] \
   import --from <PATH> [--force]
   | show | provider … | limits … | access … | mcp … | billing … \
   | event-mcp … | skill … | prompt … | rules … | tools effective [--connect]
@@ -153,13 +153,13 @@ stay in the external bridge process.
 IDE layering (VS Code):
 
 ```text
-VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibysheff acp
+VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  kbshff acp
 ```
 
 External bridge layering:
 
 ```text
-Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibysheff acp
+Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  kbshff acp
 ```
 
 #### Stream contract

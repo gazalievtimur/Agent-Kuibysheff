@@ -44,13 +44,13 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init demo --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo `
+cargo run --bin kbshff -- init demo --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent demo `
   import --from .\settings --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo `
+cargo run --bin kbshff -- config --project-root . --agent demo `
   import --from .\agent-config.local-demo.yaml --force
 
-cargo run --bin agent_Kuibysheff -- run `
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent demo `
   --home homes/demo-run `

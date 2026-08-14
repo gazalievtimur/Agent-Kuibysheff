@@ -5,12 +5,12 @@ Manage Kuibysheff agent parameters and the 1C ACP workflow from the sidebar.
 Extension package version (`0.1.0` in `package.json`) is **independent** of the
 CLI crate version (`0.2.x`).
 
-This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host still talks ACP to `agent_Kuibysheff acp`. The extension configures YAML, syncs `acp.agents`, scaffolds `.kuibysheff/`, and runs prepare / promote / validate / approve via the existing PowerShell scripts.
+This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host still talks ACP to `kbshff acp`. The extension configures YAML, syncs `acp.agents`, scaffolds `.kuibysheff/`, and runs prepare / promote / validate / approve via the existing PowerShell scripts.
 
 ## Features
 
 - **Sidebar** — agents under `.kuibysheff/protected/agents`, workflow stage status, quick actions
-- **Config editor** — provider, limits, MCP, access, logging (webview); Validate runs `agent_Kuibysheff check`
+- **Config editor** — provider, limits, MCP, access, logging (webview); Validate runs `kbshff check`
 - **Sync ACP** — writes `acp.agents` into `.vscode/settings.json`
 - **Scaffold** — wraps `scripts/1c-dev-scaffold-project.ps1`
 - **Workflow** — wraps `scripts/1c-dev-acp-prepare.ps1` (prepare / promote / validate / approve)
@@ -18,7 +18,7 @@ This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host 
 ## Requirements
 
 - Windows + PowerShell (same as current 1C workflow scripts)
-- `agent_Kuibysheff` on `PATH` (or set `kuibysheff.binaryPath`)
+- `kbshff` on `PATH` (or set `kuibysheff.binaryPath`)
 - Kuibysheff install path in `kuibysheff.repoRoot` (scripts + templates)
 
 ## Settings
@@ -26,7 +26,7 @@ This extension does **not** implement the chat UI (AHP). VS Code’s Agent Host 
 | Setting | Description |
 |---------|-------------|
 | `kuibysheff.repoRoot` | Absolute path to the **Agent Kuibysheff** clone (with `scripts/…`), **not** the product folder |
-| `kuibysheff.binaryPath` | Binary name/path (default `agent_Kuibysheff`) |
+| `kuibysheff.binaryPath` | Binary name/path (default `kbshff`) |
 | `kuibysheff.defaultIssueKey` | Default issue key for Prepare |
 
 ## Develop / run

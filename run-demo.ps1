@@ -34,21 +34,21 @@ try {
     $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
     Write-Host "Ensuring protected agent profile `$AgentId under $ProjectRoot"
 
-    cargo run --bin agent_Kuibysheff -- init $AgentId --project-root $ProjectRoot --force
+    cargo run --bin kbshff -- init $AgentId --project-root $ProjectRoot --force
     if ($LASTEXITCODE -ne 0) { throw "init failed" }
 
     if (Test-Path -LiteralPath $ImportFrom) {
-        cargo run --bin agent_Kuibysheff -- config --project-root $ProjectRoot --agent $AgentId import --from $ImportFrom --force
+        cargo run --bin kbshff -- config --project-root $ProjectRoot --agent $AgentId import --from $ImportFrom --force
         if ($LASTEXITCODE -ne 0) { throw "config import failed" }
     }
 
     if (Test-Path -LiteralPath $ConfigTemplate -PathType Leaf) {
-        cargo run --bin agent_Kuibysheff -- config --project-root $ProjectRoot --agent $AgentId import --from $ConfigTemplate --force
+        cargo run --bin kbshff -- config --project-root $ProjectRoot --agent $AgentId import --from $ConfigTemplate --force
         if ($LASTEXITCODE -ne 0) { throw "config template import failed" }
     }
 
-    Write-Host "Running agent_Kuibysheff agent=$AgentId"
-    cargo run --bin agent_Kuibysheff -- run `
+    Write-Host "Running kbshff agent=$AgentId"
+    cargo run --bin kbshff -- run `
         --project-root $ProjectRoot `
         --agent $AgentId `
         --prompt $Prompt `

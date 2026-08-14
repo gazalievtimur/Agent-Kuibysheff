@@ -6,7 +6,7 @@
 # This script is the eval harness — it is not cargo test / CI.
 #
 # Identity: each task uses project_root=local/aoc-runs/<run>/<task> with
-# agent_Kuibysheff run --project-root … --agent <id> --home homes/work.
+# kbshff run --project-root … --agent <id> --home homes/work.
 # --config / --settings-dir are import/render sources only.
 #
 # Usage:
@@ -130,9 +130,9 @@ json_get_raw() {
 }
 
 BASE_CONFIG_TEXT="$(cat "$CONFIG")"
-PROVIDER_BASE_URL="$(yaml_scalar "base_url" "https://polza.ai/api/v1" <<<"$BASE_CONFIG_TEXT")"
-PROVIDER_MODEL="$(yaml_scalar "model" "deepseek/deepseek-v4-flash" <<<"$BASE_CONFIG_TEXT")"
-PROVIDER_API_KEY_ENV="$(yaml_scalar "api_key_env" "POLZA_API_KEY" <<<"$BASE_CONFIG_TEXT")"
+PROVIDER_BASE_URL="$(yaml_scalar "base_url" "https://api.openai.com/v1" <<<"$BASE_CONFIG_TEXT")"
+PROVIDER_MODEL="$(yaml_scalar "model" "gpt-4o-mini" <<<"$BASE_CONFIG_TEXT")"
+PROVIDER_API_KEY_ENV="$(yaml_scalar "api_key_env" "OPENAI_API_KEY" <<<"$BASE_CONFIG_TEXT")"
 PROVIDER_TIMEOUT_MS="$(yaml_scalar "timeout_ms" "180000" <<<"$BASE_CONFIG_TEXT")"
 MAX_ITERATIONS="$(yaml_scalar "max_iterations" "40" <<<"$BASE_CONFIG_TEXT")"
 MAX_TOKENS="$(yaml_scalar "max_tokens" "500000" <<<"$BASE_CONFIG_TEXT")"
@@ -193,7 +193,7 @@ REPORT_TASKS_JSON='[]'
 echo "AoC eval run=$RUN_ID bank=$BANK_DIR tasks=${#TASK_LINES[@]}"
 echo "config=$CONFIG settings=$SETTINGS_DIR agent=$AGENT_ID home=$HOME_REL model=$PROVIDER_MODEL"
 
-AGENT_BIN="$REPO_ROOT/target/release/agent_Kuibysheff"
+AGENT_BIN="$REPO_ROOT/target/release/kbshff"
 if [[ ! -x "$AGENT_BIN" ]]; then
   echo "Release binary missing: $AGENT_BIN (run cargo build --release first)" >&2
   exit 1

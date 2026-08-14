@@ -103,9 +103,9 @@ function Get-YamlScalar {
 }
 
 $baseConfigText = Get-Content -LiteralPath $Config -Raw -Encoding UTF8
-$providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://polza.ai/api/v1"
-$providerModel = Get-YamlScalar $baseConfigText "model" "deepseek/deepseek-v4-flash"
-$providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "POLZA_API_KEY"
+$providerBaseUrl = Get-YamlScalar $baseConfigText "base_url" "https://api.openai.com/v1"
+$providerModel = Get-YamlScalar $baseConfigText "model" "gpt-4o-mini"
+$providerApiKeyEnv = Get-YamlScalar $baseConfigText "api_key_env" "OPENAI_API_KEY"
 $providerTimeoutMs = Get-YamlScalar $baseConfigText "timeout_ms" "180000"
 $maxIterations = Get-YamlScalar $baseConfigText "max_iterations" "40"
 $maxTokens = Get-YamlScalar $baseConfigText "max_tokens" "500000"
@@ -263,7 +263,7 @@ function Ensure-AgentProfile {
 
 Push-Location $RepoRoot
 try {
-    $agentExe = Join-Path $RepoRoot "target\release\agent_Kuibysheff.exe"
+    $agentExe = Join-Path $RepoRoot "target\release\kbshff.exe"
     if (-not (Test-Path -LiteralPath $agentExe -PathType Leaf)) {
         throw "Release binary missing: $agentExe (run cargo build --release first)"
     }

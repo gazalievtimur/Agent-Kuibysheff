@@ -44,7 +44,7 @@ async fn acp_child_over_redirected_stdio_survives_sequential_prompts() {
     let log_dir = project.join("logs");
     std::fs::create_dir_all(&log_dir).expect("log dir");
 
-    let init_out = std::process::Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
+    let init_out = std::process::Command::new(env!("CARGO_BIN_EXE_kbshff"))
         .args([
             "init",
             "acpdemo",
@@ -100,7 +100,7 @@ access:
     )
     .expect("config");
 
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_agent_Kuibysheff"));
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_kbshff"));
     let mut child = Command::new(&bin)
         .args([
             "acp",
