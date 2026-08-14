@@ -8,7 +8,7 @@
 #   ./scripts/security-regression.sh
 #   ./scripts/security-regression.sh --task-id escape-fs-sibling-01
 #   ./scripts/security-regression.sh --config path/to/config.yaml
-#   ./scripts/security-regression.sh --already-in-lab --agent-bin /usr/local/bin/agent_Kuibysheff
+#   ./scripts/security-regression.sh --already-in-lab --agent-bin /usr/local/bin/kbshff
 #
 # On Windows hosts use:
 #   .\scripts\security-regression-linux-docker.ps1
@@ -151,7 +151,7 @@ if [[ "$ALREADY_IN_LAB" -eq 0 ]]; then
     REQUIRE_LINUX_SANDBOX=1 cargo test -p sandbox-linux --test namespaces echo_under_grants \
       -- --exact --nocapture --test-threads=1
   fi
-  AGENT_BIN="${AGENT_BIN:-$REPO_ROOT/target/release/agent_Kuibysheff}"
+  AGENT_BIN="${AGENT_BIN:-$REPO_ROOT/target/release/kbshff}"
 else
   echo "Security regression (lab): bank=$BANK_DIR tasks=$TASK_COUNT config=$CONFIG"
   if [[ -z "$AGENT_BIN" ]]; then

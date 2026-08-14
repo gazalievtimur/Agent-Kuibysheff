@@ -93,7 +93,7 @@ impl TryFrom<RunArgs> for AgentPromptArgs {
     }
 }
 
-/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `config`.
+/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `config` / wizard.
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
@@ -107,8 +107,12 @@ pub fn run() -> ExitCode {
         }
     };
 
+    let Some(command) = cli.command else {
+        return commands::wizard::run();
+    };
+
     let launch_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolved_config_env = match &cli.command {
+    let resolved_config_env = match &command {
         Commands::Run(args) => resolve_agent_identity(
             &args.identity.project_root,
             &args.identity.agent,
@@ -140,7 +144,7 @@ pub fn run() -> ExitCode {
     // Precedence: process env > config-dir .env > launch CWD .env
     load_dotenv_layered(resolved_config_env.as_deref());
 
-    match cli.command {
+    match command {
         Commands::Run(args) => run_worker(args),
         Commands::Acp(args) => run_acp(args),
         Commands::Init(args) => match commands::init::run(&args) {

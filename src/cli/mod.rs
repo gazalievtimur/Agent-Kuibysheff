@@ -21,14 +21,14 @@ pub use init::InitArgs;
 /// Top-level CLI.
 #[derive(Debug, Parser)]
 #[command(
-    name = "agent_Kuibysheff",
+    name = "kbshff",
     version,
-    about = "agent_Kuibysheff CLI worker and agent tooling",
-    arg_required_else_help = true
+    about = "kbshff CLI worker and agent tooling"
 )]
 pub struct Cli {
+    /// When omitted (and stdin/stdout are a TTY), runs the interactive setup wizard.
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -52,7 +52,7 @@ pub struct AgentIdentityArgs {
     #[arg(long, value_name = "DIR")]
     pub project_root: PathBuf,
 
-    /// Agent id (`[a-z0-9][a-z0-9_-]*`). Profile lives under
+    /// Agent id (letters/digits any language, spaces, `_`, `-`). Profile lives under
     /// `.kuibysheff/protected/agents/<id>/`.
     #[arg(long, value_name = "ID")]
     pub agent: String,
@@ -151,7 +151,7 @@ mod tests {
         ])
         .expect("parse args");
 
-        let Commands::Run(args) = cli.command else {
+        let Some(Commands::Run(args)) = cli.command else {
             panic!("expected Run");
         };
         assert_eq!(args.prompt, "do work");
@@ -200,7 +200,7 @@ mod tests {
         ])
         .expect("parse init");
 
-        let Commands::Init(args) = cli.command else {
+        let Some(Commands::Init(args)) = cli.command else {
             panic!("expected Init");
         };
         assert_eq!(args.agent_id, "my-agent");
@@ -224,7 +224,7 @@ mod tests {
         ])
         .expect("parse check");
 
-        let Commands::Check(args) = cli.command else {
+        let Some(Commands::Check(args)) = cli.command else {
             panic!("expected Check");
         };
         assert_eq!(args.identity.agent, "demo");
@@ -245,7 +245,7 @@ mod tests {
             "show",
         ])
         .expect("parse config");
-        let Commands::Config(args) = cli.command else {
+        let Some(Commands::Config(args)) = cli.command else {
             panic!("expected Config");
         };
         assert_eq!(args.format, ConfigFormat::Json);
@@ -277,11 +277,17 @@ mod tests {
         ])
         .expect("parse acp");
 
-        let Commands::Acp(args) = cli.command else {
+        let Some(Commands::Acp(args)) = cli.command else {
             panic!("expected Acp");
         };
         assert_eq!(args.project_root, Some(PathBuf::from("/proj")));
         assert_eq!(args.agent, "demo");
         assert_eq!(args.max_iterations, Some(3));
+    }
+
+    #[test]
+    fn parses_no_subcommand() {
+        let cli = Cli::try_parse_from(["kbshff"]).expect("parse empty");
+        assert!(cli.command.is_none());
     }
 }

@@ -9,7 +9,7 @@
 # Typical host launchers:
 #   ./scripts/swebench-regression-linux-docker.ps1   (Windows)
 #   docker run --rm -v "$PWD:/work" -v /var/run/docker.sock:/var/run/docker.sock \
-#     -e POLZA_API_KEY -e KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1 \
+#     -e OPENAI_API_KEY -e KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1 \
 #     rust:1-bookworm bash /work/scripts/swebench-regression-linux-docker.sh
 set -euo pipefail
 
@@ -61,17 +61,17 @@ python3 -m pip install -q --break-system-packages \
 echo "== linux-docker: build release agent (CARGO_TARGET_DIR=$CARGO_TARGET_DIR) =="
 cargo --version
 cargo build --release
-install -m 755 "$CARGO_TARGET_DIR/release/agent_Kuibysheff" /usr/local/bin/agent_Kuibysheff
-if ! file /usr/local/bin/agent_Kuibysheff | grep -q ELF; then
-  echo "expected Linux ELF at /usr/local/bin/agent_Kuibysheff" >&2
-  file /usr/local/bin/agent_Kuibysheff >&2 || true
+install -m 755 "$CARGO_TARGET_DIR/release/kbshff" /usr/local/bin/kbshff
+if ! file /usr/local/bin/kbshff | grep -q ELF; then
+  echo "expected Linux ELF at /usr/local/bin/kbshff" >&2
+  file /usr/local/bin/kbshff >&2 || true
   exit 1
 fi
 hash -r
-agent_Kuibysheff --help >/dev/null
+kbshff --help >/dev/null
 
 chmod +x scripts/*.sh workflows/swebench-verified/run.sh 2>/dev/null || true
 
 echo "== linux-docker: swebench-regression =="
 # Explicit --agent-bin avoids resolving a host-mounted Windows .exe from target/release.
-exec bash scripts/swebench-regression.sh --agent-bin /usr/local/bin/agent_Kuibysheff "$@"
+exec bash scripts/swebench-regression.sh --agent-bin /usr/local/bin/kbshff "$@"

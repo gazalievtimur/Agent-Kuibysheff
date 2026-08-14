@@ -55,14 +55,14 @@ dedicated server from the top-level `mcp` list. The billing server is connected
 separately and is not advertised to the model or usable by Event-MCP.
 
 An optional billing MCP failure does not fail the run. It produces an unpriced
-reason and the resolver continues to the next source. `agent_Kuibysheff check`
+reason and the resolver continues to the next source. `kbshff check`
 still reports connectivity or discovery failures so deployment problems are
 visible before a run.
 
 CLI overrides:
 
 ```text
-agent_Kuibysheff run ... --run-id invoice-row-42 --max-cost USD:0.50
+kbshff run ... --run-id invoice-row-42 --max-cost USD:0.50
 ```
 
 ## Local catalog

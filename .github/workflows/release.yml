@@ -59,7 +59,7 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Build release binary
-        run: cargo build --release --locked --bin agent_Kuibysheff
+        run: cargo build --release --locked --bin kbshff
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -69,9 +69,9 @@ jobs:
           $target = "${{ matrix.target }}"
           $stem = "agent_Kuibysheff-$tag-$target"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/release/agent_Kuibysheff.exe" "dist/$stem.exe"
-          Compress-Archive -Path "dist/$stem.exe" -DestinationPath "dist/$stem.zip" -Force
-          Remove-Item "dist/$stem.exe"
+          Copy-Item "target/release/kbshff.exe" "dist/kbshff.exe"
+          Compress-Archive -Path "dist/kbshff.exe" -DestinationPath "dist/$stem.zip" -Force
+          Remove-Item "dist/kbshff.exe"
           $hash = (Get-FileHash "dist/$stem.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -Path "dist/$stem.zip.sha256" -Value "$hash  $stem.zip" -NoNewline
 
@@ -84,11 +84,11 @@ jobs:
           target="${{ matrix.target }}"
           stem="agent_Kuibysheff-${tag}-${target}"
           mkdir -p dist
-          cp "target/release/agent_Kuibysheff" "dist/${stem}"
+          cp "target/release/kbshff" "dist/kbshff"
           (
             cd dist
-            zip -q "${stem}.zip" "${stem}"
-            rm -f "${stem}"
+            zip -q "${stem}.zip" "kbshff"
+            rm -f "kbshff"
             sha256sum "${stem}.zip" > "${stem}.zip.sha256"
           )
 

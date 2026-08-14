@@ -1,4 +1,4 @@
-# Security-probe: terra-pro with a hard 4 RUB cost budget (Polza).
+# Security-probe: terra-pro with a hard 4 RUB cost budget.
 # Copy of terra-pro security+limits gate; cost is the primary stopper.
 # Import/render source only — security_eval.py rewrites per-run config.
 #
@@ -6,9 +6,9 @@
 # Run with --require-cost-limit for full cost-control assert.
 
 provider:
-  base_url: "https://polza.ai/api/v1"
+  base_url: "https://api.openai.com/v1"
   model: "openai/gpt-5.6-terra-pro"
-  api_key_env: "POLZA_API_KEY"
+  api_key_env: "OPENAI_API_KEY"
   timeout_ms: 180000
   max_retries: 3
   retry_base_delay_ms: 500

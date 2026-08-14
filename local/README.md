@@ -91,7 +91,7 @@ Security sandbox LLM regression is opt-in:
 - Linux: `./scripts/check.sh --security` / `RUN_SECURITY=1`
 
 ```powershell
-$env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
+$env:OPENAI_API_KEY = "..."   # or set provider api_key_env / .env
 .\scripts\check.ps1                    # fmt/clippy/deny/cargo test (no live evals)
 .\scripts\check.ps1 -Aoc               # + AoC regression
 .\scripts\aoc-regression.ps1           # AoC-only
@@ -106,7 +106,7 @@ $env:POLZA_API_KEY = "..."   # or set provider api_key_env / .env
 ```
 
 ```bash
-export POLZA_API_KEY="..."   # or set provider api_key_env / .env
+export OPENAI_API_KEY="..."   # or set provider api_key_env / .env
 ./scripts/check.sh                     # fmt/clippy/deny/tests/portability (AoC opt-in)
 ./scripts/check.sh --aoc               # + live AoC regression
 ./scripts/aoc-regression.sh            # AoC-only
@@ -136,7 +136,7 @@ The AoC harness:
 2. Loads tasks from `local/aoc-bank`
 3. Writes a per-run config with fail-closed `access` (python alias + runtime roots)
 4. Imports `test-agents/referent` into a protected profile, then runs
-   `agent_Kuibysheff run --project-root … --agent …` once per task
+   `kbshff run --project-root … --agent …` once per task
 5. Compares `RunOutput.result` to `expected`
 6. Writes `local/aoc-runs/<run-id>/report.json`
 

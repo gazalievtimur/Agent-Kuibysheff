@@ -148,8 +148,8 @@
         },
         "kuibysheff.binaryPath": {
           "type": "string",
-          "default": "agent_Kuibysheff",
-          "description": "Path or name of the agent_Kuibysheff binary."
+          "default": "kbshff",
+          "description": "Path or name of the kbshff binary."
         },
         "kuibysheff.defaultIssueKey": {
           "type": "string",

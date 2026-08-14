@@ -75,4 +75,4 @@ jobs:
         run: cargo build --release --locked -p agent_Kuibysheff
 
       - name: Smoke --help
-        run: ./target/release/agent_Kuibysheff --help
+        run: ./target/release/kbshff --help

@@ -105,7 +105,7 @@ PYTHON=python3
 command -v python3 >/dev/null 2>&1 || PYTHON=python
 
 echo "Building release agent..."
-cargo build --release -p agent_Kuibysheff --bin agent_Kuibysheff
+cargo build --release -p agent_Kuibysheff --bin kbshff
 
 SETTINGS_DIR="$REPO_ROOT/test-agents/scale-fs-probe"
 RUNS_ROOT="$REPO_ROOT/local/scale-fs-runs"

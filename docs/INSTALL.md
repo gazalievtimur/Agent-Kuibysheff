@@ -22,7 +22,7 @@ sha256sum -c agent_Kuibysheff-v0.2.0-x86_64-unknown-linux-gnu.zip.sha256
 ```
 
 3. Extract the binary and place it on your `PATH`.
-4. Confirm: `agent_Kuibysheff --help`.
+4. Confirm: `kbshff --help`.
 
 Linux binaries are built on GitHub `ubuntu-latest` (currently Ubuntu 24.04)
 against that runner’s **glibc**; older distros may need a newer glibc or a
@@ -35,8 +35,13 @@ Requirements: **Rust 1.88+** (MSRV), plus platform toolchains for your OS.
 ```bash
 git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
-cargo build --release --bin agent_Kuibysheff
+cargo build --release --bin kbshff
 ```
+
+The CLI binary is named **`kbshff`** (crate/package remains `agent_Kuibysheff`).
+Running `kbshff` with no arguments opens an interactive setup wizard (TTY
+required). The wizard can store the provider API key in the agent profile
+`.env` so you do not need to export it in every shell session.
 
 ## Upgrade
 
@@ -51,7 +56,7 @@ is **not** overwritten by installing a new binary.
 
 ## Uninstall
 
-1. Remove the `agent_Kuibysheff` binary from your install location / `PATH`.
+1. Remove the `kbshff` binary from your install location / `PATH`.
 2. Optionally delete project data:
    - `.kuibysheff/protected/` — agent profiles and protected store;
    - `.kuibysheff/homes/`, `.kuibysheff/runs/` — run workspaces and artifacts;

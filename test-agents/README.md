@@ -8,8 +8,8 @@
 protected store:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --bin kbshff -- init referent --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
 ```
 
@@ -20,7 +20,7 @@ CLI остаётся stateless worker: артефакты пишутся в home
 
 ```powershell
 # Создать защищённый профиль, затем скопировать файлы наружу как шаблон (опционально)
-cargo run --bin agent_Kuibysheff -- init my-agent --project-root . --force
+cargo run --bin kbshff -- init my-agent --project-root . --force
 # или скопировать существующий каталог test-agents/<id> вручную
 ```
 
@@ -45,11 +45,11 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
-cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --bin kbshff -- init referent --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
 
-cargo run --bin agent_Kuibysheff -- run `
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent referent `
   --prompt "Собери первичную информацию по задаче PROJ-123"

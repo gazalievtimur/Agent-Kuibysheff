@@ -9,7 +9,7 @@
 #   ./scripts/swebench-regression.sh
 #   ./scripts/swebench-regression.sh --config path/to/config.yaml
 #   ./scripts/swebench-regression.sh --instance-id sympy__sympy-20590
-#   ./scripts/swebench-regression.sh --agent-bin /path/to/agent_Kuibysheff
+#   ./scripts/swebench-regression.sh --agent-bin /path/to/kbshff
 #
 # On Windows hosts without WSL/Linux toolchain, use:
 #   ./scripts/swebench-regression-linux-docker.ps1

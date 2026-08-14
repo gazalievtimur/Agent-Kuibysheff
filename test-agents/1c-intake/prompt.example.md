@@ -20,11 +20,11 @@ Return JSON only on every turn.
 PowerShell:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init 1c-intake --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent 1c-intake `
+cargo run --bin kbshff -- init 1c-intake --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent 1c-intake `
   import --from .\test-agents\1c-intake --force
 
-cargo run --bin agent_Kuibysheff -- run `
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent 1c-intake `
   --home homes/manual-intake `

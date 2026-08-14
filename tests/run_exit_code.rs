@@ -10,7 +10,7 @@ fn run_prints_error_json_and_exits_nonzero() {
     let tmp = tempdir().expect("tempdir");
     let project = tmp.path();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
+    let output = Command::new(env!("CARGO_BIN_EXE_kbshff"))
         .args([
             "run",
             "--project-root",
@@ -45,7 +45,7 @@ fn check_keeps_its_own_exit_semantics() {
     let tmp = tempdir().expect("tempdir");
     let project = tmp.path();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agent_Kuibysheff"))
+    let output = Command::new(env!("CARGO_BIN_EXE_kbshff"))
         .args([
             "check",
             "--project-root",
