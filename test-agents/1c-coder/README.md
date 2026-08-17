@@ -1,6 +1,6 @@
 # 1c-coder
 
-Stage 3: approved plan → `out/src` application sources (not full CFE packaging).
+1c-live stage 3: agreements + approved plan + `in/tests/` → `out/src` application sources (not full CFE packaging).
 
 ## Dependencies
 

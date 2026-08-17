@@ -2,8 +2,9 @@
 
 ```text
 Реализуй утверждённые шаги кода для product=demo.
+Read in/agreements-protocol.md and in/agreements.md first (identifiers are literals).
 Read in/tasks.md. Implement only bsl/metadata into out/src/.
-Write code-report.md, files-index.md, manifest.json (apply_mode=none).
+Write code-report.md (verification table), files-index.md, manifest.json (apply_mode=none).
 Return JSON only on every turn.
 ```
 

@@ -75,3 +75,23 @@ Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-ao
 (many-file search, windowed `home.read`). Harness:
 `scripts/scale-fs-regression.*` (requires local `workflows/scale-fs-live/`
 restored from git history). See [local/README.md](../local/README.md).
+
+## 1C live pipeline (Склад)
+
+Four stage templates, consumed by gitignored `workflows/1c-live/` (not part of
+`check.ps1`):
+
+1. [`1c-analyst`](1c-analyst/) — `agreements.md` + plan (`prd.md`, `tasks.md`, `cfe-scope.md`)
+2. [`1c-yaxunit`](1c-yaxunit/) — TDD YAxUnit tests from the plan + public docs
+3. [`1c-coder`](1c-coder/) — feature sources under `out/src/` against `in/tests/`
+4. [`1c-implementer`](1c-implementer/) — feature CFE in `out/cfe/`; copy test CFE
+
+Handshake: [`1c-shared/agreements-protocol.md`](1c-shared/agreements-protocol.md) — identifiers are literals (no synonyms). Eval copies it to `in/agreements-protocol.md` on every stage.
+
+YAxUnit API must come from the public snapshot (`workflows/1c-live/docs/yaxunit/`,
+copied to `in/docs/`) and optionally SearXNG on
+`bia-technologies.github.io/yaxunit` / `github.com/bia-technologies/yaxunit`.
+Not ITS, not paywalled Infostart.
+
+Canonical docs: https://bia-technologies.github.io/yaxunit/  
+Repo: https://github.com/bia-technologies/yaxunit
