@@ -1,6 +1,8 @@
 # 1c-analyst
 
-Stage 2: brief + CF research → approvable plan. Optional SearXNG web search.
+1c-live stage 1: brief + CF research → frozen `out/agreements.md` + approvable plan. Optional SearXNG web search.
+
+Identifiers from `in/agreements.json` are literals (see [`../1c-shared/agreements-protocol.md`](../1c-shared/agreements-protocol.md)).
 
 ## Dependencies
 
