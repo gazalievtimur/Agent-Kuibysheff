@@ -30,9 +30,9 @@ git checkout <commit-before-untrack> -- workflows
 
 | Suite | Repo |
 | --- | --- |
-| AoC + AoC-live | https://github.com/gybson63/kuibysheff-aoc |
-| SWE-bench Verified | https://github.com/gybson63/kuibysheff-swebench |
-| 1C CF/CFE live | https://github.com/gybson63/kuibysheff-1c-live |
+| AoC + AoC-live | https://github.com/gazalievtimur/kuibysheff-aoc |
+| SWE-bench Verified | https://github.com/gazalievtimur/kuibysheff-swebench |
+| 1C CF/CFE live | https://github.com/gazalievtimur/kuibysheff-1c-live |
 
 From this agent checkout, `check -Aoc` / `check -Swebench` delegate to sibling
 clones (or `KUIBYSHEFF_AOC_ROOT` / `KUIBYSHEFF_SWEBENCH_ROOT`) with

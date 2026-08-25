@@ -69,13 +69,13 @@ Both run `fmt`, Clippy, `cargo deny`, tests, and portability checks. When a loca
 `workflows/` tree is present (gitignored copy-units), they also run detached
 workflow smoke tests. Live LLM regressions are **opt-in**:
 
-- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1` → delegates to [kuibysheff-aoc](https://github.com/gybson63/kuibysheff-aoc) (`KUIBYSHEFF_AOC_ROOT` or sibling clone)
-- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1` → [kuibysheff-swebench](https://github.com/gybson63/kuibysheff-swebench)
+- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1` → delegates to [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) (`KUIBYSHEFF_AOC_ROOT` or sibling clone)
+- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1` → [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench)
 - Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1` (local `workflows/`)
 - Scale-FS: `-ScaleFs` / `--scale-fs` or `RUN_SCALE_FS=1` (local `workflows/`)
 
 1C CF/CFE live eval is a separate example repo:
-[kuibysheff-1c-live](https://github.com/gybson63/kuibysheff-1c-live) (not hooked to `check`).
+[kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) (not hooked to `check`).
 
 Install `cargo-deny` if needed: `cargo install --locked cargo-deny`.
 

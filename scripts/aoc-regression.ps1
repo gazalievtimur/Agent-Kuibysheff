@@ -28,7 +28,7 @@ if (-not $aocRoot) {
     throw @"
 AoC example repo not found.
 
-Clone https://github.com/gybson63/kuibysheff-aoc next to this repo, or set:
+Clone https://github.com/gazalievtimur/kuibysheff-aoc next to this repo, or set:
   KUIBYSHEFF_AOC_ROOT=C:\path\to\kuibysheff-aoc
 
 Then re-run: .\scripts\check.ps1 -Aoc

@@ -16,7 +16,7 @@ if [[ -z "$AOC_ROOT" || ! -f "$AOC_ROOT/scripts/aoc-regression.sh" ]]; then
   cat >&2 <<'EOF'
 AoC example repo not found.
 
-Clone https://github.com/gybson63/kuibysheff-aoc next to this repo, or set:
+Clone https://github.com/gazalievtimur/kuibysheff-aoc next to this repo, or set:
   KUIBYSHEFF_AOC_ROOT=/path/to/kuibysheff-aoc
 
 Then re-run: ./scripts/check.sh --aoc

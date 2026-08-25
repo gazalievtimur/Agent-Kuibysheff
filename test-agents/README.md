@@ -61,7 +61,7 @@ cargo run --bin kbshff -- run `
 ## Advent of Code
 
 AoC offline bank eval and live adventofcode.com orchestration moved to
-[kuibysheff-aoc](https://github.com/gybson63/kuibysheff-aoc).
+[kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc).
 From this repo: `.\scripts\check.ps1 -Aoc` / `./scripts/check.sh --aoc`
 (requires a sibling clone or `KUIBYSHEFF_AOC_ROOT`).
 
@@ -83,6 +83,6 @@ Bearer gate, `SendMessage` → write file + result token). Harness:
 
 ## 1C live pipeline (Склад)
 
-Moved to [kuibysheff-1c-live](https://github.com/gybson63/kuibysheff-1c-live)
+Moved to [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live)
 (analyst → yaxunit → coder → implementer). Product conveyor / VS Code scaffolding
 stays here as `1c-intake` + local `workflows/1c-dev/`.

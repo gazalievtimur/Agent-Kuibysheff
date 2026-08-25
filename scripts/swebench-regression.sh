@@ -16,7 +16,7 @@ if [[ -z "$SWE_ROOT" || ! -f "$SWE_ROOT/scripts/swebench-regression.sh" ]]; then
   cat >&2 <<'EOF'
 SWE-bench example repo not found.
 
-Clone https://github.com/gybson63/kuibysheff-swebench next to this repo, or set:
+Clone https://github.com/gazalievtimur/kuibysheff-swebench next to this repo, or set:
   KUIBYSHEFF_SWEBENCH_ROOT=/path/to/kuibysheff-swebench
 
 Then re-run: ./scripts/check.sh --swebench

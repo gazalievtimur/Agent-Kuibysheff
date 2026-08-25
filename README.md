@@ -152,9 +152,9 @@ Standalone example repos (CLI orchestration around `kbshff`):
 
 | Repo | Purpose |
 | --- | --- |
-| [kuibysheff-aoc](https://github.com/gybson63/kuibysheff-aoc) | Offline AoC bank eval + live adventofcode.com (ACP) |
-| [kuibysheff-swebench](https://github.com/gybson63/kuibysheff-swebench) | SWE-bench Verified (Docker + official grade) |
-| [kuibysheff-1c-live](https://github.com/gybson63/kuibysheff-1c-live) | 1C CF/CFE four-stage live eval |
+| [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) | Offline AoC bank eval + live adventofcode.com (ACP) |
+| [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench) | SWE-bench Verified (Docker + official grade) |
+| [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) | 1C CF/CFE four-stage live eval |
 
 Clone them next to this repo (or set `KUIBYSHEFF_AOC_ROOT` / `KUIBYSHEFF_SWEBENCH_ROOT`). Opt-in from here:
 
