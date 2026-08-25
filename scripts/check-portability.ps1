@@ -22,10 +22,8 @@ try {
     $probePaths = @(
         "run/out/manifest.json",
         "demo-home/searxng/out/manifest.json",
-        "workflows/aoc-live/__pycache__/runtime.cpython-312.pyc",
         ".cursor/mcp.json",
         "deepseek__deepseek-v4-flash.regression-probe.json",
-        "workflows/swebench-verified/artifacts/_probe",
         ".cursor/plans/probe.plan.md"
     )
     foreach ($rel in $probePaths) {

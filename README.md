@@ -146,25 +146,30 @@ kbshff a2a \
 Serves Agent Card + JSON-RPC/REST for A2A 1.0. Defaults to loopback. See
 [CONTRACT.md](CONTRACT.md#a2a-peer-agents).
 
-## Local eval / copy-units
+## Examples / live regressions
 
-Example orchestrators and live LLM regression harnesses live under `workflows/`
-**locally only** (gitignored). They are not part of the published product tree.
-Restore from git history when you need them for testing:
+Standalone example repos (CLI orchestration around `kbshff`):
 
-```bash
-git checkout <commit-before-untrack> -- workflows
+| Repo | Purpose |
+| --- | --- |
+| [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) | Offline AoC bank eval + live adventofcode.com (ACP) |
+| [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench) | SWE-bench Verified (Docker + official grade) |
+| [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) | 1C CF/CFE four-stage live eval |
+
+Clone them next to this repo (or set `KUIBYSHEFF_AOC_ROOT` / `KUIBYSHEFF_SWEBENCH_ROOT`). Opt-in from here:
+
+```powershell
+.\scripts\check.ps1 -Aoc        # delegates to kuibysheff-aoc
+.\scripts\check.ps1 -Swebench   # delegates to kuibysheff-swebench
 ```
 
-Opt-in gates (require restored copy-units where applicable):
+In-tree opt-in gates that still use local `workflows/` copy-units:
 
-- SWE-bench: `scripts/swebench-regression.*` / `check.* -Swebench`
 - Security sandbox: `scripts/security-regression.*` / `check.* -Security`
 - Scale-FS: `scripts/scale-fs-regression.*` / `check.* -ScaleFs`
-- AoC: `scripts/aoc-regression.*` / `check.* -Aoc` (uses `local/aoc-bank`, not `workflows/`)
 
 Agent profile templates: [test-agents/README.md](test-agents/README.md).
-Local banks and run artifacts: [local/README.md](local/README.md).
+Local banks (security / Scale-FS / A2A): [local/README.md](local/README.md).
 
 ## Configuration
 

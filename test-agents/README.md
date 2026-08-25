@@ -58,16 +58,14 @@ cargo run --bin kbshff -- run `
 Для работы с изображениями используйте vision-модель в `provider.model`
 (например, `gpt-4o`, `gpt-4.1`, `claude-sonnet-4` и аналоги с поддержкой изображений).
 
-## Advent of Code eval (Referent)
+## Advent of Code
 
-Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-aoc-tasks.js`) выдаёт
-условие и input, код пишется через `home.write`, запускается через `home.run`,
-ответ сравнивается по полю `RunOutput.result`.
+AoC offline bank eval and live adventofcode.com orchestration moved to
+[kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc).
+From this repo: `.\scripts\check.ps1 -Aoc` / `./scripts/check.sh --aoc`
+(requires a sibling clone or `KUIBYSHEFF_AOC_ROOT`).
 
-База заданий и прогоны **не в git** — см. [local/README.md](../local/README.md).
-
-Оркестратор: [`scripts/aoc-eval.ps1`](../scripts/aoc-eval.ps1) (импортирует шаблон в
-`local/aoc-eval-project/.kuibysheff/protected/agents/…`).
+Referent here remains the Jira/Confluence research demo.
 
 ## Scale-FS probe
 
@@ -85,20 +83,6 @@ Bearer gate, `SendMessage` → write file + result token). Harness:
 
 ## 1C live pipeline (Склад)
 
-Four stage templates, consumed by gitignored `workflows/1c-live/` (not part of
-`check.ps1`):
-
-1. [`1c-analyst`](1c-analyst/) — `agreements.md` + plan (`prd.md`, `tasks.md`, `cfe-scope.md`)
-2. [`1c-yaxunit`](1c-yaxunit/) — TDD YAxUnit tests from the plan + public docs
-3. [`1c-coder`](1c-coder/) — feature sources under `out/src/` against `in/tests/`
-4. [`1c-implementer`](1c-implementer/) — feature CFE in `out/cfe/`; copy test CFE
-
-Handshake: [`1c-shared/agreements-protocol.md`](1c-shared/agreements-protocol.md) — identifiers are literals (no synonyms). Eval copies it to `in/agreements-protocol.md` on every stage.
-
-YAxUnit API must come from the public snapshot (`workflows/1c-live/docs/yaxunit/`,
-copied to `in/docs/`) and optionally SearXNG on
-`bia-technologies.github.io/yaxunit` / `github.com/bia-technologies/yaxunit`.
-Not ITS, not paywalled Infostart.
-
-Canonical docs: https://bia-technologies.github.io/yaxunit/  
-Repo: https://github.com/bia-technologies/yaxunit
+Moved to [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live)
+(analyst → yaxunit → coder → implementer). Product conveyor / VS Code scaffolding
+stays here as `1c-intake` + local `workflows/1c-dev/`.

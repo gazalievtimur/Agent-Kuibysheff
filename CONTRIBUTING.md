@@ -67,19 +67,15 @@ Run the offline quality gate before opening a PR:
 
 Both run `fmt`, Clippy, `cargo deny`, tests, and portability checks. When a local
 `workflows/` tree is present (gitignored copy-units), they also run detached
-workflow smoke tests. Live LLM regressions are **opt-in** and need the matching
-copy-unit restored from git history (except AoC, which uses `local/aoc-bank`):
+workflow smoke tests. Live LLM regressions are **opt-in**:
 
-- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1`
-- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1`
-- Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1`
-- Scale-FS: `-ScaleFs` / `--scale-fs` or `RUN_SCALE_FS=1`
+- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1` → delegates to [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) (`KUIBYSHEFF_AOC_ROOT` or sibling clone)
+- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1` → [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench)
+- Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1` (local `workflows/`)
+- Scale-FS: `-ScaleFs` / `--scale-fs` or `RUN_SCALE_FS=1` (local `workflows/`)
 
-Restore copy-units for local testing:
-
-```bash
-git checkout <commit-before-untrack> -- workflows
-```
+1C CF/CFE live eval is a separate example repo:
+[kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) (not hooked to `check`).
 
 Install `cargo-deny` if needed: `cargo install --locked cargo-deny`.
 

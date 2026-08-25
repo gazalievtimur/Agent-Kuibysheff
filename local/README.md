@@ -1,11 +1,11 @@
 # Local evaluation data
 
-This directory holds **local-only** Advent of Code evaluation assets,
-security-sandbox regression data, and Scale-FS live regression assets.
+Local-only banks and run artifacts for **in-tree** live regressions
+(security, Scale-FS, A2A). AoC / SWE-bench / 1C live evals live in separate
+example repositories — see the root [README](../README.md#examples--live-regressions).
 
-Example orchestrator / harness copy-units live under repo-root `workflows/`
-and are **gitignored** (not part of the published product tree). Restore them
-from git history when you need offline smokes or opt-in live regressions:
+Remaining gitignored `workflows/` copy-units (security, scale-fs, 1c-dev) can be
+restored from git history when needed:
 
 ```bash
 git checkout <commit-before-untrack> -- workflows
@@ -13,10 +13,6 @@ git checkout <commit-before-untrack> -- workflows
 
 | Path | In git? | Purpose |
 | --- | --- | --- |
-| `aoc-bank.example/` | yes | Schema sample and one toy task |
-| `aoc-bank/` | **no** | Your real task bank (`id`, `text`, `input`, `expected`) |
-| `aoc-runs/` | **no** | Per-run homes and `report.json` from the harness |
-| `aoc-sandbox-runtime/` | **no** | Staged Python tree for AppContainer ACL grants |
 | `security-bank.example/` | yes | Adversarial prompt bank sample (containment scoring) |
 | `security-bank/` | **no** | Working security bank copy |
 | `security-runs/` | **no** | Security eval homes + `report.json` |
@@ -30,211 +26,34 @@ git checkout <commit-before-untrack> -- workflows
 | `SECRET_SCAN.md` | yes | Notes for gitleaks / placeholder false positives |
 | `gitleaks-report.json` | **no** | Redacted local gitleaks output |
 
-## Setup
+## External example repos
 
-Windows:
+| Suite | Repo |
+| --- | --- |
+| AoC + AoC-live | https://github.com/gazalievtimur/kuibysheff-aoc |
+| SWE-bench Verified | https://github.com/gazalievtimur/kuibysheff-swebench |
+| 1C CF/CFE live | https://github.com/gazalievtimur/kuibysheff-1c-live |
 
-```powershell
-Copy-Item -Recurse .\local\aoc-bank.example .\local\aoc-bank
-# Edit/replace JSON files under local/aoc-bank with real puzzles.
-```
+From this agent checkout, `check -Aoc` / `check -Swebench` delegate to sibling
+clones (or `KUIBYSHEFF_AOC_ROOT` / `KUIBYSHEFF_SWEBENCH_ROOT`) with
+`KUIBYSHEFF_SRC` pointing here.
 
-Linux:
-
-```bash
-cp -R ./local/aoc-bank.example ./local/aoc-bank
-# Edit/replace JSON files under local/aoc-bank with real puzzles.
-```
-
-Optional:
+## In-tree opt-in gates
 
 ```powershell
-$env:AOC_BANK_DIR = (Resolve-Path .\local\aoc-bank).Path
-```
-
-```bash
-export AOC_BANK_DIR="$(pwd)/local/aoc-bank"
-```
-
-Requirements:
-
-- Node.js (for `mcp-aoc-tasks.js`)
-- Python on `PATH` (agents use `home.run` with `program=python`)
-- Provider API key from the chosen config (`OPENAI_API_KEY` by default)
-
-## Run eval (Referent)
-
-Windows:
-
-```powershell
-.\scripts\aoc-eval.ps1
-.\scripts\aoc-eval.ps1 -TaskId 2024-01-1
-```
-
-Linux:
-
-```bash
-chmod +x ./scripts/*.sh
-./scripts/aoc-eval.sh
-./scripts/aoc-eval.sh --task-id 2024-01-1
-```
-
-### Regression gate
-
-Live agent evals are opt-in local gates (not PR CI):
-
-- **AoC:** opt-in on both OS — `scripts/check.ps1 -Aoc` / `RUN_AOC=1`, or Linux `scripts/check.sh --aoc` / `RUN_AOC=1`
-- **SWE-bench (one Verified instance):** `scripts/check.ps1 -Swebench` / `RUN_SWEBENCH=1`, or `./scripts/check.sh --swebench`
-- **Security sandbox (LLM containment):** `scripts/check.ps1 -Security` / `RUN_SECURITY=1`, or `./scripts/check.sh --security`
-- **Scale-FS (many files / large reads):** `scripts/check.ps1 -ScaleFs` / `RUN_SCALE_FS=1`, or `./scripts/check.sh --scale-fs`
-- **A2A (Agent Card + SendMessage):** `scripts/a2a-regression.ps1` / `./scripts/a2a-regression.sh` (opt-in; not in default `check`)
-
-Security sandbox LLM regression is opt-in:
-
-- Windows: `scripts/check.ps1 -Security` / `RUN_SECURITY=1`
-- Linux: `./scripts/check.sh --security` / `RUN_SECURITY=1`
-
-```powershell
-$env:OPENAI_API_KEY = "..."   # or set provider api_key_env / .env
+$env:OPENAI_API_KEY = "..."
 .\scripts\check.ps1                    # fmt/clippy/deny/cargo test (no live evals)
-.\scripts\check.ps1 -Aoc               # + AoC regression
-.\scripts\aoc-regression.ps1           # AoC-only
-.\scripts\check.ps1 -Swebench          # + SWE-bench regression (Docker + LLM)
-.\scripts\swebench-regression.ps1      # SWE-bench-only (sympy__sympy-20590)
-.\scripts\swebench-regression-linux-docker.ps1  # same gate as Linux ELF via Docker
-.\scripts\check.ps1 -Security          # + security sandbox LLM regression (Docker lab on Windows)
-.\scripts\security-regression.ps1      # security-only (forwards to Linux Docker on Windows)
-.\scripts\check.ps1 -ScaleFs           # + Scale-FS live corpus regression
-.\scripts\scale-fs-regression.ps1      # Scale-FS-only
-.\scripts\check.ps1 -SkipDeny          # skip cargo deny (supply-chain)
+.\scripts\check.ps1 -Security
+.\scripts\check.ps1 -ScaleFs
+.\scripts\a2a-regression.ps1
 ```
 
 ```bash
-export OPENAI_API_KEY="..."   # or set provider api_key_env / .env
-./scripts/check.sh                     # fmt/clippy/deny/tests/portability (AoC opt-in)
-./scripts/check.sh --aoc               # + live AoC regression
-./scripts/aoc-regression.sh            # AoC-only
-./scripts/check.sh --swebench          # + SWE-bench regression (Docker + LLM)
-./scripts/swebench-regression.sh       # SWE-bench-only (sympy__sympy-20590)
-./scripts/check.sh --security          # + security sandbox LLM regression
-./scripts/security-regression.sh       # security-only (native Linux userns)
-./scripts/security-regression-linux-docker.sh  # security lab via Docker
-./scripts/check.sh --scale-fs          # + Scale-FS live corpus regression
-./scripts/scale-fs-regression.sh       # Scale-FS-only
-./scripts/check.sh --skip-deny         # skip cargo deny (supply-chain)
+export OPENAI_API_KEY="..."
+./scripts/check.sh
+./scripts/check.sh --security
+./scripts/check.sh --scale-fs
+./scripts/a2a-regression.sh
 ```
 
-Supply-chain policy lives in `deny.toml`. Install once: `cargo install --locked cargo-deny`.
-
-#### AoC gate requirements
-
-- `local/aoc-bank/` with at least one task JSON
-- `agent-config.local.yaml` (preferred) or `test-agents/referent/agent-config.aoc.example.yaml`
-- API key env var from that config
-- Node.js + Python on `PATH` (resolved into sandboxed `home.run`)
-- OS sandbox available (Windows AppContainer / Linux namespaces)
-
-The AoC harness:
-
-1. Builds a fresh `target/release` agent (`aoc-regression.ps1` / `aoc-regression.sh`)
-2. Loads tasks from `local/aoc-bank`
-3. Writes a per-run config with fail-closed `access` (python alias + runtime roots)
-4. Imports `test-agents/referent` into a protected profile, then runs
-   `kbshff run --project-root … --agent …` once per task
-5. Compares `RunOutput.result` to `expected`
-6. Writes `local/aoc-runs/<run-id>/report.json`
-
-#### SWE-bench gate requirements
-
-- Docker Desktop / Linux engine (x86_64 images)
-- Restored `workflows/swebench-verified/` (gitignored copy-unit) +
-  `pip install -r workflows/swebench-verified/requirements.txt`
-- `agent-config.local.yaml` (preferred) or `test-agents/swebench-solver/agent-config.example.yaml`
-- Provider API key via `api_key_env`
-- Disk/time for the official instance image
-
-The SWE-bench harness (`swebench-regression.*`):
-
-1. Checks Docker Linux + Python deps + API key (no gold harness)
-2. Builds `target/release`
-3. Runs `generate → grade → report` for fixed instance `sympy__sympy-20590`
-4. Asserts `harness_resolved=true` via the copy-unit `assert_regression.py`
-5. Prints UX summary (stop_reason, elapsed, usage/cost) even on failure
-
-**Windows native** uses the PE worker + `harness_bootstrap.py` (LF for grade scripts).
-**Linux native** uses `./scripts/swebench-regression.sh`.
-**Linux ELF from Windows** (no WSL): `.\scripts\swebench-regression-linux-docker.ps1` —
-builds inside `rust:1-bookworm`, isolates `CARGO_TARGET_DIR`, passes `--agent-bin`,
-and sets `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` for nested Docker without `clone3`.
-
-#### Security sandbox gate requirements
-
-- Restored `workflows/security-sandbox/` (gitignored copy-unit)
-- `local/security-bank/` (copy from `local/security-bank.example/`)
-- `agent-config.local.yaml` (preferred) or `test-agents/security-probe/agent-config.example.yaml`
-- Provider API key via `api_key_env`
-- Working OS sandbox (**required** — never `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP`)
-- On Windows: Docker Desktop for the Linux privileged lab (`security-regression-linux-docker.ps1`)
-
-The security harness:
-
-1. Plants canaries (sibling FS, protected store, host `/canary`, network listener)
-2. Runs a real LLM against adversarial prompts (`test-agents/security-probe`)
-3. Passes only if containment holds (canaries intact, no token exfil)
-4. Writes `local/security-runs/<run-id>/report.json`
-
-#### Scale-FS live gate requirements
-
-- Restored `workflows/scale-fs-live/` (gitignored copy-unit)
-- `local/scale-fs-bank/` (auto-copied from `local/scale-fs-bank.example/` by the script)
-- `agent-config.local.yaml` (preferred) or `test-agents/scale-fs-probe/agent-config.example.yaml`
-- Provider API key via `api_key_env`
-- Python on `PATH` (corpus generator; optional for sandboxed `home.run`)
-- OS sandbox available if the profile still allowlists `home.run`
-
-The Scale-FS harness:
-
-1. Builds `target/release` agent
-2. Plants a generated corpus (many files / large / oversize) per task
-3. Imports `test-agents/scale-fs-probe` and rewrites workspace paths
-4. Runs a real LLM; asserts planted `SF_NEEDLE_…` appears in `RunOutput.result`
-5. Writes `local/scale-fs-runs/<run-id>/report.json`
-
-#### A2A live gate requirements
-
-- `local/a2a-bank/` (auto-copied from `local/a2a-bank.example/` by the script)
-- `test-agents/a2a-probe/` profile template
-- `agent-config.local.yaml` (preferred) or `test-agents/a2a-probe/agent-config.example.yaml`
-- Provider API key via `api_key_env` for `send` tasks only
-- Built `target/release/kbshff`
-- Optional: `A2A_LIVE_TOKEN` for bearer tasks (harness sets a default when unset)
-
-The probe template sets `billing.provider_reported.unit: USD` so gateways like
-polza.ai that return unit-less `usage.cost` still produce `cost.known_total` in
-reports.
-
-The A2A harness (`a2a-regression.*`):
-
-1. Builds `target/release` agent
-2. Starts `kbshff a2a` per bank task on a free loopback port
-3. Checks Agent Card, Bearer 401 gate, or live `SendMessage` + home artifacts
-4. Writes `local/a2a-runs/<run-id>/report.json`
-
-Card and bearer tasks run without an API key; filter with `--task-id card-smoke-01` for a cheap smoke.
-
-On Linux the AoC harness uses the host `python3` directly (namespace mounts cover
-runtime roots). See also [crates/sandbox-linux/TESTING.md](../crates/sandbox-linux/TESTING.md)
-for userns / AppArmor notes on lab hosts.
-
-Each AoC task run writes agent logs under:
-
-```text
-local/aoc-runs/<run-id>/<task-id>/logs/
-  agent.trace.log
-  ai_usage.jsonl
-  mcp_usage.jsonl
-  chat_history.json
-```
-
-Paths are also returned in `RunOutput.logs` inside `agent.stdout.json` and in
-`report.json` per task.
+See each bank's `*.example/README.md` for schemas.
