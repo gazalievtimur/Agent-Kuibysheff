@@ -6,7 +6,7 @@ User-facing docs for `agent_Kuibysheff`.
 
 | Document | Description |
 | --- | --- |
-| [../CONTRACT.md](../CONTRACT.md) | Stable CLI / orchestrator / ACP interface |
+| [../CONTRACT.md](../CONTRACT.md) | Stable CLI / orchestrator / ACP / A2A interface |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | High-level architecture and security boundaries |
 | [BILLING.md](BILLING.md) | Token and cost accounting |
 | [EVENT_MCP.md](EVENT_MCP.md) | Event-MCP middleware contract |

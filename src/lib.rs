@@ -29,6 +29,7 @@
 /// Public so `main.rs` can call it; not part of the stable library facade.
 pub mod app;
 
+pub(crate) mod a2a;
 pub mod access;
 pub(crate) mod acp;
 pub mod agent;

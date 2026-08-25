@@ -1,0 +1,53 @@
+# Runtime config for a2a-probe (live A2A LLM regression).
+# Import/render source only — a2a-eval.py rewrites logging.output_dir per task.
+#
+# Requires:
+#   - Provider API key via api_key_env (no inline api_key)
+#   - Built release binary: kbshff
+#   - OS sandbox for home.* tools
+
+provider:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 120000
+  max_retries: 3
+  retry_base_delay_ms: 500
+
+mcp: []
+
+billing:
+  provider_id: "openai_compatible"
+  currency: "USD"
+  source_order: ["provider_reported", "mcp", "catalog"]
+  provider_reported:
+    # Polza/OpenRouter-style gateways often return unit-less usage.cost.
+    unit: "USD"
+    json_pointers:
+      - "/usage/cost"
+      - "/usage/response_cost/total_cost"
+    headers: ["x-litellm-response-cost"]
+  on_unpriced: continue
+
+limits:
+  max_iterations: 16
+  max_tokens: 80000
+  max_duration_sec: 300
+
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: true
+  output_dir: "./logs"
+
+access:
+  mode: strict
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]

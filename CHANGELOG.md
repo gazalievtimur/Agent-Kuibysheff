@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile `.env` (alongside `api_key_env` in YAML). The key is not stored in
   `agent-config.yaml`. Dotenv is loaded before wizard `check` so the new key is
   visible immediately.
+- **`kbshff a2a`**: Agent-to-Agent (A2A) Protocol 1.0 HTTP server via the
+  official Linux Foundation Rust SDK (`a2a-lf` / `a2a-server-lf`). Exposes
+  `/.well-known/agent-card.json`, JSON-RPC at `/jsonrpc`, and HTTP+JSON at
+  `/rest`. Each `SendMessage` runs one worker turn (`run_agent_prompt`). Default
+  bind is `127.0.0.1:8787`; optional `--token-env` requires Bearer on RPC/REST.
 
 ### Changed
 

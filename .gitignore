@@ -45,6 +45,14 @@ agent-config.local.yaml
 /local/scale-fs-runs/
 /local/scale-fs-sandbox-runtime/
 
+# A2A live regression (working banks / runs)
+/local/a2a-bank/
+/local/a2a-runs/
+
+# Event-MCP live regression (working banks / runs)
+/local/event-mcp-bank/
+/local/event-mcp-runs/
+
 # Local secret-scan reports (not committed)
 /local/gitleaks-report.json
 

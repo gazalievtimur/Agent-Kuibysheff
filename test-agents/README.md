@@ -76,6 +76,13 @@ Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-ao
 `scripts/scale-fs-regression.*` (requires local `workflows/scale-fs-live/`
 restored from git history). See [local/README.md](../local/README.md).
 
+## A2A probe
+
+`test-agents/a2a-probe/` — minimal profile for live A2A regression (Agent Card,
+Bearer gate, `SendMessage` → write file + result token). Harness:
+`scripts/a2a-regression.*` (bank: `local/a2a-bank.example/`). See
+[local/README.md](../local/README.md).
+
 ## 1C live pipeline (Склад)
 
 Four stage templates, consumed by gitignored `workflows/1c-live/` (not part of

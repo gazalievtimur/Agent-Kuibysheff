@@ -77,16 +77,17 @@ precision, and amount are nested under `usage.cost.requests`.
 
 ### Management commands
 
-Commands other than `run` (for example `init`, `check`, `acp`, `config`) print
-human-readable text and use process exit codes — except `acp`, which speaks
-JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
-`config` accepts `--format text|json` (default `text`).
+Commands other than `run` (for example `init`, `check`, `acp`, `a2a`, `config`)
+print human-readable text and use process exit codes — except `acp` (ACP
+JSON-RPC on stdio) and `a2a` (A2A HTTP until stopped). They do **not** emit
+`RunOutput` JSON. `config` accepts `--format text|json` (default `text`).
 
 ```text
 agent_Kuibysheff help
 agent_Kuibysheff help init
 agent_Kuibysheff help check
 agent_Kuibysheff help acp
+agent_Kuibysheff help a2a
 agent_Kuibysheff help config
 agent_Kuibysheff --help
 
@@ -99,6 +100,19 @@ kbshff acp \
   --agent <ID> \
   [--project-root <DIR>] \
   [--home <REL>] \
+  [--max-iterations N] \
+  [--max-tokens N] \
+  [--max-duration-sec N] \
+  [--max-cost CURRENCY:AMOUNT] \
+  [--save-chat-history]
+
+kbshff a2a \
+  --project-root <DIR> \
+  --agent <ID> \
+  [--home <REL>] \
+  [--bind 127.0.0.1:8787] \
+  [--public-url http://127.0.0.1:8787] \
+  [--token-env A2A_TOKEN] \
   [--max-iterations N] \
   [--max-tokens N] \
   [--max-duration-sec N] \
@@ -240,6 +254,57 @@ non-empty.
 stdout). Multi-agent IDE or bridge flows register one ACP process per profile;
 stage handoff, chat thread mapping, and the plan gate stay outside the Rust
 binary.
+
+### A2A (peer agents)
+
+`a2a` starts an [Agent-to-Agent (A2A) Protocol](https://a2a-protocol.org/latest/specification/)
+**1.0** HTTP server so other agents can discover this profile and submit tasks.
+Transport and wire types come from the official Linux Foundation Rust SDK
+([a2aproject/a2a-rs](https://github.com/a2aproject/a2a-rs): crates `a2a-lf` /
+`a2a-server-lf`). Kuibysheff remains a **worker**: each A2A `SendMessage`
+without prior LLM history runs one `run_agent_prompt` (same engine as `run` /
+`acp`).
+
+```text
+Peer A2A client  ←JSON-RPC /jsonrpc or HTTP+JSON /rest→  kbshff a2a
+Peer A2A client  ←GET /.well-known/agent-card.json→       kbshff a2a
+```
+
+| Surface | Role |
+|---------|------|
+| `GET /.well-known/agent-card.json` | Public Agent Card (`supportedInterfaces`, skills from `skills.dsl`) |
+| `POST /jsonrpc` | JSON-RPC 2.0 (`SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, streaming) |
+| `/rest` | HTTP+JSON binding (same operations; declared in the card) |
+
+Defaults:
+
+- `--bind 127.0.0.1:8787` (loopback only; do not bind `0.0.0.0` without a
+  reverse proxy and auth)
+- `--public-url` defaults to `http://{bind}` and is written into
+  `supportedInterfaces`
+- `--token-env <VAR>`: require `Authorization: Bearer` on `/jsonrpc` and
+  `/rest`; empty/missing env fails startup. The Agent Card stays public and
+  declares the HTTP bearer scheme. Without `--token-env`, only loopback use
+  is intended.
+
+Task semantics:
+
+- Text parts only; file/data parts → `ContentTypeNotSupportedError`
+- Each task is one engine turn with **no** retained chat history across tasks
+  (like ACP prompts)
+- `GoalReached` / `LimitReached` → `TASK_STATE_COMPLETED`; `Error` →
+  `FAILED`; cancel → `CANCELED`
+- Usage sits in task `metadata` (`kuibysheff.usage`), not in the agent message
+- Push notifications, gRPC, signed/extended cards, and outbound A2A client
+  (calling peer agents as tools) are **out of scope** for this release
+
+Manual check with [a2acli](https://github.com/a2aproject/a2a-rs):
+
+```text
+kbshff a2a --project-root . --agent demo
+a2acli --base-url http://127.0.0.1:8787 card
+a2acli --base-url http://127.0.0.1:8787 send "summarize home/out"
+```
 
 ## Access policy (fail-closed)
 
