@@ -47,8 +47,6 @@ pub struct McpRegistry {
 
 struct ServerHandle {
     tools: HashSet<String>,
-    /// When `serve --path` exposes exactly one repo alias, missing `repo` args are filled.
-    single_repo_alias: Option<String>,
     client: McpClientHandle,
 }
 
@@ -184,7 +182,6 @@ impl McpRegistry {
                 LiveClient::Http(c) => c.list_tools().await?,
             };
             let tool_set: HashSet<_> = tools.into_iter().collect();
-            let single_repo_alias = single_repo_alias_from_config(cfg);
 
             if let Some(log) = &logger {
                 log.write_event(
@@ -192,7 +189,6 @@ impl McpRegistry {
                     json!({
                         "server": cfg.name,
                         "tools": tool_set.iter().cloned().collect::<Vec<_>>(),
-                        "single_repo_alias": single_repo_alias,
                     }),
                 )
                 .await
@@ -212,7 +208,6 @@ impl McpRegistry {
                 cfg.name.clone(),
                 ServerHandle {
                     tools: tool_set,
-                    single_repo_alias,
                     client: handle,
                 },
             );
@@ -268,8 +263,6 @@ impl McpRegistry {
             });
         }
 
-        let arguments = fill_missing_repo_argument(arguments, handle.single_repo_alias.as_deref());
-
         handle
             .client
             .request(
@@ -303,7 +296,6 @@ impl McpRegistry {
             server.to_string(),
             ServerHandle {
                 tools,
-                single_repo_alias: None,
                 client: McpClientHandle {
                     server_name: server.to_string(),
                     tx: Some(tx),
@@ -315,68 +307,6 @@ impl McpRegistry {
         );
         Self { servers, logger }
     }
-}
-
-/// Extracts `serve --path` / `-p` aliases (`alias=dir` or bare dir → `default`).
-fn path_aliases_from_args(args: &[String]) -> Vec<String> {
-    let mut aliases = Vec::new();
-    let mut idx = 0;
-    while idx < args.len() {
-        let arg = args[idx].as_str();
-        if arg == "--path" || arg == "-p" {
-            if let Some(value) = args.get(idx + 1) {
-                aliases.push(path_arg_alias(value));
-                idx += 2;
-                continue;
-            }
-        } else if let Some(value) = arg.strip_prefix("--path=") {
-            aliases.push(path_arg_alias(value));
-        } else if let Some(value) = arg.strip_prefix("-p=") {
-            aliases.push(path_arg_alias(value));
-        }
-        idx += 1;
-    }
-    aliases
-}
-
-fn path_arg_alias(value: &str) -> String {
-    // `alias=C:\dir` — split on first `=` only; Windows drive letters stay in the path side.
-    value
-        .split_once('=')
-        .map(|(alias, _)| alias.to_string())
-        .unwrap_or_else(|| "default".to_string())
-}
-
-fn single_repo_alias_from_config(cfg: &crate::config::McpServerConfig) -> Option<String> {
-    let crate::config::McpTransport::Stdio(stdio) = &cfg.transport else {
-        return None;
-    };
-    let aliases = path_aliases_from_args(&stdio.args);
-    if aliases.len() == 1 {
-        Some(aliases[0].clone())
-    } else {
-        None
-    }
-}
-
-/// Injects `repo` when the model omitted it and this MCP server has a single path alias.
-fn fill_missing_repo_argument(arguments: Value, single_repo_alias: Option<&str>) -> Value {
-    let Some(alias) = single_repo_alias else {
-        return arguments;
-    };
-    let Value::Object(mut map) = arguments else {
-        return arguments;
-    };
-    let missing_or_empty = match map.get("repo") {
-        None => true,
-        Some(Value::Null) => true,
-        Some(Value::String(s)) => s.trim().is_empty(),
-        Some(_) => false,
-    };
-    if missing_or_empty {
-        map.insert("repo".to_string(), Value::String(alias.to_string()));
-    }
-    Value::Object(map)
 }
 
 fn spawn_actor(
@@ -540,11 +470,6 @@ impl ToolExecutor for McpRegistry {
         tracing::Span::current().record("server", server);
         tracing::Span::current().record("tool", tool);
 
-        let alias = self
-            .servers
-            .get(server)
-            .and_then(|handle| handle.single_repo_alias.as_deref());
-        let arguments = fill_missing_repo_argument(arguments, alias);
         let arguments_for_log = self.logger.as_ref().map(|_| arguments.clone());
         let result = self.call_discovered_tool(server, tool, arguments).await?;
 
@@ -1213,45 +1138,6 @@ mod tests {
             resolve_stdio_command("./bin/server", Some(base)),
             base.join("./bin/server").into_os_string()
         );
-    }
-
-    #[test]
-    fn path_aliases_from_serve_args() {
-        assert_eq!(
-            path_aliases_from_args(&["serve".into(), "--path".into(), r"C:\Git\proj\cf".into()]),
-            vec!["default".to_string()]
-        );
-        assert_eq!(
-            path_aliases_from_args(&["serve".into(), "--path".into(), r"cf=C:\Git\proj\cf".into()]),
-            vec!["cf".to_string()]
-        );
-        assert_eq!(
-            path_aliases_from_args(&[
-                "serve".into(),
-                "--path".into(),
-                "ut=C:/ut".into(),
-                "--path".into(),
-                "bp=C:/bp".into()
-            ]),
-            vec!["ut".to_string(), "bp".to_string()]
-        );
-        assert_eq!(
-            path_aliases_from_args(&["serve".into(), "--path=cf=D:/x".into()]),
-            vec!["cf".to_string()]
-        );
-    }
-
-    #[test]
-    fn fill_missing_repo_injects_single_alias() {
-        let filled = fill_missing_repo_argument(json!({"name": "Foo"}), Some("cf"));
-        assert_eq!(filled["repo"], json!("cf"));
-        assert_eq!(filled["name"], json!("Foo"));
-
-        let kept = fill_missing_repo_argument(json!({"repo": "other", "name": "Foo"}), Some("cf"));
-        assert_eq!(kept["repo"], json!("other"));
-
-        let noop = fill_missing_repo_argument(json!({"name": "Foo"}), None);
-        assert!(noop.get("repo").is_none());
     }
 
     #[test]
