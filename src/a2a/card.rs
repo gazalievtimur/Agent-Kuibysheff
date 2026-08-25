@@ -109,7 +109,7 @@ pub fn build_agent_card(opts: &CardOptions) -> Result<AgentCard> {
         skills: a2a_skills,
         provider: Some(a2a::AgentProvider {
             organization: "agent_Kuibysheff".into(),
-            url: "https://github.com/gybson63/Agent-Kuibysheff".into(),
+            url: "https://github.com/gazalievtimur/Agent-Kuibysheff".into(),
         }),
         documentation_url: None,
         icon_url: None,

@@ -18,10 +18,10 @@ channels.
 Prefer one of these private channels:
 
 1. **GitHub Private Vulnerability Reporting** (preferred):  
-   https://github.com/gybson63/Agent-Kuibysheff/security/advisories/new  
+   https://github.com/gazalievtimur/Agent-Kuibysheff/security/advisories/new  
    Enable *Private vulnerability reporting* in the repository Security settings
    if the link is unavailable.
-2. **Email:** `gybson63+kuibysheff-security@users.noreply.github.com`  
+2. **Email:** `gazalievtimur+kuibysheff-security@users.noreply.github.com`  
    Maintainers should replace this with a dedicated security mailbox before
    public Go. Until then, Private Vulnerability Reporting is the required path.
 

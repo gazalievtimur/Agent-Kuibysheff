@@ -7,7 +7,7 @@ x86_64**. macOS and Linux aarch64 are **unsupported** (see
 ## Install (prebuilt)
 
 1. Download the archive and `.zip.sha256` for your platform from
-   [GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases).
+   [GitHub Releases](https://github.com/gazalievtimur/Agent-Kuibysheff/releases).
 2. Verify the checksum (example):
 
 ```powershell
@@ -33,7 +33,7 @@ from-source build.
 Requirements: **Rust 1.88+** (MSRV), plus platform toolchains for your OS.
 
 ```bash
-git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
 ```
