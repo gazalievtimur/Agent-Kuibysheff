@@ -58,7 +58,7 @@ pub fn run() -> ExitCode {
         let mut cmd = crate::cli::Cli::command();
         let _ = cmd.print_help();
         eprintln!();
-        eprintln!("error: interactive setup requires a terminal; pass a subcommand (run, init, check, config, acp)");
+        eprintln!("error: interactive setup requires a terminal; pass a subcommand (run, init, check, config, acp, a2a)");
         return ExitCode::from(2);
     }
 

@@ -24,6 +24,9 @@ git checkout <commit-before-untrack> -- workflows
 | `scale-fs-bank.example/` | yes | Scale-FS corpus tasks (many files / large / oversize) |
 | `scale-fs-bank/` | **no** | Working Scale-FS bank copy |
 | `scale-fs-runs/` | **no** | Scale-FS eval homes + `report.json` |
+| `a2a-bank.example/` | yes | A2A live tasks (card, bearer, send) |
+| `a2a-bank/` | **no** | Working A2A bank copy |
+| `a2a-runs/` | **no** | A2A eval projects + `report.json` |
 | `SECRET_SCAN.md` | yes | Notes for gitleaks / placeholder false positives |
 | `gitleaks-report.json` | **no** | Redacted local gitleaks output |
 
@@ -84,6 +87,7 @@ Live agent evals are opt-in local gates (not PR CI):
 - **SWE-bench (one Verified instance):** `scripts/check.ps1 -Swebench` / `RUN_SWEBENCH=1`, or `./scripts/check.sh --swebench`
 - **Security sandbox (LLM containment):** `scripts/check.ps1 -Security` / `RUN_SECURITY=1`, or `./scripts/check.sh --security`
 - **Scale-FS (many files / large reads):** `scripts/check.ps1 -ScaleFs` / `RUN_SCALE_FS=1`, or `./scripts/check.sh --scale-fs`
+- **A2A (Agent Card + SendMessage):** `scripts/a2a-regression.ps1` / `./scripts/a2a-regression.sh` (opt-in; not in default `check`)
 
 Security sandbox LLM regression is opt-in:
 
@@ -195,6 +199,28 @@ The Scale-FS harness:
 3. Imports `test-agents/scale-fs-probe` and rewrites workspace paths
 4. Runs a real LLM; asserts planted `SF_NEEDLE_…` appears in `RunOutput.result`
 5. Writes `local/scale-fs-runs/<run-id>/report.json`
+
+#### A2A live gate requirements
+
+- `local/a2a-bank/` (auto-copied from `local/a2a-bank.example/` by the script)
+- `test-agents/a2a-probe/` profile template
+- `agent-config.local.yaml` (preferred) or `test-agents/a2a-probe/agent-config.example.yaml`
+- Provider API key via `api_key_env` for `send` tasks only
+- Built `target/release/kbshff`
+- Optional: `A2A_LIVE_TOKEN` for bearer tasks (harness sets a default when unset)
+
+The probe template sets `billing.provider_reported.unit: USD` so gateways like
+polza.ai that return unit-less `usage.cost` still produce `cost.known_total` in
+reports.
+
+The A2A harness (`a2a-regression.*`):
+
+1. Builds `target/release` agent
+2. Starts `kbshff a2a` per bank task on a free loopback port
+3. Checks Agent Card, Bearer 401 gate, or live `SendMessage` + home artifacts
+4. Writes `local/a2a-runs/<run-id>/report.json`
+
+Card and bearer tasks run without an API key; filter with `--task-id card-smoke-01` for a cheap smoke.
 
 On Linux the AoC harness uses the host `python3` directly (namespace mounts cover
 runtime roots). See also [crates/sandbox-linux/TESTING.md](../crates/sandbox-linux/TESTING.md)

@@ -1,0 +1,11 @@
+{
+  "id": "bearer-gate-01",
+  "kind": "bearer",
+  "server": {
+    "token_env": "A2A_LIVE_TOKEN"
+  },
+  "expect": {
+    "rpc_without_token_status": 401,
+    "card_public": true
+  }
+}

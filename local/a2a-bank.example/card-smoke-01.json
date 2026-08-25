@@ -1,0 +1,9 @@
+{
+  "id": "card-smoke-01",
+  "kind": "card",
+  "expect": {
+    "card_name": "a2a-probe",
+    "interfaces_contain": ["/jsonrpc", "/rest"],
+    "streaming": true
+  }
+}

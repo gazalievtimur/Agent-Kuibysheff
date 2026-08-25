@@ -37,6 +37,8 @@ pub enum Commands {
     Run(RunArgs),
     /// Serve Agent Client Protocol (ACP) over stdio for IDE hosts.
     Acp(AcpArgs),
+    /// Serve Agent-to-Agent (A2A) 1.0 over HTTP for peer agents.
+    A2a(A2aArgs),
     /// Create a new agent profile under `.kuibysheff/protected/agents/<id>/`.
     Init(InitArgs),
     /// Check availability of resources for a configured agent profile.
@@ -126,6 +128,49 @@ pub struct AcpArgs {
     pub max_cost: Option<Money>,
 
     /// Persist the full unpruned chat transcript for each prompt turn.
+    #[arg(long)]
+    pub save_chat_history: bool,
+}
+
+/// Arguments for the A2A HTTP server (peer agents drive tasks).
+#[derive(Debug, Clone, Parser)]
+pub struct A2aArgs {
+    #[command(flatten)]
+    pub identity: AgentIdentityArgs,
+
+    /// Optional home under `.kuibysheff/` (relative). Default: `homes/<agent>`.
+    #[arg(long, value_name = "DIR")]
+    pub home: Option<PathBuf>,
+
+    /// Listen address (default: loopback only).
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8787")]
+    pub bind: String,
+
+    /// Absolute base URL advertised in the Agent Card `supportedInterfaces`.
+    /// Defaults to `http://{bind}`.
+    #[arg(long, value_name = "URL")]
+    pub public_url: Option<String>,
+
+    /// Env var holding a Bearer token required on `/jsonrpc` and `/rest`.
+    /// When set, the process fails to start if the variable is missing/empty.
+    /// The well-known Agent Card stays public and declares the scheme.
+    #[arg(long, value_name = "ENV")]
+    pub token_env: Option<String>,
+
+    #[arg(long)]
+    pub max_iterations: Option<u32>,
+
+    #[arg(long)]
+    pub max_tokens: Option<u64>,
+
+    #[arg(long)]
+    pub max_duration_sec: Option<u64>,
+
+    /// Override the monetary per-task limit (`CURRENCY:AMOUNT`).
+    #[arg(long, value_name = "CURRENCY:AMOUNT")]
+    pub max_cost: Option<Money>,
+
+    /// Persist the full unpruned chat transcript for each A2A task.
     #[arg(long)]
     pub save_chat_history: bool,
 }
@@ -258,6 +303,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("run"), "{rendered}");
         assert!(rendered.contains("acp"), "{rendered}");
+        assert!(rendered.contains("a2a"), "{rendered}");
         assert!(rendered.contains("init"), "{rendered}");
         assert!(rendered.contains("check"), "{rendered}");
         assert!(rendered.contains("config"), "{rendered}");
@@ -283,6 +329,37 @@ mod tests {
         assert_eq!(args.project_root, Some(PathBuf::from("/proj")));
         assert_eq!(args.agent, "demo");
         assert_eq!(args.max_iterations, Some(3));
+    }
+
+    #[test]
+    fn parses_a2a_subcommand() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "a2a",
+            "--project-root",
+            "/proj",
+            "--agent",
+            "demo",
+            "--bind",
+            "127.0.0.1:9000",
+            "--public-url",
+            "http://127.0.0.1:9000",
+            "--token-env",
+            "A2A_TOKEN",
+            "--max-iterations",
+            "5",
+        ])
+        .expect("parse a2a");
+
+        let Some(Commands::A2a(args)) = cli.command else {
+            panic!("expected A2a");
+        };
+        assert_eq!(args.identity.project_root, PathBuf::from("/proj"));
+        assert_eq!(args.identity.agent, "demo");
+        assert_eq!(args.bind, "127.0.0.1:9000");
+        assert_eq!(args.public_url.as_deref(), Some("http://127.0.0.1:9000"));
+        assert_eq!(args.token_env.as_deref(), Some("A2A_TOKEN"));
+        assert_eq!(args.max_iterations, Some(5));
     }
 
     #[test]

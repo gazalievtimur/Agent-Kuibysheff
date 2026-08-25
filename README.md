@@ -11,6 +11,7 @@ Minimal and reliable CLI agent worker in Rust.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
 - Can invoke MCP tools as ordered Event-MCP middleware around context and response stages.
+- Serves ACP over stdio for IDE/bridges, and A2A 1.0 over HTTP for peer agents.
 - Enforces hard stop limits: iterations, tokens, max duration, and optional max cost.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
@@ -131,6 +132,19 @@ kbshff acp \
 long-lived process per agent. Full bridge contract:
 [CONTRACT.md](CONTRACT.md#acp-ide-messengers-mail-bridges).
 VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
+
+A2A HTTP server (peer agents):
+
+```text
+kbshff a2a \
+  --project-root <DIR> \
+  --agent <ID> \
+  [--bind 127.0.0.1:8787] \
+  [--token-env A2A_TOKEN]
+```
+
+Serves Agent Card + JSON-RPC/REST for A2A 1.0. Defaults to loopback. See
+[CONTRACT.md](CONTRACT.md#a2a-peer-agents).
 
 ## Local eval / copy-units
 

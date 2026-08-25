@@ -21,10 +21,15 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
+a2a = { package = "a2a-lf", version = "0.3" }
+a2a-server = { package = "a2a-server-lf", version = "0.4", default-features = false }
 agent-client-protocol = "2.0"
 anyhow = "1"
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
+futures = "0.3"
 rand = "0.8"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -33,8 +38,11 @@ serde_json = { workspace = true }
 serde_yaml = "0.9"
 dotenvy = "0.15"
 thiserror = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync", "net", "signal"] }
+subtle = "2"
+tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
 url = "2"
 sha2 = "0.10"
 base64 = "0.22"
@@ -48,6 +56,7 @@ rust_decimal = { version = "1.42.1", features = ["serde"] }
 sandbox-windows = { workspace = true }
 
 [dev-dependencies]
+a2a-client = { package = "a2a-client-lf", version = "0.2", default-features = false }
 tempfile = { workspace = true }
 wiremock = "0.6"
 

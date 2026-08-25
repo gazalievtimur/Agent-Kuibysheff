@@ -1,0 +1,13 @@
+{
+  "id": "send-smoke-01",
+  "kind": "send",
+  "message": "Create out/a2a-smoke.txt with exactly one line: A2A_SMOKE_OK. When finished, set result to A2A_OK.",
+  "expect": {
+    "task_state": "completed",
+    "response_contains": "A2A_OK",
+    "written_paths": ["out/a2a-smoke.txt"],
+    "file_exact": {
+      "out/a2a-smoke.txt": "A2A_SMOKE_OK"
+    }
+  }
+}
