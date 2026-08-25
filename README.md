@@ -1,6 +1,6 @@
 # agent_Kuibysheff
 
-[![CI](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml/badge.svg)](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml)
+[![CI](https://github.com/gazalievtimur/Agent-Kuibysheff/actions/workflows/ci.yml/badge.svg)](https://github.com/gazalievtimur/Agent-Kuibysheff/actions/workflows/ci.yml)
 
 Minimal and reliable CLI agent worker in Rust.
 
@@ -26,7 +26,7 @@ target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface and
 ## Install
 
 Prebuilt **Windows x86_64** and **Linux x86_64** binaries are on
-[GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases).
+[GitHub Releases](https://github.com/gazalievtimur/Agent-Kuibysheff/releases).
 macOS and Linux aarch64 are **unsupported**. Archive names, checksums, glibc
 baseline, and how to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 Install / upgrade / uninstall (including user data under `.kuibysheff/`):
@@ -35,7 +35,7 @@ Install / upgrade / uninstall (including user data under `.kuibysheff/`):
 Or build from source (Rust MSRV **1.88**):
 
 ```powershell
-git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
 ```

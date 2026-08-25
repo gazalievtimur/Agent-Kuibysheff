@@ -1,7 +1,7 @@
 # Releases
 
 Prebuilt binaries for **Windows x86_64** and **Linux x86_64** are published on
-[GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases)
+[GitHub Releases](https://github.com/gazalievtimur/Agent-Kuibysheff/releases)
 when a version tag is pushed.
 
 | Platform | Status | Archive |

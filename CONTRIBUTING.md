@@ -37,7 +37,7 @@ The Apache License does not grant rights to use the names **Kuibysheff**,
 Clone with submodules (Cursor rust-skills under `.cursor/skills/rust-skills`):
 
 ```bash
-git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 # or, if already cloned:
 git submodule update --init --recursive
