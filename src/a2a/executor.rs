@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use a2a::event::StreamResponse;
@@ -13,7 +12,7 @@ use a2a::{
 use a2a_server::{AgentExecutor, ExecutorContext};
 use futures::stream::{self, BoxStream};
 use tokio::sync::{mpsc, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{info, warn};
 
@@ -32,10 +31,7 @@ const PEER_RUN_FAILED_MSG: &str = "agent run failed";
 /// Async runner for one prompt turn (test seam over [`run_agent_prompt`]).
 pub trait TaskRunner: Send + Sync + 'static {
     /// Execute one agent turn with the given wiring.
-    fn run(
-        &self,
-        args: AgentPromptArgs,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<RunOutput>> + Send>>;
+    fn run(&self, args: AgentPromptArgs) -> impl Future<Output = anyhow::Result<RunOutput>> + Send;
 }
 
 /// Production runner that calls [`run_agent_prompt`].
@@ -43,11 +39,8 @@ pub trait TaskRunner: Send + Sync + 'static {
 pub struct EngineTaskRunner;
 
 impl TaskRunner for EngineTaskRunner {
-    fn run(
-        &self,
-        args: AgentPromptArgs,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<RunOutput>> + Send>> {
-        Box::pin(run_agent_prompt(args))
+    fn run(&self, args: AgentPromptArgs) -> impl Future<Output = anyhow::Result<RunOutput>> + Send {
+        run_agent_prompt(args)
     }
 }
 
@@ -91,7 +84,7 @@ pub struct KuibysheffExecutor<R: TaskRunner = EngineTaskRunner> {
     runner: Arc<R>,
     cancels: Arc<Mutex<HashMap<String, RunCancel>>>,
     in_flight: Arc<Semaphore>,
-    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    tasks: Arc<Mutex<JoinSet<()>>>,
 }
 
 impl KuibysheffExecutor<EngineTaskRunner> {
@@ -111,7 +104,7 @@ impl<R: TaskRunner> KuibysheffExecutor<R> {
             runner: Arc::new(runner),
             cancels: Arc::new(Mutex::new(HashMap::new())),
             in_flight: Arc::new(Semaphore::new(MAX_IN_FLIGHT_TASKS)),
-            tasks: Arc::new(Mutex::new(Vec::new())),
+            tasks: Arc::new(Mutex::new(JoinSet::new())),
         }
     }
 
@@ -123,8 +116,37 @@ impl<R: TaskRunner> KuibysheffExecutor<R> {
 
     /// In-flight task join set (for graceful shutdown).
     #[must_use]
-    pub fn tasks(&self) -> Arc<Mutex<Vec<JoinHandle<()>>>> {
+    pub fn tasks(&self) -> Arc<Mutex<JoinSet<()>>> {
         Arc::clone(&self.tasks)
+    }
+
+    fn spawn_task<F>(&self, fut: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn(fut);
+    }
+
+    #[cfg(test)]
+    fn reap_finished_tasks(&self) {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while tasks.try_join_next().is_some() {}
+    }
+
+    #[cfg(test)]
+    fn task_count(&self) -> usize {
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     fn extract_prompt(message: &Option<Message>) -> Result<String, A2AError> {
@@ -271,10 +293,9 @@ impl<R: TaskRunner> AgentExecutor for KuibysheffExecutor<R> {
         let prompt_args = Self::prompt_args(&self.config, prompt, cancel.clone());
         let cancels = Arc::clone(&self.cancels);
         let runner = Arc::clone(&self.runner);
-        let task_handles = Arc::clone(&self.tasks);
 
         let (tx, rx) = mpsc::channel(8);
-        let handle = tokio::spawn(async move {
+        self.spawn_task(async move {
             let _permit = permit;
 
             let working = StreamResponse::StatusUpdate(TaskStatusUpdateEvent {
@@ -337,10 +358,6 @@ impl<R: TaskRunner> AgentExecutor for KuibysheffExecutor<R> {
             let task = KuibysheffExecutor::<R>::final_task(task_id, context_id, state, text, usage);
             let _ = tx.send(Ok(StreamResponse::Task(task))).await;
         });
-        task_handles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(handle);
 
         Box::pin(ReceiverStream::new(rx))
     }
@@ -411,45 +428,40 @@ mod tests {
     }
 
     impl TaskRunner for FakeRunner {
-        fn run(
-            &self,
-            args: AgentPromptArgs,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<RunOutput>> + Send>> {
+        async fn run(&self, args: AgentPromptArgs) -> anyhow::Result<RunOutput> {
             let delay = self.delay_ms;
             let fail = self.fail;
             let saw = Arc::clone(&self.saw_cancel);
-            Box::pin(async move {
-                if delay > 0 {
-                    tokio::select! {
-                        () = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
-                        () = args.cancel.token().cancelled() => {
-                            saw.store(true, Ordering::SeqCst);
-                            return Ok(RunOutput {
-                                run_id: "fake".into(),
-                                result: "cancelled".into(),
-                                usage: Default::default(),
-                                stop_reason: StopReason::Error,
-                                logs: Default::default(),
-                            });
-                        }
+            if delay > 0 {
+                tokio::select! {
+                    () = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                    () = args.cancel.token().cancelled() => {
+                        saw.store(true, Ordering::SeqCst);
+                        return Ok(RunOutput {
+                            run_id: "fake".into(),
+                            result: "cancelled".into(),
+                            usage: Default::default(),
+                            stop_reason: StopReason::Error,
+                            logs: Default::default(),
+                        });
                     }
                 }
-                if fail {
-                    return Ok(RunOutput {
-                        run_id: "fake".into(),
-                        result: "boom".into(),
-                        usage: Default::default(),
-                        stop_reason: StopReason::Error,
-                        logs: Default::default(),
-                    });
-                }
-                Ok(RunOutput {
+            }
+            if fail {
+                return Ok(RunOutput {
                     run_id: "fake".into(),
-                    result: format!("echo:{}", args.prompt),
+                    result: "boom".into(),
                     usage: Default::default(),
-                    stop_reason: StopReason::GoalReached,
+                    stop_reason: StopReason::Error,
                     logs: Default::default(),
-                })
+                });
+            }
+            Ok(RunOutput {
+                run_id: "fake".into(),
+                result: format!("echo:{}", args.prompt),
+                usage: Default::default(),
+                stop_reason: StopReason::GoalReached,
+                logs: Default::default(),
             })
         }
     }
@@ -597,11 +609,8 @@ mod tests {
         struct FailingRunner;
 
         impl TaskRunner for FailingRunner {
-            fn run(
-                &self,
-                _args: AgentPromptArgs,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<RunOutput>> + Send>> {
-                Box::pin(async { anyhow::bail!("secret internal path /etc/shadow failed") })
+            async fn run(&self, _args: AgentPromptArgs) -> anyhow::Result<RunOutput> {
+                anyhow::bail!("secret internal path /etc/shadow failed")
             }
         }
 
@@ -621,5 +630,26 @@ mod tests {
             }
             other => panic!("expected Task, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn finished_tasks_are_reaped_from_join_set() {
+        let exec = KuibysheffExecutor::with_runner(
+            test_config(),
+            FakeRunner {
+                delay_ms: 0,
+                fail: false,
+                saw_cancel: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        for index in 0..8 {
+            let mut stream = exec.execute(exec_ctx(
+                &format!("t{index}"),
+                Some(Message::new(Role::User, vec![Part::text("hi")])),
+            ));
+            while stream.next().await.is_some() {}
+        }
+        exec.reap_finished_tasks();
+        assert_eq!(exec.task_count(), 0);
     }
 }

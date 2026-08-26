@@ -506,7 +506,9 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             .mcp
             .iter()
             .find(|server| server.name == *server_name)
-            .expect("billing MCP target validated");
+            .ok_or_else(|| {
+                anyhow::anyhow!("billing MCP target `{server_name}` missing after validation")
+            })?;
         match McpRegistry::connect_all_isolated(
             std::slice::from_ref(server_config),
             loggers.mcp.clone(),

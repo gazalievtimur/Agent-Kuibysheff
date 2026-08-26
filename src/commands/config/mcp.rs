@@ -227,11 +227,16 @@ fn build_server(
             ));
         }
         let env_map = parse_kv_pairs(env)?;
+        let Some(command) = command.filter(|c| !c.trim().is_empty()) else {
+            return Err(ConfigCmdError::message(
+                "MCP server requires exactly one of `--command` (stdio) or `--url` (http)",
+            ));
+        };
         Ok(McpServerConfig {
             name,
             timeout_ms,
             transport: McpTransport::Stdio(McpStdioConfig {
-                command: command.expect("checked").to_string(),
+                command: command.to_string(),
                 args: args.to_vec(),
                 env: env_map,
                 cwd,
@@ -244,11 +249,16 @@ fn build_server(
             ));
         }
         let headers_map = parse_kv_pairs(headers)?;
+        let Some(url) = url.filter(|u| !u.trim().is_empty()) else {
+            return Err(ConfigCmdError::message(
+                "MCP server requires exactly one of `--command` (stdio) or `--url` (http)",
+            ));
+        };
         Ok(McpServerConfig {
             name,
             timeout_ms,
             transport: McpTransport::Http(McpHttpConfig {
-                url: url.expect("checked").to_string(),
+                url: url.to_string(),
                 headers: headers_map,
                 auth: None,
             }),
