@@ -229,7 +229,7 @@ jobs:
       - name: Generate LCOV report + summary
         run: |
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          cargo llvm-cov --workspace --summary-only
+          cargo llvm-cov report --summary-only
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
