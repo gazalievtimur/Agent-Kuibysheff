@@ -2,7 +2,7 @@
 
 Supported platforms for prebuilt binaries: **Windows x86_64** and **Linux
 x86_64**. macOS and Linux aarch64 are **unsupported** (see
-[RELEASING.md](docs/RELEASING.md)).
+[RELEASING.md](RELEASING.md)).
 
 ## Install (prebuilt)
 
@@ -48,7 +48,7 @@ required). The wizard can store the provider API key in the agent profile
 - **Prebuilt:** replace the binary with the newer release archive; re-check
   checksums.
 - **From source:** `git pull` (update submodules if needed) and rebuild.
-- Read [CHANGELOG.md](CHANGELOG.md) for breaking config changes (for example
+- Read [CHANGELOG.md](../CHANGELOG.md) for breaking config changes (for example
   required `access` in 0.2.0).
 
 User data under each project’s `.kuibysheff/` (protected profiles, homes, runs)
