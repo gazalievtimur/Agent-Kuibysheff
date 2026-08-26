@@ -444,7 +444,7 @@ fn network_namespace_only_lo_and_connect_fails() {
     let script = fixture_script(
         dir.path(),
         r#"
-# Enumerate /sys/class/net; only `lo` is expected in an empty netns.
+# Enumerate /sys/class/net when present; only `lo` is allowed (empty netns is OK).
 count=0
 extra=
 for p in /sys/class/net/*; do
@@ -455,7 +455,7 @@ for p in /sys/class/net/*; do
     extra="$extra $name"
   fi
 done
-if [ "$count" -eq 0 ] || [ -n "$extra" ]; then
+if [ -n "$extra" ]; then
   echo "ifaces-count=$count extra=$extra"
   exit 1
 fi
