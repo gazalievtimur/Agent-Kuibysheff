@@ -425,60 +425,58 @@ impl AgentEngine {
 
             for (tool_index, tool_call) in directive.tool_calls.into_iter().enumerate() {
                 let tool_call_id = format!("tc-{iteration}-{tool_index}");
-                let qualified =
-                    match QualifiedTool::parse(&format!("{}.{}", tool_call.server, tool_call.tool))
-                    {
-                        Ok(qualified) => qualified,
-                        Err(reason) => {
-                            warn!(
-                                iteration,
-                                server = %tool_call.server,
-                                tool = %tool_call.tool,
-                                error = %reason,
-                                "tool call name rejected; returning error to the model"
-                            );
-                            self.log_tool_event(
-                                "tool_call_failed",
+                let qualified = match QualifiedTool::new(&tool_call.server, &tool_call.tool) {
+                    Ok(qualified) => qualified,
+                    Err(reason) => {
+                        warn!(
+                            iteration,
+                            server = %tool_call.server,
+                            tool = %tool_call.tool,
+                            error = %reason,
+                            "tool call name rejected; returning error to the model"
+                        );
+                        self.log_tool_event(
+                            "tool_call_failed",
+                            json!({
+                                "iteration": iteration,
+                                "server": tool_call.server,
+                                "tool": tool_call.tool,
+                                "ok": false,
+                                "error": reason,
+                            }),
+                        )
+                        .await;
+                        events.emit(AgentEvent::ToolStart {
+                            id: tool_call_id.clone(),
+                            server: tool_call.server.clone(),
+                            tool: tool_call.tool.clone(),
+                            arguments: tool_call.arguments.clone(),
+                        });
+                        events.emit(AgentEvent::ToolFinish {
+                            id: tool_call_id,
+                            ok: false,
+                            output: json!({ "error": reason }),
+                        });
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage::new(
+                                ChatRole::User,
                                 json!({
-                                    "iteration": iteration,
-                                    "server": tool_call.server,
-                                    "tool": tool_call.tool,
-                                    "ok": false,
-                                    "error": reason,
-                                }),
-                            )
-                            .await;
-                            events.emit(AgentEvent::ToolStart {
-                                id: tool_call_id.clone(),
-                                server: tool_call.server.clone(),
-                                tool: tool_call.tool.clone(),
-                                arguments: tool_call.arguments.clone(),
-                            });
-                            events.emit(AgentEvent::ToolFinish {
-                                id: tool_call_id,
-                                ok: false,
-                                output: json!({ "error": reason }),
-                            });
-                            push_message(
-                                &mut messages,
-                                &mut full_history,
-                                ChatMessage::new(
-                                    ChatRole::User,
-                                    json!({
-                                        "tool_result": {
-                                            "server": tool_call.server,
-                                            "tool": tool_call.tool,
-                                            "error": reason
-                                        }
-                                    })
-                                    .to_string(),
-                                ),
-                                &history,
-                            );
-                            prune_message_history(&mut messages, &history);
-                            continue;
-                        }
-                    };
+                                    "tool_result": {
+                                        "server": tool_call.server,
+                                        "tool": tool_call.tool,
+                                        "error": reason
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                            &history,
+                        );
+                        prune_message_history(&mut messages, &history);
+                        continue;
+                    }
+                };
                 let server = qualified.server().to_string();
                 let tool = qualified.tool().to_string();
                 let qualified_tool = qualified.qualified();

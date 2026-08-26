@@ -109,11 +109,9 @@ impl LocalTools {
         let policy = self.policy.clone();
         let query = query.to_owned();
 
-        Ok(
-            task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
-                .await
-                .expect("BUG: search_docs task panicked"),
-        )
+        task::spawn_blocking(move || search_docs_blocking(&root, &policy, &query, max_results))
+            .await
+            .map_err(|error| join_err("search_docs", &self.root, error))
     }
 
     async fn read_file(
@@ -147,7 +145,7 @@ impl LocalTools {
         let path_display = path.display().to_string();
         let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .expect("BUG: read_char_window task panicked")
+            .map_err(|error| join_err("read_char_window", Path::new(&path_display), error))?
             .map_err(|error| local_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({
@@ -492,6 +490,10 @@ fn local_path(path: String, error: impl Into<String>) -> LocalToolsError {
         path,
         error: error.into(),
     }
+}
+
+fn join_err(operation: &str, path: &Path, error: tokio::task::JoinError) -> LocalToolsError {
+    local_io(operation, path, io::Error::other(error))
 }
 
 fn local_io(operation: &str, path: &Path, error: std::io::Error) -> LocalToolsError {

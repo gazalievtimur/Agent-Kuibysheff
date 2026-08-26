@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
@@ -167,7 +168,8 @@ impl McpRegistry {
                         stdio,
                         cfg.timeout_ms,
                         &isolation,
-                    )?;
+                    )
+                    .await?;
                     client.initialize().await?;
                     LiveClient::Stdio(Box::new(client))
                 }
@@ -682,7 +684,7 @@ fn resolve_stdio_arg(arg: &str, child_cwd: Option<&Path>) -> OsString {
 }
 
 impl McpStdioClient {
-    fn connect_isolated(
+    async fn connect_isolated(
         server_name: &str,
         cfg: &McpStdioConfig,
         timeout_ms: u64,
@@ -698,10 +700,12 @@ impl McpStdioClient {
             .map(|arg| resolve_stdio_arg(arg, Some(child_cwd.as_path())))
             .collect();
 
-        std::fs::create_dir_all(&child_cwd).map_err(|source| Error::Spawn {
-            server: server_name.to_string(),
-            source,
-        })?;
+        fs::create_dir_all(&child_cwd)
+            .await
+            .map_err(|source| Error::Spawn {
+                server: server_name.to_string(),
+                source,
+            })?;
 
         let mut cmd = Command::new(&command);
         cmd.args(&args);
@@ -762,7 +766,7 @@ impl McpStdioClient {
     }
 
     #[allow(dead_code)] // thin wrapper used by older unit tests
-    fn connect(
+    async fn connect(
         server_name: &str,
         cfg: &McpStdioConfig,
         timeout_ms: u64,
@@ -772,7 +776,7 @@ impl McpStdioClient {
         if let Some(dir) = config_dir {
             isolation.project_root = dir.parent().map(|p| p.to_path_buf());
         }
-        Self::connect_isolated(server_name, cfg, timeout_ms, &isolation)
+        Self::connect_isolated(server_name, cfg, timeout_ms, &isolation).await
     }
 
     /// Close stdin, wait for exit (with kill fallback), and log the status.
@@ -922,7 +926,7 @@ async fn shutdown_stdio_child(server_name: &str, mut child: Child, grace: Durati
         Err(_) => {
             warn!(
                 server = %server_name,
-                grace_ms = grace.as_millis() as u64,
+                grace_ms = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX),
                 "MCP stdio child did not exit after stdin close; killing"
             );
         }

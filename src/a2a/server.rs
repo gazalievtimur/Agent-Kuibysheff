@@ -81,12 +81,10 @@ pub async fn run_a2a_server(args: A2aArgs) -> Result<()> {
             }
         }
         {
-            let mut handles = tasks
+            tasks
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for handle in handles.drain(..) {
-                handle.abort();
-            }
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .abort_all();
         }
     };
 
@@ -132,26 +130,19 @@ mod tests {
     };
     use a2a_client::A2AClientFactory;
     use a2a_server::StaticAgentCard;
-    use std::future::Future;
     use std::path::PathBuf;
-    use std::pin::Pin;
     use std::sync::Arc;
 
     struct FakeRunner;
 
     impl TaskRunner for FakeRunner {
-        fn run(
-            &self,
-            args: AgentPromptArgs,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<RunOutput>> + Send>> {
-            Box::pin(async move {
-                Ok(RunOutput {
-                    run_id: "fake".into(),
-                    result: format!("echo:{}", args.prompt),
-                    usage: Default::default(),
-                    stop_reason: StopReason::GoalReached,
-                    logs: Default::default(),
-                })
+        async fn run(&self, args: AgentPromptArgs) -> anyhow::Result<RunOutput> {
+            Ok(RunOutput {
+                run_id: "fake".into(),
+                result: format!("echo:{}", args.prompt),
+                usage: Default::default(),
+                stop_reason: StopReason::GoalReached,
+                logs: Default::default(),
             })
         }
     }
