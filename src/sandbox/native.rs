@@ -81,7 +81,6 @@ mod linux {
     mod tests {
         use super::*;
         use crate::access::ProgramAlias;
-        use sandbox_linux::SandboxStage;
         use std::collections::BTreeMap;
         use std::path::PathBuf;
         use std::time::Duration;
@@ -126,7 +125,7 @@ mod linux {
             ));
             assert!(matches!(
                 map_linux_error(SandboxLinuxError::Setup {
-                    stage: SandboxStage::Seccomp,
+                    stage: "seccomp",
                     reason: "x".into()
                 }),
                 SandboxError::Setup { .. }

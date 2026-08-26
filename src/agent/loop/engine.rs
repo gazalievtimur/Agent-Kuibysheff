@@ -114,6 +114,8 @@ impl AgentEngine {
 
     #[instrument(skip(self, request), fields(prompt_len = request.prompt.len()))]
     #[allow(clippy::too_many_lines)]
+    // AgentError + UsageReport exceeds the clippy large-Err threshold; kept inline for call-site clarity.
+    #[allow(clippy::result_large_err)]
     async fn run_inner(
         &self,
         request: AgentRunRequest,
