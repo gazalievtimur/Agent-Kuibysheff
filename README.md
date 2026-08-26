@@ -35,7 +35,7 @@ Install / upgrade / uninstall (including user data under `.kuibysheff/`):
 Or build from source (Rust MSRV **1.88**):
 
 ```powershell
-git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
+git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
 ```

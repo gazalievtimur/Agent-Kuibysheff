@@ -145,8 +145,8 @@ rg -n -i `
   датасеты есть право публикации под Apache-2.0.
 - [ ] Выполнить `cargo deny check` и отдельную проверку лицензий npm/Python
   зависимостей.
-- [ ] Проверить лицензию и необходимую атрибуцию git submodule
-  `.cursor/skills/rust-skills`.
+- [x] ~~Проверить лицензию git submodule `.cursor/skills/rust-skills`.~~
+  Submodule удалён; third-party skills не vendored.
 - [ ] Решить, нужен ли `THIRD_PARTY_NOTICES` в исходниках или release-архивах.
 - [ ] Подтвердить политику использования торговых марок `Kuibysheff` и
   `agent_Kuibysheff`.
@@ -155,7 +155,6 @@ rg -n -i `
 
 ```powershell
 cargo deny check
-git submodule status
 ```
 
 Ожидаемый результат: нет неизвестного происхождения файлов или несовместимых
@@ -193,8 +192,8 @@ rg -n "Agent-Kuibyshev|Agent-Kuibysheff|0\.1\.0|0\.2\.0" `
   правила PR.
 - [ ] Добавить отдельные инструкции install, upgrade и uninstall для
   Windows/Linux, включая сохранение или удаление пользовательских данных.
-- [ ] Документировать клонирование git submodule через
-  `--recurse-submodules` или отказаться от обязательного submodule.
+- [x] ~~Документировать клонирование git submodule через
+  `--recurse-submodules`.~~ Submodule удалён; обычный `git clone` достаточен.
 - [ ] Добавить `CHANGELOG.md` и migration guide либо включить эквивалентные
   разделы в release notes.
 - [ ] Определить языковую стратегию для русскоязычных документов: перевод,
