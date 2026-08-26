@@ -1,7 +1,6 @@
 //! Parent-side supervisor: re-exec helper and collect output.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -171,6 +170,7 @@ fn validate(request: &SandboxLaunchRequest) -> Result<(), SandboxLinuxError> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::tempdir;
 
