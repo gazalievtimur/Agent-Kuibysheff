@@ -2,6 +2,30 @@
 
 use super::{SandboxBackend, SandboxError, SandboxOutput, SandboxSpec};
 
+/// Shared field mapping from agent [`SandboxSpec`] into a platform launch request type.
+macro_rules! sandbox_launch_request_from_spec {
+    ($spec:expr) => {{
+        let spec = $spec;
+        SandboxLaunchRequest {
+            executable: spec.executable,
+            argv: spec.argv,
+            cwd: spec.cwd,
+            env: spec.env,
+            home_read: spec.home_read,
+            home_write: spec.home_write,
+            runtime_read_roots: spec
+                .runtime_read_roots
+                .into_iter()
+                .map(|root| root.as_path().to_path_buf())
+                .collect(),
+            deadline: spec.deadline,
+            max_output_chars: spec.max_output_chars,
+            allow_children: spec.allow_children,
+        }
+    }};
+}
+pub(super) use sandbox_launch_request_from_spec;
+
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{SandboxBackend, SandboxError, SandboxOutput, SandboxSpec};
@@ -18,7 +42,7 @@ mod linux {
         }
 
         async fn run(&self, spec: SandboxSpec) -> Result<SandboxOutput, SandboxError> {
-            let request = to_linux_request(spec);
+            let request = to_launch_request(spec);
             let result = tokio::task::spawn_blocking(move || LinuxSandbox::run(&request))
                 .await
                 .map_err(|err| SandboxError::Io {
@@ -36,23 +60,8 @@ mod linux {
         }
     }
 
-    fn to_linux_request(spec: SandboxSpec) -> SandboxLaunchRequest {
-        SandboxLaunchRequest {
-            executable: spec.executable,
-            argv: spec.argv,
-            cwd: spec.cwd,
-            env: spec.env,
-            home_read: spec.home_read,
-            home_write: spec.home_write,
-            runtime_read_roots: spec
-                .runtime_read_roots
-                .into_iter()
-                .map(|root| root.as_path().to_path_buf())
-                .collect(),
-            deadline: spec.deadline,
-            max_output_chars: spec.max_output_chars,
-            allow_children: spec.allow_children,
-        }
+    fn to_launch_request(spec: SandboxSpec) -> SandboxLaunchRequest {
+        super::sandbox_launch_request_from_spec!(spec)
     }
 
     fn map_linux_error(error: SandboxLinuxError) -> SandboxError {
@@ -92,7 +101,7 @@ mod linux {
                 max_output_chars: 99,
                 allow_children: true,
             };
-            let req = to_linux_request(spec);
+            let req = to_launch_request(spec);
             assert_eq!(req.executable, PathBuf::from("/bin/true"));
             assert_eq!(req.argv, vec!["a".to_string()]);
             assert_eq!(req.cwd, PathBuf::from("/tmp"));
@@ -150,7 +159,7 @@ mod windows {
         }
 
         async fn run(&self, spec: SandboxSpec) -> Result<SandboxOutput, SandboxError> {
-            let request = to_windows_request(spec);
+            let request = to_launch_request(spec);
             let result = tokio::task::spawn_blocking(move || WindowsSandbox::run(&request))
                 .await
                 .map_err(|err| SandboxError::Io {
@@ -168,23 +177,8 @@ mod windows {
         }
     }
 
-    fn to_windows_request(spec: SandboxSpec) -> SandboxLaunchRequest {
-        SandboxLaunchRequest {
-            executable: spec.executable,
-            argv: spec.argv,
-            cwd: spec.cwd,
-            env: spec.env,
-            home_read: spec.home_read,
-            home_write: spec.home_write,
-            runtime_read_roots: spec
-                .runtime_read_roots
-                .into_iter()
-                .map(|root| root.as_path().to_path_buf())
-                .collect(),
-            deadline: spec.deadline,
-            max_output_chars: spec.max_output_chars,
-            allow_children: spec.allow_children,
-        }
+    fn to_launch_request(spec: SandboxSpec) -> SandboxLaunchRequest {
+        super::sandbox_launch_request_from_spec!(spec)
     }
 
     fn map_windows_error(error: SandboxWindowsError) -> SandboxError {
@@ -225,7 +219,7 @@ mod windows {
                 max_output_chars: 99,
                 allow_children: false,
             };
-            let req = to_windows_request(spec);
+            let req = to_launch_request(spec);
             assert_eq!(req.argv, vec!["/c".to_string(), "echo".to_string()]);
             assert_eq!(req.env.get("K").map(String::as_str), Some("V"));
             assert_eq!(req.max_output_chars, 99);

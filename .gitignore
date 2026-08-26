@@ -59,6 +59,10 @@ agent-config.local.yaml
 # Local code-index cache (not source)
 src/.code-index/
 
+# Slopo local DB and analysis reports (config + ignore list are committed)
+/slopo.db
+/slopo-report/
+
 # IDE / OS
 .idea/
 *.swp

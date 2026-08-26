@@ -241,6 +241,21 @@ pub fn effective_project_root(
     cli_project_root.map(Path::to_path_buf)
 }
 
+/// Whether `path` lexically contains a `.kuibysheff/protected` segment pair.
+///
+/// Used when no project root is available, or for config paths that must not
+/// target the protected store even relative to an MCP `cwd`.
+#[must_use]
+pub fn path_contains_protected_segment(path: &Path) -> bool {
+    let parts: Vec<_> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    parts
+        .windows(2)
+        .any(|w| w[0] == KUIBYSHEFF_DIR && w[1] == PROTECTED_DIR)
+}
+
 /// Whether `path` is under `{project}/.kuibysheff/protected/` (lexical check).
 ///
 /// Callers should pass canonical paths when available; this also rejects paths that

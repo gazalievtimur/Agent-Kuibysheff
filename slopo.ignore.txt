@@ -1,0 +1,61 @@
+# Cluster hashes ignored by `slopo analyze` / `slopo review`.
+# Kept active (do not add): 3f7a10592827, cb26bfe6034e, 02bc71206dd5,
+#   33f6ccc755b5, 56292642e035, 85bb71597915, 8eb2eda94052
+
+# intentional_pattern
+22cab75a46b7
+8b7d3bd5eb65
+26dfea284d11
+906162c8bbdb
+8c70a9a50df6
+3d07e1ae00cf
+14f5c290d8d0
+0e5e0e4684de
+306b9982055a
+8dcf0c3420cb
+0902fb009b1d
+b80c4dc68369
+419ed56c87a2
+2a7d69598ada
+2a1dbca63eff
+1b7d077ed770
+
+# false_positive
+3076d76ee110
+db66338d3a1d
+86f65726d02f
+32c2e4ca287d
+2550e19f8dc5
+
+# exact_copy_noise
+429e6fa6cf77
+2109f7f75515
+44b2d5ef5cdb
+b5e26e507e5c
+ca11a247a8b0
+53ad50f671c9
+fa4a14a286a4
+f64f9e825f40
+f05bf90a4c0b
+dd9a948df9f8
+d3ebfe93e544
+d2694af53be3
+be927447d2b6
+a7b8b2904e14
+a5a55beaf4b7
+89f5282acc82
+89f1cf02e93e
+89486c4c7a50
+585be634fc90
+5197c7907fc4
+465e4fd9c5d8
+42ecf506f8d2
+3ccbf14aedf9
+252d4c54c95d
+18bf8ff816ca
+13b3086bfc01
+12352b16b2f8
+0ef5d612db75
+0ca7dde71e6c
+a954735cbb23
+8afd369fa57a
