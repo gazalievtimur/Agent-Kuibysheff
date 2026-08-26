@@ -469,7 +469,9 @@ fi
 echo net-lo-only
 "#,
     );
-    let request = base_request(dir.path().to_path_buf(), script, Vec::new());
+    let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
+    // python3 -c spawns a helper process; allow_children must be true for the connect probe.
+    request.allow_children = true;
     let result = LinuxSandbox::run(&request).expect("net lo-only run");
     assert_eq!(
         result.exit_code,
