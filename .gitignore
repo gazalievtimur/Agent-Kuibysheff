@@ -22,6 +22,9 @@ agent-config.local.yaml
 # IDE local MCP (keep mcp.json.example tracked)
 .cursor/mcp.json
 
+# Optional local Cursor skills (not vendored in this repo)
+.cursor/skills/
+
 # Local Cursor plans (may contain machine paths / internal notes)
 .cursor/plans/
 

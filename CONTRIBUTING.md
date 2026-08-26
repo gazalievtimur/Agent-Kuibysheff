@@ -34,13 +34,11 @@ The Apache License does not grant rights to use the names **Kuibysheff**,
 | Python | **3.12+** (coverage ratchet / local eval scripts) |
 | Docker / WSL | Optional; required for some Linux sandbox / SWE-bench / security lab flows |
 
-Clone with submodules (Cursor rust-skills under `.cursor/skills/rust-skills`):
+Clone the repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
+git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
-# or, if already cloned:
-git submodule update --init --recursive
 ```
 
 Install local git hooks:

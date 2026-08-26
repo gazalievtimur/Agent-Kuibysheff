@@ -33,7 +33,7 @@ from-source build.
 Requirements: **Rust 1.88+** (MSRV), plus platform toolchains for your OS.
 
 ```bash
-git clone --recurse-submodules https://github.com/gazalievtimur/Agent-Kuibysheff.git
+git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
 ```
@@ -47,7 +47,7 @@ required). The wizard can store the provider API key in the agent profile
 
 - **Prebuilt:** replace the binary with the newer release archive; re-check
   checksums.
-- **From source:** `git pull` (update submodules if needed) and rebuild.
+- **From source:** `git pull` and rebuild.
 - Read [CHANGELOG.md](../CHANGELOG.md) for breaking config changes (for example
   required `access` in 0.2.0).
 

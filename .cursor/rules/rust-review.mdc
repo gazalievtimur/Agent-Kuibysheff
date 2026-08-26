@@ -60,7 +60,8 @@ Base rules come from the Rust Style Guide: https://doc.rust-lang.org/style-guide
 - Warning: non-blocking style/readability issue that should be fixed before merge when practical.
 - Suggestion: optional refinement (idioms, simplification, micro-optimizations) that does not block merge.
 
-## Relationship To rust-skills
+## Optional Rust idioms reference
 
 Use this protocol for project-specific acceptance decisions.
-Use `.cursor/rules/rust-skills.mdc` and `/rust-skills` for deeper idiomatic guidance and category-specific best practices.
+For broader Rust style guidance, see the external
+[rust-skills](https://github.com/leonardomso/rust-skills) project (not bundled here).
