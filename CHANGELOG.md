@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-26
+
 ### Breaking
 
 - The CLI executable is renamed from `agent_Kuibysheff` to **`kbshff`**. The
   Cargo package/crate name remains `agent_Kuibysheff`. Update `PATH`, scripts,
   and `kuibysheff.binaryPath` accordingly. Release archives still use the
   `agent_Kuibysheff-v…` zip name; the binary inside is `kbshff`.
+- Agent config now **requires** an `access` policy. Omitting `access` fails
+  closed at load time.
+- Permissive home/workspace semantics are available only via an explicit
+  opt-in: `access: { mode: legacy }`. Prefer fail-closed tools, path grants,
+  and `home.run` program aliases in production. Details:
+  [CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
 
 ### Added
 
@@ -38,17 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Product docs and script defaults use `OPENAI_API_KEY` / generic OpenAI-compatible
   URLs; Polza-specific branding was removed from examples.
 
-## [0.2.0] - 2026-08-09
-
-### Breaking
-
-- Agent config now **requires** an `access` policy. Omitting `access` fails
-  closed at load time.
-- Permissive home/workspace semantics are available only via an explicit
-  opt-in: `access: { mode: legacy }`. Prefer fail-closed tools, path grants,
-  and `home.run` program aliases in production. Details:
-  [CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
-
 ### Migration
 
 1. Add an `access` block to each agent config (see
@@ -56,12 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 2. If you temporarily need pre-0.2 permissive FS behavior, set
    `access: { mode: legacy }` and plan a move to strict grants.
 3. Re-run `kbshff check --project-root <DIR> --agent <ID>`.
+4. Rename the CLI binary on `PATH` from `agent_Kuibysheff` to `kbshff` (and update
+   VS Code `kuibysheff.binaryPath` if used).
 
 ### Notes
 
 - CLI / crate version: **0.2.0**.
 - VS Code extension (`extensions/vscode`) is versioned independently and may
   remain at **0.1.0** while the CLI is 0.2.x.
+- Security reports: [SECURITY.md](SECURITY.md) (`gazalievtimur@gmail.com`).
 
 ## [0.1.0] - 2026-07-01
 
