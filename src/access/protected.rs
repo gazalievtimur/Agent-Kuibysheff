@@ -2,7 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::project_paths::{is_protected_path, protected_root, KUIBYSHEFF_DIR, PROTECTED_DIR};
+use crate::project_paths::{
+    is_protected_path, path_contains_protected_segment, protected_root, KUIBYSHEFF_DIR,
+    PROTECTED_DIR,
+};
 
 /// Reason string used in tool / policy denials.
 pub const PROTECTED_DENY_REASON: &str =
@@ -17,16 +20,6 @@ pub fn is_denied_protected_path(project_root: Option<&Path>, canonical_path: &Pa
         return path_contains_protected_segment(canonical_path);
     };
     is_protected_path(root, canonical_path)
-}
-
-fn path_contains_protected_segment(path: &Path) -> bool {
-    let parts: Vec<_> = path
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-    parts
-        .windows(2)
-        .any(|w| w[0] == KUIBYSHEFF_DIR && w[1] == PROTECTED_DIR)
 }
 
 /// Deny if `workspace_root` itself is under protected, or a read grant names `protected`.

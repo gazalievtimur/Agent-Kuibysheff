@@ -57,10 +57,7 @@ impl McpHttpClient {
             ))
             .no_proxy()
             .build()
-            .map_err(|source| Error::Http {
-                server: server_name.to_string(),
-                source,
-            })?;
+            .map_err(|source| Error::http(server_name.to_string(), source))?;
         let static_headers = build_static_headers(server_name, &cfg.headers)?;
         let oauth = match &cfg.auth {
             Some(auth) => Some(McpOAuth::new(server_name, endpoint.clone(), auth.clone())?),
@@ -86,18 +83,7 @@ impl McpHttpClient {
     /// Lists tool names via `tools/list`.
     pub async fn list_tools(&mut self) -> Result<Vec<String>, Error> {
         let response = self.request("tools/list", json!({})).await?;
-        let list = response
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut out = Vec::with_capacity(list.len());
-        for entry in list {
-            if let Some(name) = entry.get("name").and_then(Value::as_str) {
-                out.push(name.to_string());
-            }
-        }
-        Ok(out)
+        Ok(crate::mcp::tool_names_from_list_result(&response))
     }
 
     /// Sends a JSON-RPC request and returns the `result` object.
@@ -148,10 +134,10 @@ impl McpHttpClient {
             .header(HEADER_SESSION_ID, session)
             .header(HEADER_PROTOCOL_VERSION, self.protocol_version.as_str());
         req = self.apply_common_headers(req)?;
-        let response = req.send().await.map_err(|source| Error::Http {
-            server: self.server_name.clone(),
-            source,
-        })?;
+        let response = req
+            .send()
+            .await
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         let status = response.status();
         if status == StatusCode::METHOD_NOT_ALLOWED
             || status == StatusCode::OK
@@ -226,10 +212,10 @@ impl McpHttpClient {
             .get(self.endpoint.clone())
             .header(ACCEPT, "text/event-stream");
         req = self.apply_common_headers(req)?;
-        let response = req.send().await.map_err(|source| Error::Http {
-            server: self.server_name.clone(),
-            source,
-        })?;
+        let response = req
+            .send()
+            .await
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         if !response.status().is_success() {
             return Err(Error::Protocol {
                 server: self.server_name.clone(),
@@ -363,10 +349,10 @@ impl McpHttpClient {
         }
 
         // Some servers omit/mislabel Content-Type; detect SSE by body prefix.
-        let bytes = response.bytes().await.map_err(|source| Error::Http {
-            server: self.server_name.clone(),
-            source,
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         let as_text = String::from_utf8_lossy(&bytes);
         if as_text.starts_with("event:")
             || as_text.starts_with("data:")
@@ -435,10 +421,7 @@ impl McpHttpClient {
                     .unwrap_or("unknown")
                     .to_string(),
             })?
-            .map_err(|source| Error::Http {
-                server: self.server_name.clone(),
-                source,
-            })
+            .map_err(|source| Error::http(self.server_name.clone(), source))
     }
 
     fn apply_common_headers(
@@ -512,10 +495,7 @@ impl McpHttpClient {
                 }
                 Ok(Some(Err(err))) => {
                     if resumes_remaining == 0 || target_id.is_none() {
-                        return Err(Error::Http {
-                            server: self.server_name.clone(),
-                            source: err,
-                        });
+                        return Err(Error::http(self.server_name.clone(), err));
                     }
                     warn!(
                         server = %self.server_name,
@@ -676,10 +656,7 @@ impl McpHttpClient {
                 server: self.server_name.clone(),
                 method: "sse".to_string(),
             })?
-            .map_err(|source| Error::Http {
-                server: self.server_name.clone(),
-                source,
-            })?;
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         let status = response.status();
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             let challenge = parse_www_authenticate(response.headers());
@@ -786,10 +763,7 @@ impl McpHttpClient {
             .timeout(Duration::from_secs(30))
             .no_proxy()
             .build()
-            .map_err(|source| Error::Http {
-                server: server_name.to_string(),
-                source,
-            })?;
+            .map_err(|source| Error::http(server_name.to_string(), source))?;
         let static_headers = build_static_headers(server_name, &cfg.headers)?;
         let oauth = match cfg.auth {
             Some(auth) => Some(McpOAuth::new(server_name, endpoint.clone(), auth)?),

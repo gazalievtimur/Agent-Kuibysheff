@@ -806,18 +806,7 @@ impl McpStdioClient {
 
     async fn list_tools(&mut self) -> Result<Vec<String>, Error> {
         let response = self.request("tools/list", json!({})).await?;
-        let list = response
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut out = Vec::with_capacity(list.len());
-        for entry in list {
-            if let Some(name) = entry.get("name").and_then(Value::as_str) {
-                out.push(name.to_string());
-            }
-        }
-        Ok(out)
+        Ok(crate::mcp::tool_names_from_list_result(&response))
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), Error> {

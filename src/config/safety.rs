@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path};
 
-use crate::project_paths::{KUIBYSHEFF_DIR, PROTECTED_DIR};
+use crate::project_paths::{path_contains_protected_segment, KUIBYSHEFF_DIR, PROTECTED_DIR};
 
 use super::{AppConfig, ConfigError, McpTransport};
 
@@ -53,16 +53,6 @@ fn check_mcp_cwd(server_name: &str, cwd: &Path) -> Result<(), ConfigError> {
     }
 
     Ok(())
-}
-
-fn path_contains_protected_segment(path: &Path) -> bool {
-    let parts: Vec<_> = path
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-    parts
-        .windows(2)
-        .any(|w| w[0] == KUIBYSHEFF_DIR && w[1] == PROTECTED_DIR)
 }
 
 #[cfg(test)]

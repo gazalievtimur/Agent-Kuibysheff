@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -9,7 +9,7 @@ use tracing::{info, instrument, warn};
 use super::directive::{approx_json_object_count, content_preview, parse_directive};
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
-use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
+use crate::agent::{generate_run_id, AgentEvent, AgentEventTx, RunCancel};
 use crate::billing::{BillingError, CostResolverChain, RunCostReport, RunCostTracker};
 use crate::config::ProviderHistoryConfig;
 use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEvents};
@@ -894,13 +894,6 @@ fn build_usage_report(metrics: &RunMetrics, cost: RunCostReport) -> UsageReport 
         elapsed_ms: metrics.elapsed_ms(),
         cost,
     }
-}
-
-fn generate_run_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {

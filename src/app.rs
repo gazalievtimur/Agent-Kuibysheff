@@ -6,7 +6,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -18,7 +17,7 @@ use crate::access::{
     WorkspaceFsPolicy,
 };
 use crate::acp;
-use crate::agent::{AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
+use crate::agent::{generate_run_id, AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
 use crate::billing::{
     CatalogCostResolver, CostResolver, CostResolverChain, McpCostResolver, Money, PricingCatalog,
     ProviderReportedCostResolver, UnavailableCostResolver,
@@ -383,13 +382,6 @@ async fn build_billing_resolver(
         }
     }
     Ok(Arc::new(CostResolverChain::new(ordered)))
-}
-
-fn generate_run_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 /// Wire config/tools/provider and run one agent turn.
