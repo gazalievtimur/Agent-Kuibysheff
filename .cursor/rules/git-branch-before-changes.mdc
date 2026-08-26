@@ -1,0 +1,27 @@
+---
+description: Always create a dedicated git branch before making any code or docs changes.
+alwaysApply: true
+---
+
+# Git branch before changes
+
+Before editing files, committing, or otherwise changing the working tree:
+
+1. Check the current branch (`git status` / `git branch`).
+2. If you are on `main` (or another shared default branch), **create and switch to a new feature/fix branch first**. Do not commit or push directly to `main`.
+3. If you are already on a relevant non-default branch for the task, keep using it.
+4. Name branches clearly, e.g. `feat/...`, `fix/...`, `docs/...`.
+
+```text
+# ❌ BAD — edit/commit on main
+git checkout main
+# …edit files…
+
+# ✅ GOOD — branch first, then change
+git checkout main
+git pull
+git checkout -b feat/short-description
+# …edit files…
+```
+
+Exceptions only when the user explicitly asks to work on `main` or amend an existing branch they named.
