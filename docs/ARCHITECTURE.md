@@ -5,7 +5,7 @@
 ## Goals
 
 - **Worker, not orchestrator**: the CLI does not modify a target repository directly; it writes deliverables into a caller-provided `--home` workspace.
-- **Fail-closed security**: optional strict access policy denies everything that is not explicitly allowed (tools, paths, programs, env vars).
+- **Fail-closed security**: a required `access` policy denies everything that is not explicitly allowed (tools, paths, programs, env vars). Permissive pre-0.2 behavior is only available via explicit `access: { mode: legacy }`.
 - **OS-level sandboxing**: `home.run` payloads execute inside Linux namespaces or a Windows AppContainer with no network.
 - **Composability**: trait-based layering allows providers, tool executors, and sandbox backends to be swapped or tested independently.
 - **Single JSON contract**: regardless of success or failure, `run` prints one `RunOutput` JSON document; `stop_reason: error` also exits non-zero.

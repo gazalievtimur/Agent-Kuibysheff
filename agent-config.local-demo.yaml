@@ -17,3 +17,21 @@ logging:
   enable_ai_log: true
   enable_mcp_log: true
   output_dir: "./logs"
+
+access:
+  tools:
+    builtins:
+      - home.list
+      - home.read
+      - home.write
+      - home.run
+      - local_tools.search_docs
+      - local_tools.read_file
+
+  filesystem:
+    home:
+      read: ["in", "out"]
+      write: ["out"]
+
+  run:
+    programs: []
