@@ -6,7 +6,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::access::AccessMode;
+use crate::access::{parse_tool_list, AccessMode, EffectiveToolPolicy};
 use crate::billing::PricingCatalog;
 use crate::cli::CheckArgs;
 use crate::config::{load_config, AppConfig, ConfigError, McpTransport};
@@ -63,6 +63,31 @@ pub struct CheckItem {
 pub struct CheckReport {
     pub config_path: String,
     pub items: Vec<CheckItem>,
+    /// Connected vs available resources summary for interactive tooling.
+    pub inventory: ResourceInventory,
+}
+
+/// Snapshot of configured and discovered resources.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResourceInventory {
+    /// Built-in tools allowed by the access policy (qualified names).
+    pub builtins_allowed: Vec<String>,
+    /// MCP servers that connected successfully with their discovered tools.
+    pub mcp_connected: Vec<McpInventory>,
+    /// MCP servers that failed to connect (name + detail).
+    pub mcp_failed: Vec<(String, String)>,
+    /// Discovered MCP tools filtered out by access/skills policy.
+    pub mcp_gated: Vec<String>,
+    /// Effective tools the agent may call (builtins ∪ allowed MCP).
+    pub tools_available: Vec<String>,
+}
+
+/// One successfully connected MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpInventory {
+    pub name: String,
+    pub transport: String,
+    pub tools: Vec<String>,
 }
 
 impl CheckReport {
@@ -134,6 +159,14 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     });
 
     check_provider(&cfg, args.skip_provider, &mut items).await;
+    let mut inventory = ResourceInventory {
+        builtins_allowed: access
+            .allowed_builtins()
+            .iter()
+            .map(|t| t.qualified())
+            .collect(),
+        ..Default::default()
+    };
     check_mcp(
         &cfg,
         &paths.config,
@@ -141,6 +174,7 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
         &args.identity.agent,
         args.skip_mcp,
         &mut items,
+        &mut inventory,
     )
     .await;
     check_billing_catalog(&cfg, &paths.config, &mut items);
@@ -149,9 +183,31 @@ async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     check_logging(&cfg, &mut items);
     check_settings(&settings_dir, &mut items);
 
+    let skills_allowed = match load_settings(&settings_dir) {
+        Ok(settings) => match SkillsCatalog::parse(&settings.skills_source) {
+            Ok(catalog) => catalog.allowed_qualified_tools(),
+            Err(_) => Default::default(),
+        },
+        Err(_) => Default::default(),
+    };
+    let discovered: Vec<String> = inventory
+        .mcp_connected
+        .iter()
+        .flat_map(|s| s.tools.iter().cloned())
+        .collect();
+    let mcp_parsed = parse_tool_list(discovered.iter().map(String::as_str)).unwrap_or_default();
+    let effective = EffectiveToolPolicy::compile(&access, &skills_allowed, mcp_parsed.clone());
+    inventory.tools_available = effective.advertised();
+    inventory.mcp_gated = mcp_parsed
+        .iter()
+        .filter(|t| !effective.allows(t))
+        .map(|t| t.qualified())
+        .collect();
+
     Ok(CheckReport {
         config_path: paths.config.display().to_string(),
         items,
+        inventory,
     })
 }
 
@@ -223,6 +279,7 @@ async fn check_mcp(
     agent_id: &str,
     skip: bool,
     items: &mut Vec<CheckItem>,
+    inventory: &mut ResourceInventory,
 ) {
     if skip {
         items.push(CheckItem {
@@ -285,13 +342,23 @@ async fn check_mcp(
                         format!("{transport}; {} tool(s)", tools.len())
                     },
                 });
+                inventory.mcp_connected.push(McpInventory {
+                    name: server.name.clone(),
+                    transport: transport.clone(),
+                    tools,
+                });
                 registry.shutdown().await;
             }
-            Err(err) => items.push(CheckItem {
-                name,
-                status: CheckStatus::Fail,
-                detail: format!("{transport}: {err}"),
-            }),
+            Err(err) => {
+                items.push(CheckItem {
+                    name,
+                    status: CheckStatus::Fail,
+                    detail: format!("{transport}: {err}"),
+                });
+                inventory
+                    .mcp_failed
+                    .push((server.name.clone(), format!("{transport}: {err}")));
+            }
         }
     }
 }
@@ -505,6 +572,50 @@ pub fn print_report(report: &CheckReport) {
             report.failed_count(),
             report.passed_count(),
             report.skipped_count()
+        );
+    }
+}
+
+/// Print connected vs available resource inventory (for the interactive wizard).
+pub fn print_inventory(inventory: &ResourceInventory) {
+    println!("\nConnected resources:");
+    if inventory.mcp_connected.is_empty() && inventory.mcp_failed.is_empty() {
+        println!("  MCP: (none configured or skipped)");
+    } else {
+        for server in &inventory.mcp_connected {
+            println!(
+                "  MCP `{}` ({}) — {} tool(s)",
+                server.name,
+                server.transport,
+                server.tools.len()
+            );
+            for tool in &server.tools {
+                println!("    - {tool}");
+            }
+        }
+        for (name, detail) in &inventory.mcp_failed {
+            println!("  MCP `{name}` — failed: {detail}");
+        }
+    }
+
+    println!("\nAvailable to the agent:");
+    if inventory.tools_available.is_empty() {
+        println!("  (no effective tools)");
+    } else {
+        for tool in &inventory.tools_available {
+            println!("  - {tool}");
+        }
+    }
+    if !inventory.mcp_gated.is_empty() {
+        println!("\nDiscovered but gated by policy/skills:");
+        for tool in &inventory.mcp_gated {
+            println!("  - {tool}");
+        }
+    }
+    if !inventory.builtins_allowed.is_empty() {
+        println!(
+            "\nAccess-policy builtins: {}",
+            inventory.builtins_allowed.join(", ")
         );
     }
 }

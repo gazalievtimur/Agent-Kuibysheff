@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -9,7 +9,7 @@ use tracing::{info, instrument, warn};
 use super::directive::{approx_json_object_count, content_preview, parse_directive};
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
-use crate::agent::{AgentEvent, AgentEventTx, RunCancel};
+use crate::agent::{generate_run_id, AgentEvent, AgentEventTx, RunCancel};
 use crate::billing::{BillingError, CostResolverChain, RunCostReport, RunCostTracker};
 use crate::config::ProviderHistoryConfig;
 use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEvents};
@@ -114,6 +114,8 @@ impl AgentEngine {
 
     #[instrument(skip(self, request), fields(prompt_len = request.prompt.len()))]
     #[allow(clippy::too_many_lines)]
+    // AgentError + UsageReport exceeds the clippy large-Err threshold; kept inline for call-site clarity.
+    #[allow(clippy::result_large_err)]
     async fn run_inner(
         &self,
         request: AgentRunRequest,
@@ -425,60 +427,58 @@ impl AgentEngine {
 
             for (tool_index, tool_call) in directive.tool_calls.into_iter().enumerate() {
                 let tool_call_id = format!("tc-{iteration}-{tool_index}");
-                let qualified =
-                    match QualifiedTool::parse(&format!("{}.{}", tool_call.server, tool_call.tool))
-                    {
-                        Ok(qualified) => qualified,
-                        Err(reason) => {
-                            warn!(
-                                iteration,
-                                server = %tool_call.server,
-                                tool = %tool_call.tool,
-                                error = %reason,
-                                "tool call name rejected; returning error to the model"
-                            );
-                            self.log_tool_event(
-                                "tool_call_failed",
+                let qualified = match QualifiedTool::new(&tool_call.server, &tool_call.tool) {
+                    Ok(qualified) => qualified,
+                    Err(reason) => {
+                        warn!(
+                            iteration,
+                            server = %tool_call.server,
+                            tool = %tool_call.tool,
+                            error = %reason,
+                            "tool call name rejected; returning error to the model"
+                        );
+                        self.log_tool_event(
+                            "tool_call_failed",
+                            json!({
+                                "iteration": iteration,
+                                "server": tool_call.server,
+                                "tool": tool_call.tool,
+                                "ok": false,
+                                "error": reason,
+                            }),
+                        )
+                        .await;
+                        events.emit(AgentEvent::ToolStart {
+                            id: tool_call_id.clone(),
+                            server: tool_call.server.clone(),
+                            tool: tool_call.tool.clone(),
+                            arguments: tool_call.arguments.clone(),
+                        });
+                        events.emit(AgentEvent::ToolFinish {
+                            id: tool_call_id,
+                            ok: false,
+                            output: json!({ "error": reason }),
+                        });
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage::new(
+                                ChatRole::User,
                                 json!({
-                                    "iteration": iteration,
-                                    "server": tool_call.server,
-                                    "tool": tool_call.tool,
-                                    "ok": false,
-                                    "error": reason,
-                                }),
-                            )
-                            .await;
-                            events.emit(AgentEvent::ToolStart {
-                                id: tool_call_id.clone(),
-                                server: tool_call.server.clone(),
-                                tool: tool_call.tool.clone(),
-                                arguments: tool_call.arguments.clone(),
-                            });
-                            events.emit(AgentEvent::ToolFinish {
-                                id: tool_call_id,
-                                ok: false,
-                                output: json!({ "error": reason }),
-                            });
-                            push_message(
-                                &mut messages,
-                                &mut full_history,
-                                ChatMessage::new(
-                                    ChatRole::User,
-                                    json!({
-                                        "tool_result": {
-                                            "server": tool_call.server,
-                                            "tool": tool_call.tool,
-                                            "error": reason
-                                        }
-                                    })
-                                    .to_string(),
-                                ),
-                                &history,
-                            );
-                            prune_message_history(&mut messages, &history);
-                            continue;
-                        }
-                    };
+                                    "tool_result": {
+                                        "server": tool_call.server,
+                                        "tool": tool_call.tool,
+                                        "error": reason
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                            &history,
+                        );
+                        prune_message_history(&mut messages, &history);
+                        continue;
+                    }
+                };
                 let server = qualified.server().to_string();
                 let tool = qualified.tool().to_string();
                 let qualified_tool = qualified.qualified();
@@ -896,13 +896,6 @@ fn build_usage_report(metrics: &RunMetrics, cost: RunCostReport) -> UsageReport 
         elapsed_ms: metrics.elapsed_ms(),
         cost,
     }
-}
-
-fn generate_run_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
 }
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {

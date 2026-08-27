@@ -1,6 +1,8 @@
 # 1c-intake
 
-Stage 1 of the [1C Kuibysheff workflow](../../workflows/1c-dev/README.md): Jira/Confluence → `task_brief.md`.
+Stage 1 of the 1C Kuibysheff conveyor: Jira/Confluence → `task_brief.md`.
+Orchestrator entrypoints: `scripts/1c-dev-run.ps1` / `scripts/1c-dev-scaffold-project.ps1`
+(full copy-unit under local `workflows/1c-dev/` when restored from git history).
 
 ## Dependencies
 

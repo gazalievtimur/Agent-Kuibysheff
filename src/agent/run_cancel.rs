@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 pub struct RunCancel {
     token: CancellationToken,
     deadline: Arc<RwLock<Option<Instant>>>,
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for RunCancel {
@@ -28,6 +30,7 @@ impl RunCancel {
         Self {
             token: CancellationToken::new(),
             deadline: Arc::new(RwLock::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -39,20 +42,24 @@ impl RunCancel {
 
     /// Arms a wall-clock deadline from now and cancels the token when it elapses.
     ///
-    /// Call once at the start of [`crate::agent::AgentEngine::run`]. Replacing an
-    /// already-armed deadline updates the stored instant but leaves any prior
-    /// sleeper task running (it becomes a no-op if the token is already cancelled).
+    /// Call once at the start of [`crate::agent::AgentEngine::run`]. Re-arming
+    /// replaces the stored instant; a previous sleeper will not cancel the token
+    /// if a newer generation has been armed.
     pub fn arm_deadline(&self, max_duration: Duration) {
         let deadline = Instant::now() + max_duration;
         *self
             .deadline
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(deadline);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let token = self.token.clone();
+        let generation_cell = Arc::clone(&self.generation);
         tokio::spawn(async move {
             tokio::select! {
                 () = tokio::time::sleep(max_duration) => {
-                    token.cancel();
+                    if generation_cell.load(Ordering::SeqCst) == generation {
+                        token.cancel();
+                    }
                 }
                 () = token.cancelled() => {}
             }
@@ -102,5 +109,22 @@ mod tests {
             .expect("deadline should cancel token");
         assert!(cancel.is_cancelled());
         assert_eq!(cancel.remaining(), Some(Duration::from_millis(1)));
+    }
+
+    #[tokio::test]
+    async fn arm_deadline_rearm_extends_deadline() {
+        let cancel = RunCancel::new();
+        cancel.arm_deadline(Duration::from_millis(80));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancel.arm_deadline(Duration::from_millis(400));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(
+            !cancel.is_cancelled(),
+            "first sleeper must not cancel after a later re-arm"
+        );
+        tokio::time::timeout(Duration::from_secs(2), cancel.token().cancelled())
+            .await
+            .expect("extended deadline should cancel token");
+        assert!(cancel.is_cancelled());
     }
 }

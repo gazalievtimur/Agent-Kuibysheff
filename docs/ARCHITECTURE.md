@@ -5,7 +5,7 @@
 ## Goals
 
 - **Worker, not orchestrator**: the CLI does not modify a target repository directly; it writes deliverables into a caller-provided `--home` workspace.
-- **Fail-closed security**: optional strict access policy denies everything that is not explicitly allowed (tools, paths, programs, env vars).
+- **Fail-closed security**: a required `access` policy denies everything that is not explicitly allowed (tools, paths, programs, env vars). Permissive pre-0.2 behavior is only available via explicit `access: { mode: legacy }`.
 - **OS-level sandboxing**: `home.run` payloads execute inside Linux namespaces or a Windows AppContainer with no network.
 - **Composability**: trait-based layering allows providers, tool executors, and sandbox backends to be swapped or tested independently.
 - **Single JSON contract**: regardless of success or failure, `run` prints one `RunOutput` JSON document; `stop_reason: error` also exits non-zero.
@@ -16,7 +16,7 @@ The repository is a Cargo workspace with three crates:
 
 | Crate | Path | Role |
 |-------|------|------|
-| `agent_Kuibysheff` | repository root | Main library and CLI binary. Forbids `unsafe_code` at the lint level. |
+| `agent_Kuibysheff` | repository root | Main library and `kbshff` CLI binary. Forbids `unsafe_code` at the lint level. |
 | `sandbox-linux` | `crates/sandbox-linux` | Linux namespace sandbox with `libc` FFI. Contains all Linux-specific `unsafe`. |
 | `sandbox-windows` | `crates/sandbox-windows` | Windows AppContainer sandbox with `windows-sys` FFI. Contains all Windows-specific `unsafe`. |
 
@@ -83,11 +83,13 @@ flowchart TD
 ### Bootstrap and orchestration
 
 - `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
-- `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio.
-- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` / `acp` (`--project-root`,
+- `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` / `a2a` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio; `a2a` serves A2A 1.0 over HTTP.
+- `src/cli/` — `clap` subcommands (`pub(crate)`): `run` / `acp` / `a2a` (`--project-root`,
   `--agent`, optional `--home`), `init`, `check`, and `config` (CRUD + import).
 - `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
-- `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
+- `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.
+- `src/a2a/` — Agent-to-Agent (A2A) 1.0 HTTP server via official `a2a-lf` / `a2a-server-lf` SDK (`AgentExecutor` → `run_agent_prompt`, Agent Card from profile, JSON-RPC + REST, optional Bearer).
+- `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
 
@@ -107,8 +109,8 @@ server; Kuibysheff plugs in as an ACP agent. Bridges spawn the same `acp`
 subcommand with three separate pipes:
 
 ```text
-Clients ←AHP→ VS Code Agent Host ←ACP stdio→ agent_Kuibysheff acp
-Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ agent_Kuibysheff acp
+Clients ←AHP→ VS Code Agent Host ←ACP stdio→ kbshff acp
+Messenger/Mail API ←→ Bridge ←ACP stdin/stdout (+ stderr drain)→ kbshff acp
 ```
 
 `src/acp/` handles initialize / session lifecycle / prompt turns and forwards
@@ -118,6 +120,15 @@ file sinks hold diagnostics. `init_tracing` is idempotent for repeated prompts
 in one process. Session prompts do not retain prior-turn chat history — bridges
 must supply context themselves. Messenger/email credentials are never part of
 this crate.
+
+### Peer protocol (A2A)
+
+`kbshff a2a` exposes the same worker over [A2A 1.0](https://a2a-protocol.org/latest/specification/)
+HTTP using the official SDK routers (`/.well-known/agent-card.json`,
+`/jsonrpc`, `/rest`). `src/a2a/executor.rs` implements `AgentExecutor`; task
+store and streaming stay in `a2a-server-lf`. Default bind is loopback;
+optional `--token-env` adds Bearer on RPC/REST. Outbound A2A client and gRPC
+are not implemented.
 
 ### Tools and access policy
 

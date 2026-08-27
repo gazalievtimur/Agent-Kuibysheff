@@ -1,6 +1,6 @@
 # agent_Kuibysheff
 
-[![CI](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml/badge.svg)](https://github.com/gybson63/Agent-Kuibysheff/actions/workflows/ci.yml)
+[![CI](https://github.com/gazalievtimur/Agent-Kuibysheff/actions/workflows/ci.yml/badge.svg)](https://github.com/gazalievtimur/Agent-Kuibysheff/actions/workflows/ci.yml)
 
 Minimal and reliable CLI agent worker in Rust.
 
@@ -11,6 +11,7 @@ Minimal and reliable CLI agent worker in Rust.
 - Runs an iterative agent loop against an OpenAI-compatible `/chat/completions` endpoint.
 - Uses MCP servers over `stdio` or Streamable HTTP when the model requests tools.
 - Can invoke MCP tools as ordered Event-MCP middleware around context and response stages.
+- Serves ACP over stdio for IDE/bridges, and A2A 1.0 over HTTP for peer agents.
 - Enforces hard stop limits: iterations, tokens, max duration, and optional max cost.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
@@ -25,7 +26,7 @@ target repository. See [CONTRACT.md](CONTRACT.md) for the stable interface and
 ## Install
 
 Prebuilt **Windows x86_64** and **Linux x86_64** binaries are on
-[GitHub Releases](https://github.com/gybson63/Agent-Kuibysheff/releases).
+[GitHub Releases](https://github.com/gazalievtimur/Agent-Kuibysheff/releases).
 macOS and Linux aarch64 are **unsupported**. Archive names, checksums, glibc
 baseline, and how to cut a release: [docs/RELEASING.md](docs/RELEASING.md).
 Install / upgrade / uninstall (including user data under `.kuibysheff/`):
@@ -34,9 +35,9 @@ Install / upgrade / uninstall (including user data under `.kuibysheff/`):
 Or build from source (Rust MSRV **1.88**):
 
 ```powershell
-git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
-cargo build --release --bin agent_Kuibysheff
+cargo build --release --bin kbshff
 ```
 
 Breaking changes and migration notes (including required `access` in **0.2.0**):
@@ -46,17 +47,19 @@ Breaking changes and migration notes (including required `access` in **0.2.0**):
 ## Quick start
 
 ```powershell
-# Option A: .env beside the agent profile (loaded automatically)
+# Option A: interactive setup writes profile `.env` automatically
+#   kbshff
+# Option B: copy example and set OPENAI_API_KEY (or your api_key_env name)
 Copy-Item .env.example .env
-# edit .env and set POLZA_API_KEY=...
+# edit .env
 
 # Scaffold a protected profile, then import or edit via `config`
-cargo run --bin agent_Kuibysheff -- init demo --project-root .
+cargo run --bin kbshff -- init demo --project-root .
 # Optional: import an existing YAML/settings bundle
-# cargo run --bin agent_Kuibysheff -- config --project-root . --agent demo import --from ./settings --force
+# cargo run --bin kbshff -- config --project-root . --agent demo import --from ./settings --force
 
-$env:POLZA_API_KEY = "your_api_key"
-cargo run --bin agent_Kuibysheff -- run `
+$env:OPENAI_API_KEY = "your_api_key"
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent demo `
   --prompt "Summarize the attached README into out/summary.md" `
@@ -74,7 +77,7 @@ $env:OPENAI_API_KEY = "your_api_key"
 Runtime limit overrides:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- run <required arguments> `
+cargo run --bin kbshff -- run <required arguments> `
   --max-iterations 20 --max-tokens 25000 --max-duration-sec 180
 ```
 
@@ -85,10 +88,20 @@ See [`agent-config.example.yaml`](agent-config.example.yaml),
 
 ## CLI
 
+Interactive setup (no subcommand; TTY required):
+
+```text
+kbshff
+```
+
+Asks for the harness folder (default: current directory), checks or creates an
+agent profile, prints connected/available resources, then offers further
+configuration (MCP, provider, limits).
+
 Worker (`run`):
 
 ```text
-agent_Kuibysheff run \
+kbshff run \
   --project-root <DIR> \
   --agent <ID> \
   --prompt <TEXT> \
@@ -101,16 +114,16 @@ agent_Kuibysheff run \
 Scaffold, probe, or manage settings (no storage path flags):
 
 ```text
-agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
-agent_Kuibysheff check --project-root <DIR> --agent <ID>
-agent_Kuibysheff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
-agent_Kuibysheff config --project-root <DIR> --agent <ID> show
+kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
+kbshff check --project-root <DIR> --agent <ID>
+kbshff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
+kbshff config --project-root <DIR> --agent <ID> show
 ```
 
 ACP stdio server (VS Code, messengers, mail bridges):
 
 ```text
-agent_Kuibysheff acp \
+kbshff acp \
   --agent <ID> \
   [--project-root <DIR>]
 ```
@@ -120,21 +133,43 @@ long-lived process per agent. Full bridge contract:
 [CONTRACT.md](CONTRACT.md#acp-ide-messengers-mail-bridges).
 VS Code extension: [extensions/vscode/README.md](extensions/vscode/README.md).
 
-## Example workflows
+A2A HTTP server (peer agents):
 
-- **1C development conveyor** (Jira/Confluence → analysis → coder → CFE):
-  [workflows/1c-dev/README.md](workflows/1c-dev/README.md),
-  [workflows/1c-dev/VSCODE.md](workflows/1c-dev/VSCODE.md)
-- **Live Advent of Code** (ACP singleton: download → solve → submit → retry):
-  [workflows/aoc-live/README.md](workflows/aoc-live/README.md)
-- **SWE-bench Verified** (Docker patches + official harness; opt-in local regression via
-  `scripts/swebench-regression.*` / `check.* -Swebench`; Linux ELF from Windows via
-  `scripts/swebench-regression-linux-docker.ps1`):
-  [workflows/swebench-verified/README.md](workflows/swebench-verified/README.md)
-- **Security sandbox LLM regression** (adversarial prompts, containment canaries, Docker
-  outer lab; `scripts/security-regression.*` / `check.* -Security`; never weakens OS
-  sandbox probe):
-  [workflows/security-sandbox/README.md](workflows/security-sandbox/README.md)
+```text
+kbshff a2a \
+  --project-root <DIR> \
+  --agent <ID> \
+  [--bind 127.0.0.1:8787] \
+  [--token-env A2A_TOKEN]
+```
+
+Serves Agent Card + JSON-RPC/REST for A2A 1.0. Defaults to loopback. See
+[CONTRACT.md](CONTRACT.md#a2a-peer-agents).
+
+## Examples / live regressions
+
+Standalone example repos (CLI orchestration around `kbshff`):
+
+| Repo | Purpose |
+| --- | --- |
+| [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) | Offline AoC bank eval + live adventofcode.com (ACP) |
+| [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench) | SWE-bench Verified (Docker + official grade) |
+| [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) | 1C CF/CFE four-stage live eval |
+
+Clone them next to this repo (or set `KUIBYSHEFF_AOC_ROOT` / `KUIBYSHEFF_SWEBENCH_ROOT`). Opt-in from here:
+
+```powershell
+.\scripts\check.ps1 -Aoc        # delegates to kuibysheff-aoc
+.\scripts\check.ps1 -Swebench   # delegates to kuibysheff-swebench
+```
+
+In-tree opt-in gates that still use local `workflows/` copy-units:
+
+- Security sandbox: `scripts/security-regression.*` / `check.* -Security`
+- Scale-FS: `scripts/scale-fs-regression.*` / `check.* -ScaleFs`
+
+Agent profile templates: [test-agents/README.md](test-agents/README.md).
+Local banks (security / Scale-FS / A2A): [local/README.md](local/README.md).
 
 ## Configuration
 
@@ -175,6 +210,6 @@ The names **Kuibysheff** and **agent_Kuibysheff** are not licensed for
 trademark use beyond reasonable attribution of origin.
 
 Canonical product / binary / repository names: **Kuibysheff**,
-`agent_Kuibysheff`, and `Agent-Kuibysheff`. Local folder spellings such as
-`Agent Kuibyshev` are legacy path aliases only and must not be used for
-discovery.
+`agent_Kuibysheff` (crate), `kbshff` (CLI binary), and `Agent-Kuibysheff`.
+Local folder spellings such as `Agent Kuibyshev` are legacy path aliases only
+and must not be used for discovery.

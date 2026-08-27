@@ -17,6 +17,18 @@ import_dotenv "$REPO_ROOT/.env"
 
 CONFIG=""
 TASK_IDS=()
+WORKFLOW_DIR="$REPO_ROOT/workflows/scale-fs-live"
+
+if [[ ! -d "$WORKFLOW_DIR" ]]; then
+  cat >&2 <<'EOF'
+workflows/scale-fs-live not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+EOF
+  exit 1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -93,7 +105,7 @@ PYTHON=python3
 command -v python3 >/dev/null 2>&1 || PYTHON=python
 
 echo "Building release agent..."
-cargo build --release -p agent_Kuibysheff --bin agent_Kuibysheff
+cargo build --release -p agent_Kuibysheff --bin kbshff
 
 SETTINGS_DIR="$REPO_ROOT/test-agents/scale-fs-probe"
 RUNS_ROOT="$REPO_ROOT/local/scale-fs-runs"

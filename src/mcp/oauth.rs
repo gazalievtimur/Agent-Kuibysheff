@@ -102,10 +102,7 @@ impl McpOAuth {
             .timeout(Duration::from_secs(60))
             .no_proxy()
             .build()
-            .map_err(|source| Error::Http {
-                server: server_name.to_string(),
-                source,
-            })?;
+            .map_err(|source| Error::http(server_name.to_string(), source))?;
         let mut this = Self {
             server_name: server_name.to_string(),
             mcp_url,
@@ -400,10 +397,10 @@ impl McpOAuth {
         for url in candidates {
             match self.http.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp.json().await.map_err(|source| Error::Http {
-                        server: self.server_name.clone(),
-                        source,
-                    });
+                    return resp
+                        .json()
+                        .await
+                        .map_err(|source| Error::http(self.server_name.clone(), source));
                 }
                 Ok(resp) => {
                     last_err = Some(format!("{url} -> HTTP {}", resp.status()));
@@ -436,11 +433,10 @@ impl McpOAuth {
         for url in authorization_server_metadata_urls(&issuer_url) {
             match self.http.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    let meta: AuthorizationServerMetadata =
-                        resp.json().await.map_err(|source| Error::Http {
-                            server: self.server_name.clone(),
-                            source,
-                        })?;
+                    let meta: AuthorizationServerMetadata = resp
+                        .json()
+                        .await
+                        .map_err(|source| Error::http(self.server_name.clone(), source))?;
                     validate_authorization_server_metadata(&issuer_url, &meta).map_err(
                         |reason| Error::OAuth {
                             server: self.server_name.clone(),
@@ -546,10 +542,7 @@ impl McpOAuth {
             .json(&body)
             .send()
             .await
-            .map_err(|source| Error::Http {
-                server: self.server_name.clone(),
-                source,
-            })?;
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -563,10 +556,10 @@ impl McpOAuth {
             client_id: String,
             client_secret: Option<String>,
         }
-        let reg: Reg = resp.json().await.map_err(|source| Error::Http {
-            server: self.server_name.clone(),
-            source,
-        })?;
+        let reg: Reg = resp
+            .json()
+            .await
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         Ok(ResolvedClient {
             client_id: reg.client_id,
             client_secret: reg.client_secret,
@@ -584,10 +577,7 @@ impl McpOAuth {
             .form(form)
             .send()
             .await
-            .map_err(|source| Error::Http {
-                server: self.server_name.clone(),
-                source,
-            })?;
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -608,10 +598,10 @@ impl McpOAuth {
             #[serde(default)]
             scope: Option<String>,
         }
-        let raw: TokenResponse = resp.json().await.map_err(|source| Error::Http {
-            server: self.server_name.clone(),
-            source,
-        })?;
+        let raw: TokenResponse = resp
+            .json()
+            .await
+            .map_err(|source| Error::http(self.server_name.clone(), source))?;
         if !raw.token_type.eq_ignore_ascii_case("bearer") {
             return Err(Error::OAuth {
                 server: self.server_name.clone(),

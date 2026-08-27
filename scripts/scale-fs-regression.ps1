@@ -28,6 +28,17 @@ Set-Location $RepoRoot
 . (Join-Path $PSScriptRoot "import-dotenv.ps1")
 Import-DotEnv (Join-Path $RepoRoot ".env")
 
+$WorkflowDir = Join-Path $RepoRoot "workflows\scale-fs-live"
+if (-not (Test-Path -LiteralPath $WorkflowDir -PathType Container)) {
+    throw @"
+workflows/scale-fs-live not found (gitignored copy-unit).
+
+Restore from git history for local testing, for example:
+  git checkout HEAD~1 -- workflows
+  # or: git checkout <commit-before-untrack> -- workflows
+"@
+}
+
 $bankExample = Join-Path $RepoRoot "local\scale-fs-bank.example"
 $bankDir = Join-Path $RepoRoot "local\scale-fs-bank"
 if (-not (Test-Path -LiteralPath $bankDir -PathType Container)) {
@@ -81,7 +92,7 @@ Set:
 }
 
 Write-Host "Building release agent..."
-cargo build --release -p agent_Kuibysheff --bin agent_Kuibysheff
+cargo build --release -p agent_Kuibysheff --bin kbshff
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

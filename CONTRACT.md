@@ -6,16 +6,19 @@ external orchestrator.
 
 Multi-stage product workflows may chain several `run` invocations (different
 `--agent` / `--home` per stage under one `--project-root`) and hand off `out/`
-artifacts between them. An example is the 1C conveyor under
-[`workflows/1c-dev/`](workflows/1c-dev/) (`scripts/1c-dev-run.ps1`). The same
-four profiles can be driven from an IDE as **four ACP registrations** plus an
-external prepare/promote helper (`scripts/1c-dev-acp-prepare.ps1`); see
-[`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md).
+artifacts between them. An example is the 1C conveyor driven by
+[`scripts/1c-dev-run.ps1`](scripts/1c-dev-run.ps1) with stage profiles under
+[`test-agents/1c-*`](test-agents/). The same four profiles can be driven from an
+IDE as **four ACP registrations** plus an external prepare/promote helper
+([`scripts/1c-dev-acp-prepare.ps1`](scripts/1c-dev-acp-prepare.ps1)); see
+[`extensions/vscode/README.md`](extensions/vscode/README.md).
+The full 1C copy-unit (prompts, adapters, product YAML) is a local-only package
+under `workflows/1c-dev/` (gitignored; restore from git history for testing).
 
 ## Invocation
 
 ```text
-agent_Kuibysheff run \
+kbshff run \
   --project-root <DIR> \
   --agent <ID> \
   --prompt <TEXT> \
@@ -74,25 +77,26 @@ precision, and amount are nested under `usage.cost.requests`.
 
 ### Management commands
 
-Commands other than `run` (for example `init`, `check`, `acp`, `config`) print
-human-readable text and use process exit codes — except `acp`, which speaks
-JSON-RPC on stdio (see below). They do **not** emit `RunOutput` JSON.
-`config` accepts `--format text|json` (default `text`).
+Commands other than `run` (for example `init`, `check`, `acp`, `a2a`, `config`)
+print human-readable text and use process exit codes — except `acp` (ACP
+JSON-RPC on stdio) and `a2a` (A2A HTTP until stopped). They do **not** emit
+`RunOutput` JSON. `config` accepts `--format text|json` (default `text`).
 
 ```text
 agent_Kuibysheff help
 agent_Kuibysheff help init
 agent_Kuibysheff help check
 agent_Kuibysheff help acp
+agent_Kuibysheff help a2a
 agent_Kuibysheff help config
 agent_Kuibysheff --help
 
-agent_Kuibysheff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
+kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
 
-agent_Kuibysheff check --project-root <DIR> --agent <ID> \
+kbshff check --project-root <DIR> --agent <ID> \
   [--skip-provider] [--skip-mcp] [--skip-sandbox]
 
-agent_Kuibysheff acp \
+kbshff acp \
   --agent <ID> \
   [--project-root <DIR>] \
   [--home <REL>] \
@@ -102,7 +106,20 @@ agent_Kuibysheff acp \
   [--max-cost CURRENCY:AMOUNT] \
   [--save-chat-history]
 
-agent_Kuibysheff config --project-root <DIR> --agent <ID> [--format text|json] \
+kbshff a2a \
+  --project-root <DIR> \
+  --agent <ID> \
+  [--home <REL>] \
+  [--bind 127.0.0.1:8787] \
+  [--public-url http://127.0.0.1:8787] \
+  [--token-env A2A_TOKEN] \
+  [--max-iterations N] \
+  [--max-tokens N] \
+  [--max-duration-sec N] \
+  [--max-cost CURRENCY:AMOUNT] \
+  [--save-chat-history]
+
+kbshff config --project-root <DIR> --agent <ID> [--format text|json] \
   import --from <PATH> [--force]
   | show | provider … | limits … | access … | mcp … | billing … \
   | event-mcp … | skill … | prompt … | rules … | tools effective [--connect]
@@ -150,13 +167,13 @@ stay in the external bridge process.
 IDE layering (VS Code):
 
 ```text
-VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  agent_Kuibysheff acp
+VS Code UI  ←AHP→  VS Code Agent Host  ←ACP→  kbshff acp
 ```
 
 External bridge layering:
 
 ```text
-Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  agent_Kuibysheff acp
+Messenger/Mail API  ←→  Bridge process  ←ACP stdio pipes→  kbshff acp
 ```
 
 #### Stream contract
@@ -214,7 +231,7 @@ let mut child = Command::new("agent_Kuibysheff")
   sequential prompts do not panic; switching log directories mid-process is rejected.
 
 Example VS Code ACP Client settings when the **product folder** is the
-workspace (see [`workflows/1c-dev/VSCODE.md`](workflows/1c-dev/VSCODE.md)):
+workspace (see [`extensions/vscode/README.md`](extensions/vscode/README.md)):
 
 ```json
 "acp.agents": {
@@ -237,6 +254,57 @@ non-empty.
 stdout). Multi-agent IDE or bridge flows register one ACP process per profile;
 stage handoff, chat thread mapping, and the plan gate stay outside the Rust
 binary.
+
+### A2A (peer agents)
+
+`a2a` starts an [Agent-to-Agent (A2A) Protocol](https://a2a-protocol.org/latest/specification/)
+**1.0** HTTP server so other agents can discover this profile and submit tasks.
+Transport and wire types come from the official Linux Foundation Rust SDK
+([a2aproject/a2a-rs](https://github.com/a2aproject/a2a-rs): crates `a2a-lf` /
+`a2a-server-lf`). Kuibysheff remains a **worker**: each A2A `SendMessage`
+without prior LLM history runs one `run_agent_prompt` (same engine as `run` /
+`acp`).
+
+```text
+Peer A2A client  ←JSON-RPC /jsonrpc or HTTP+JSON /rest→  kbshff a2a
+Peer A2A client  ←GET /.well-known/agent-card.json→       kbshff a2a
+```
+
+| Surface | Role |
+|---------|------|
+| `GET /.well-known/agent-card.json` | Public Agent Card (`supportedInterfaces`, skills from `skills.dsl`) |
+| `POST /jsonrpc` | JSON-RPC 2.0 (`SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, streaming) |
+| `/rest` | HTTP+JSON binding (same operations; declared in the card) |
+
+Defaults:
+
+- `--bind 127.0.0.1:8787` (loopback only; do not bind `0.0.0.0` without a
+  reverse proxy and auth)
+- `--public-url` defaults to `http://{bind}` and is written into
+  `supportedInterfaces`
+- `--token-env <VAR>`: require `Authorization: Bearer` on `/jsonrpc` and
+  `/rest`; empty/missing env fails startup. The Agent Card stays public and
+  declares the HTTP bearer scheme. Without `--token-env`, only loopback use
+  is intended.
+
+Task semantics:
+
+- Text parts only; file/data parts → `ContentTypeNotSupportedError`
+- Each task is one engine turn with **no** retained chat history across tasks
+  (like ACP prompts)
+- `GoalReached` / `LimitReached` → `TASK_STATE_COMPLETED`; `Error` →
+  `FAILED`; cancel → `CANCELED`
+- Usage sits in task `metadata` (`kuibysheff.usage`), not in the agent message
+- Push notifications, gRPC, signed/extended cards, and outbound A2A client
+  (calling peer agents as tools) are **out of scope** for this release
+
+Manual check with [a2acli](https://github.com/a2aproject/a2a-rs):
+
+```text
+kbshff a2a --project-root . --agent demo
+a2acli --base-url http://127.0.0.1:8787 card
+a2acli --base-url http://127.0.0.1:8787 send "summarize home/out"
+```
 
 ## Access policy (fail-closed)
 

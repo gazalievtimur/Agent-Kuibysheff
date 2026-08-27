@@ -8,7 +8,7 @@
 
 # Deliverables
 
-- `out/task_brief.md` — see workflows/1c-dev/schema/task-brief.schema.md
+- `out/task_brief.md` — see local copy-unit schema `workflows/1c-dev/schema/task-brief.schema.md` when restored
 - `out/sources.json`
 - `out/manifest.json` with `apply_mode: "none"`
 

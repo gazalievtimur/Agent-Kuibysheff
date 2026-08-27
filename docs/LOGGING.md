@@ -31,7 +31,7 @@ Defaults: `enabled: true`, `max_string_chars: 4096`. Set `enabled: false` for le
 Enable full chat history from the CLI:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- run ... --save-chat-history
+cargo run --bin kbshff -- run ... --save-chat-history
 ```
 
 Example:

@@ -6,23 +6,23 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tracing::{error, info, warn};
 
+use crate::a2a;
 use crate::access::{
     parse_tool_list, workspace_root_for_run, EffectiveToolPolicy, HomeFsPolicy, InputFilesPolicy,
     WorkspaceFsPolicy,
 };
 use crate::acp;
-use crate::agent::{AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
+use crate::agent::{generate_run_id, AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
 use crate::billing::{
     CatalogCostResolver, CostResolver, CostResolverChain, McpCostResolver, Money, PricingCatalog,
     ProviderReportedCostResolver, UnavailableCostResolver,
 };
-use crate::cli::{AcpArgs, Cli, Commands, RunArgs};
+use crate::cli::{A2aArgs, AcpArgs, Cli, Commands, RunArgs};
 use crate::commands;
 use crate::config::{
     apply_limit_overrides, load_config, load_dotenv_layered, validate, AppConfig, BillingSource,
@@ -93,7 +93,7 @@ impl TryFrom<RunArgs> for AgentPromptArgs {
     }
 }
 
-/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `config`.
+/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `a2a` / `config` / wizard.
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
@@ -107,8 +107,12 @@ pub fn run() -> ExitCode {
         }
     };
 
+    let Some(command) = cli.command else {
+        return commands::wizard::run();
+    };
+
     let launch_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolved_config_env = match &cli.command {
+    let resolved_config_env = match &command {
         Commands::Run(args) => resolve_agent_identity(
             &args.identity.project_root,
             &args.identity.agent,
@@ -125,6 +129,13 @@ pub fn run() -> ExitCode {
                 .ok()
                 .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
         }
+        Commands::A2a(args) => resolve_agent_identity(
+            &args.identity.project_root,
+            &args.identity.agent,
+            args.home.as_deref(),
+        )
+        .ok()
+        .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd)),
         Commands::Check(args) => {
             resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)
                 .ok()
@@ -140,9 +151,10 @@ pub fn run() -> ExitCode {
     // Precedence: process env > config-dir .env > launch CWD .env
     load_dotenv_layered(resolved_config_env.as_deref());
 
-    match cli.command {
+    match command {
         Commands::Run(args) => run_worker(args),
         Commands::Acp(args) => run_acp(args),
+        Commands::A2a(args) => run_a2a(args),
         Commands::Init(args) => match commands::init::run(&args) {
             Ok(result) => {
                 commands::init::print_success(&result);
@@ -234,6 +246,27 @@ fn run_acp(args: AcpArgs) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: ACP server failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_a2a(args: A2aArgs) -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: failed to start tokio runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtime.block_on(a2a::run_a2a_server(args)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: A2A server failed: {err:#}");
             ExitCode::FAILURE
         }
     }
@@ -351,13 +384,6 @@ async fn build_billing_resolver(
     Ok(Arc::new(CostResolverChain::new(ordered)))
 }
 
-fn generate_run_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    format!("run-{timestamp:032x}-{:016x}", rand::random::<u64>())
-}
-
 /// Wire config/tools/provider and run one agent turn.
 ///
 /// # Errors
@@ -472,7 +498,9 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             .mcp
             .iter()
             .find(|server| server.name == *server_name)
-            .expect("billing MCP target validated");
+            .ok_or_else(|| {
+                anyhow::anyhow!("billing MCP target `{server_name}` missing after validation")
+            })?;
         match McpRegistry::connect_all_isolated(
             std::slice::from_ref(server_config),
             loggers.mcp.clone(),

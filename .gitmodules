@@ -1,3 +1,0 @@
-[submodule ".cursor/skills/rust-skills"]
-	path = .cursor/skills/rust-skills
-	url = https://github.com/leonardomso/rust-skills.git

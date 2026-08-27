@@ -297,5 +297,5 @@ This closes the remaining CRITICAL/HIGH gaps from the original rust-skills revie
 
 ## References
 
-- Rust skills guide: `.cursor/skills/rust-skills/SKILL.md`
+- Optional Rust idioms reference: [rust-skills](https://github.com/leonardomso/rust-skills) (external, not bundled)
 - Original review: chat session 2026-07-11

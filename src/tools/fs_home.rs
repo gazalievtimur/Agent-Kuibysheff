@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tokio::fs;
 use tokio::task;
 
-use crate::access::paths::{is_within_root, relative_components};
+use crate::access::paths::{display_relative, is_within_root, relative_components};
 use crate::access::{HomeFsPolicy, PathOperation, ProgramAlias};
 use crate::agent::RunCancel;
 use crate::sandbox::{
@@ -485,14 +485,6 @@ fn home_io(operation: &str, path: &Path, error: std::io::Error) -> HomeFsError {
         operation: operation.to_string(),
         path: path.display().to_string(),
         source: error,
-    }
-}
-
-fn display_relative(path: &Path) -> String {
-    if path.as_os_str().is_empty() {
-        ".".to_string()
-    } else {
-        path.display().to_string()
     }
 }
 

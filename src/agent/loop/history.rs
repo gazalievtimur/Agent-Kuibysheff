@@ -35,9 +35,7 @@ fn prune_by_message_count(messages: &mut Vec<ChatMessage>, history: &ProviderHis
     if tail_start <= HISTORY_PREFIX_LEN {
         return;
     }
-    let tail: Vec<ChatMessage> = messages.drain(tail_start..).collect();
-    messages.truncate(HISTORY_PREFIX_LEN);
-    messages.extend(tail);
+    messages.drain(HISTORY_PREFIX_LEN..tail_start);
 }
 
 fn prune_by_char_budget(messages: &mut Vec<ChatMessage>, history: &ProviderHistoryConfig) {

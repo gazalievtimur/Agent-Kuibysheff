@@ -5,7 +5,7 @@ use clap::Parser;
 /// Arguments for scaffolding a new agent profile.
 #[derive(Debug, Parser)]
 pub struct InitArgs {
-    /// Agent identifier (`[a-z0-9][a-z0-9_-]*`).
+    /// Agent identifier (letters/digits any language, spaces, `_`, `-`).
     pub agent_id: String,
 
     /// Project root that owns `.kuibysheff/` (required).

@@ -3,7 +3,7 @@
 ## How to get help
 
 - **Bugs and feature requests:** GitHub Issues  
-  https://github.com/gybson63/Agent-Kuibysheff/issues
+  https://github.com/gazalievtimur/Agent-Kuibysheff/issues
 - **Security vulnerabilities:** [SECURITY.md](SECURITY.md) only (private
   reporting). Do not file public issues with exploit details.
 - **Contributing / development setup:** [CONTRIBUTING.md](CONTRIBUTING.md)

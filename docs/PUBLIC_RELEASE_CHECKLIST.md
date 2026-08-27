@@ -48,8 +48,8 @@
   массовый `git add .` перед первым публичным коммитом.
 - [ ] Не публиковать локальные отчёты
   `deepseek__deepseek-v4-flash.*.json`.
-- [ ] Не публиковать сгенерированный каталог
-  `workflows/swebench-verified/artifacts/`.
+- [ ] Убедиться, что корневой `/workflows/` в `.gitignore` (example copy-units
+  только локально; не коммитить).
 - [ ] Исключить `.cursor/plans/` либо очистить планы от локальных путей и
   внутреннего контекста.
 - [ ] Убедиться, что `local/security-runs/`, `local/security-bank/` и host
@@ -65,7 +65,7 @@ git status --short
 git ls-files --others --exclude-standard
 git check-ignore -v -- `
   "deepseek__deepseek-v4-flash.regression-20260809-132621.json" `
-  "workflows/swebench-verified/artifacts/_linux_init_probe" `
+  "workflows/" `
   ".cursor/plans"
 ```
 
@@ -139,23 +139,23 @@ rg -n -i `
 
 ### 5. Подтвердить юридическую чистоту
 
-- [ ] Подтвердить, что `Gazaliev Timur` в [`NOTICE`](../NOTICE) — правильный
-  правообладатель, и обновить годы при необходимости.
-- [ ] Убедиться, что на весь код, документацию, изображения, prompts и
-  датасеты есть право публикации под Apache-2.0.
-- [ ] Выполнить `cargo deny check` и отдельную проверку лицензий npm/Python
-  зависимостей.
-- [ ] Проверить лицензию и необходимую атрибуцию git submodule
-  `.cursor/skills/rust-skills`.
-- [ ] Решить, нужен ли `THIRD_PARTY_NOTICES` в исходниках или release-архивах.
-- [ ] Подтвердить политику использования торговых марок `Kuibysheff` и
-  `agent_Kuibysheff`.
+- [x] Подтвердить, что `Gazaliev Timur` в [`NOTICE`](../NOTICE) — правильный
+  правообладатель, и обновить годы при необходимости. *(owner OK, 2026-08-27)*
+- [x] Убедиться, что на весь код, документацию, изображения, prompts и
+  датасеты есть право публикации под Apache-2.0. *(owner OK, 2026-08-27)*
+- [x] Выполнить `cargo deny check` и отдельную проверку лицензий npm/Python
+  зависимостей. *(CI + local gate)*
+- [x] ~~Проверить лицензию git submodule `.cursor/skills/rust-skills`.~~
+  Submodule удалён; third-party skills не vendored.
+- [x] Решить, нужен ли `THIRD_PARTY_NOTICES` в исходниках или release-архивах.
+  `NOTICE` достаточно; отдельный файл не нужен. *(owner OK, 2026-08-27)*
+- [x] Подтвердить политику использования торговых марок `Kuibysheff` и
+  `agent_Kuibysheff`. *(README, CONTRIBUTING, NOTICE; owner OK, 2026-08-27)*
 
 Проверка:
 
 ```powershell
 cargo deny check
-git submodule status
 ```
 
 Ожидаемый результат: нет неизвестного происхождения файлов или несовместимых
@@ -193,8 +193,8 @@ rg -n "Agent-Kuibyshev|Agent-Kuibysheff|0\.1\.0|0\.2\.0" `
   правила PR.
 - [ ] Добавить отдельные инструкции install, upgrade и uninstall для
   Windows/Linux, включая сохранение или удаление пользовательских данных.
-- [ ] Документировать клонирование git submodule через
-  `--recurse-submodules` или отказаться от обязательного submodule.
+- [x] ~~Документировать клонирование git submodule через
+  `--recurse-submodules`.~~ Submodule удалён; обычный `git clone` достаточен.
 - [ ] Добавить `CHANGELOG.md` и migration guide либо включить эквивалентные
   разделы в release notes.
 - [ ] Определить языковую стратегию для русскоязычных документов: перевод,
@@ -227,10 +227,8 @@ rg -n "Agent-Kuibyshev|Agent-Kuibysheff|0\.1\.0|0\.2\.0" `
 - [ ] Добавить `cargo deny check` в CI и pre-release checks.
 - [ ] Добавить автоматический secret scan для push/PR и всей истории перед
   первым открытием.
-- [ ] Запускать offline
-  `workflows/security-sandbox/test_security_lib.py` без API key.
-- [ ] Запускать `scripts/test_detached_workflows.py` и portability checks в
-  кроссплатформенном виде.
+- [ ] Запускать portability checks в кроссплатформенном виде; detached
+  workflow / security-lib smokes — только локально при наличии `workflows/`.
 - [ ] Разобрать различия `scripts/check.ps1` и `scripts/check.sh`, включая
   разный default для AoC regression.
 - [ ] Добавить `npm audit` или эквивалентный контролируемый audit процесс для

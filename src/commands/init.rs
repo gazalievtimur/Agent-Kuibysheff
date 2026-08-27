@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::access::{ensure_protected_profile_dirs, AccessPolicyConfig};
 use crate::cli::InitArgs;
+use crate::commands::prompt::{self, PromptError};
 use crate::project_paths::{
     agent_profile_dir, validate_agent_id, AgentPathError, AGENT_CONFIG_FILE,
 };
@@ -44,8 +45,10 @@ pub enum InitError {
     },
     #[error("`--interactive` requires a terminal (stdin/stdout)")]
     InteractiveRequiresTty,
-    #[error("interactive prompt failed: {0}")]
-    Prompt(String),
+    #[error(transparent)]
+    Prompt(#[from] PromptError),
+    #[error(transparent)]
+    Dotenv(#[from] crate::commands::dotenv_file::DotenvFileError),
 }
 
 /// Values collected for the starter runtime config.
@@ -54,6 +57,8 @@ pub struct ConfigAnswers {
     pub base_url: String,
     pub model: String,
     pub api_key_env: String,
+    /// Optional secret to persist in profile `.env` (never written into YAML).
+    pub api_key: Option<String>,
     pub max_iterations: u32,
     pub max_tokens: u64,
     pub max_duration_sec: u64,
@@ -65,6 +70,7 @@ impl Default for ConfigAnswers {
             base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o-mini".to_string(),
             api_key_env: "OPENAI_API_KEY".to_string(),
+            api_key: None,
             max_iterations: 10,
             max_tokens: 15_000,
             max_duration_sec: 120,
@@ -104,7 +110,36 @@ pub fn run(args: &InitArgs) -> Result<InitResult, InitError> {
         let mut stdin = io::stdin().lock();
         let mut stdout = io::stdout();
         let answers = prompt_config(&mut stdin, &mut stdout)?;
-        render_agent_config(&answers)
+        let body = render_agent_config(&answers);
+        // Defer .env write until after profile dir files exist (below).
+        let api_key = answers.api_key.clone();
+        let api_key_env = answers.api_key_env.clone();
+        let files = [
+            ("master_prompt.md", MASTER_PROMPT.to_string()),
+            ("skills.dsl", SKILLS_DSL.to_string()),
+            ("rules.md", RULES_MD.to_string()),
+            (AGENT_CONFIG_FILE, body),
+        ];
+        let mut written_files = Vec::with_capacity(files.len());
+        for (name, contents) in files {
+            let path = target_dir.join(name);
+            fs::write(&path, contents).map_err(|source| InitError::WriteFile {
+                path: path.display().to_string(),
+                source,
+            })?;
+            written_files.push(path);
+        }
+        if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+            let env_path = target_dir.join(".env");
+            crate::commands::dotenv_file::upsert_env_var(&env_path, &api_key_env, &key)?;
+            written_files.push(env_path);
+        }
+        return Ok(InitResult {
+            agent_id: args.agent_id.clone(),
+            project_root: args.project_root.clone(),
+            target_dir,
+            written_files,
+        });
     } else {
         AGENT_CONFIG.to_string()
     };
@@ -147,20 +182,22 @@ pub fn print_success(result: &InitResult) {
     println!();
     println!("Example run:");
     println!(
-        "  agent_Kuibysheff run \\\n    --project-root {} \\\n    --agent {} \\\n    --prompt \"...\"",
+        "  kbshff run \\\n    --project-root {} \\\n    --agent {} \\\n    --prompt \"...\"",
         result.project_root.display(),
         result.agent_id
     );
     println!();
     println!("Import external settings:");
     println!(
-        "  agent_Kuibysheff config --project-root {} --agent {} import --from <PATH>",
+        "  kbshff config --project-root {} --agent {} import --from <PATH>",
         result.project_root.display(),
         result.agent_id
     );
 }
 
 /// Ask for provider and limits on `reader`/`writer`. Empty input keeps the default.
+///
+/// Also asks for an optional API key value (stored later in profile `.env`, not YAML).
 ///
 /// # Errors
 ///
@@ -174,22 +211,43 @@ pub fn prompt_config<R: BufRead, W: Write>(
         writer,
         "Configure runtime settings (press Enter to keep the default)."
     )
-    .map_err(|e| InitError::Prompt(e.to_string()))?;
+    .map_err(PromptError::io)?;
 
-    let base_url = prompt_string(reader, writer, "Provider base URL", &defaults.base_url)?;
-    let model = prompt_string(reader, writer, "Model", &defaults.model)?;
-    let api_key_env = prompt_string(reader, writer, "API key env var", &defaults.api_key_env)?;
-    let max_iterations = prompt_parse(
+    let base_url = prompt::prompt_string(reader, writer, "Provider base URL", &defaults.base_url)?;
+    let model = prompt::prompt_string(reader, writer, "Model", &defaults.model)?;
+    writeln!(
+        writer,
+        "API key is stored in the agent profile `.env` (not in YAML). Leave empty to skip."
+    )
+    .map_err(PromptError::io)?;
+    let api_key_raw = prompt::prompt_string(reader, writer, "API key", "")?;
+    let api_key = if api_key_raw.is_empty() {
+        None
+    } else {
+        Some(api_key_raw)
+    };
+    let api_key_env = loop {
+        let name = prompt::prompt_string(reader, writer, "API key env var", &defaults.api_key_env)?;
+        match crate::commands::dotenv_file::validate_env_var_name(&name) {
+            Ok(()) => break name,
+            Err(err) => {
+                writeln!(writer, "{err}").map_err(PromptError::io)?;
+                writeln!(writer, "Please try again.").map_err(PromptError::io)?;
+            }
+        }
+    };
+    let max_iterations = prompt::prompt_parse(
         reader,
         writer,
         "Max iterations",
         defaults.max_iterations,
         |s| s.parse::<u32>(),
     )?;
-    let max_tokens = prompt_parse(reader, writer, "Max tokens", defaults.max_tokens, |s| {
-        s.parse::<u64>()
-    })?;
-    let max_duration_sec = prompt_parse(
+    let max_tokens =
+        prompt::prompt_parse(reader, writer, "Max tokens", defaults.max_tokens, |s| {
+            s.parse::<u64>()
+        })?;
+    let max_duration_sec = prompt::prompt_parse(
         reader,
         writer,
         "Max duration (sec)",
@@ -201,6 +259,7 @@ pub fn prompt_config<R: BufRead, W: Write>(
         base_url,
         model,
         api_key_env,
+        api_key,
         max_iterations,
         max_tokens,
         max_duration_sec,
@@ -274,50 +333,6 @@ fn yaml_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn prompt_string<R: BufRead, W: Write>(
-    reader: &mut R,
-    writer: &mut W,
-    label: &str,
-    default: &str,
-) -> Result<String, InitError> {
-    write!(writer, "{label} [{default}]: ").map_err(|e| InitError::Prompt(e.to_string()))?;
-    writer
-        .flush()
-        .map_err(|e| InitError::Prompt(e.to_string()))?;
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| InitError::Prompt(e.to_string()))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
-}
-
-fn prompt_parse<R, W, T, E, F>(
-    reader: &mut R,
-    writer: &mut W,
-    label: &str,
-    default: T,
-    parse: F,
-) -> Result<T, InitError>
-where
-    R: BufRead,
-    W: Write,
-    T: ToString + Copy,
-    E: std::fmt::Display,
-    F: Fn(&str) -> Result<T, E>,
-{
-    let default_text = default.to_string();
-    let raw = prompt_string(reader, writer, label, &default_text)?;
-    if raw == default_text {
-        return Ok(default);
-    }
-    parse(&raw).map_err(|e| InitError::Prompt(format!("invalid {label}: {e}")))
-}
-
 fn prepare_target_dir(target_dir: &Path, force: bool) -> Result<(), InitError> {
     match fs::metadata(target_dir) {
         Ok(meta) if meta.is_dir() => {
@@ -371,12 +386,15 @@ mod tests {
 
     #[test]
     fn rejects_invalid_agent_id() {
-        for id in ["", "Bad", "has/slash", "has..dots", "UPPER", "-leading"] {
+        for id in ["", "has/slash", "has..dots", "-leading", "a:b", " trailing"] {
             let err = validate_agent_id(id).expect_err("should reject");
             assert!(
                 matches!(err, AgentPathError::InvalidAgentId(_)),
                 "id={id:?} err={err:?}"
             );
+        }
+        for id in ["Mulder", "Agent Mulder", "demo", "агент-1"] {
+            validate_agent_id(id).unwrap_or_else(|e| panic!("should accept {id:?}: {e}"));
         }
     }
 
@@ -419,7 +437,8 @@ mod tests {
 
     #[test]
     fn prompt_config_keeps_defaults_on_empty() {
-        let mut input = Cursor::new("\n\n\n\n\n\n");
+        // base_url, model, api_key, api_key_env, max_iterations, max_tokens, max_duration_sec
+        let mut input = Cursor::new("\n\n\n\n\n\n\n");
         let mut out = Vec::new();
         let answers = prompt_config(&mut input, &mut out).expect("prompt");
         assert_eq!(answers, ConfigAnswers::default());

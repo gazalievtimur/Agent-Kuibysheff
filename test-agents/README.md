@@ -8,8 +8,8 @@
 protected store:
 
 ```powershell
-cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --bin kbshff -- init referent --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
 ```
 
@@ -20,7 +20,7 @@ CLI остаётся stateless worker: артефакты пишутся в home
 
 ```powershell
 # Создать защищённый профиль, затем скопировать файлы наружу как шаблон (опционально)
-cargo run --bin agent_Kuibysheff -- init my-agent --project-root . --force
+cargo run --bin kbshff -- init my-agent --project-root . --force
 # или скопировать существующий каталог test-agents/<id> вручную
 ```
 
@@ -45,11 +45,11 @@ $env:CONFLUENCE_URL = "https://your-company.atlassian.net/wiki"
 $env:CONFLUENCE_USERNAME = "you@company.com"
 $env:CONFLUENCE_API_TOKEN = "..."
 
-cargo run --bin agent_Kuibysheff -- init referent --project-root . --force
-cargo run --bin agent_Kuibysheff -- config --project-root . --agent referent `
+cargo run --bin kbshff -- init referent --project-root . --force
+cargo run --bin kbshff -- config --project-root . --agent referent `
   import --from .\test-agents\referent --force
 
-cargo run --bin agent_Kuibysheff -- run `
+cargo run --bin kbshff -- run `
   --project-root . `
   --agent referent `
   --prompt "Собери первичную информацию по задаче PROJ-123"
@@ -58,19 +58,31 @@ cargo run --bin agent_Kuibysheff -- run `
 Для работы с изображениями используйте vision-модель в `provider.model`
 (например, `gpt-4o`, `gpt-4.1`, `claude-sonnet-4` и аналоги с поддержкой изображений).
 
-## Advent of Code eval (Referent)
+## Advent of Code
 
-Referent также умеет решать AoC-задачи: MCP `aoc` (`mcp-aoc-tasks.js`) выдаёт
-условие и input, код пишется через `home.write`, запускается через `home.run`,
-ответ сравнивается по полю `RunOutput.result`.
+AoC offline bank eval and live adventofcode.com orchestration moved to
+[kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc).
+From this repo: `.\scripts\check.ps1 -Aoc` / `./scripts/check.sh --aoc`
+(requires a sibling clone or `KUIBYSHEFF_AOC_ROOT`).
 
-База заданий и прогоны **не в git** — см. [local/README.md](../local/README.md).
-
-Оркестратор: [`scripts/aoc-eval.ps1`](../scripts/aoc-eval.ps1) (импортирует шаблон в
-`local/aoc-eval-project/.kuibysheff/protected/agents/…`).
+Referent here remains the Jira/Confluence research demo.
 
 ## Scale-FS probe
 
-`test-agents/scale-fs-probe/` — профиль для live-регрессии на больших FS-корпусах
-(поиск по многим файлам, windowed `home.read`). См.
-[workflows/scale-fs-live/README.md](../workflows/scale-fs-live/README.md).
+`test-agents/scale-fs-probe/` — profile for live regression on large FS corpora
+(many-file search, windowed `home.read`). Harness:
+`scripts/scale-fs-regression.*` (requires local `workflows/scale-fs-live/`
+restored from git history). See [local/README.md](../local/README.md).
+
+## A2A probe
+
+`test-agents/a2a-probe/` — minimal profile for live A2A regression (Agent Card,
+Bearer gate, `SendMessage` → write file + result token). Harness:
+`scripts/a2a-regression.*` (bank: `local/a2a-bank.example/`). See
+[local/README.md](../local/README.md).
+
+## 1C live pipeline (Склад)
+
+Moved to [kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live)
+(analyst → yaxunit → coder → implementer). Product conveyor / VS Code scaffolding
+stays here as `1c-intake` + local `workflows/1c-dev/`.

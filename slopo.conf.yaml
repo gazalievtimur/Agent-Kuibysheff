@@ -1,0 +1,30 @@
+# Slopo — embedding-based code duplication detector
+# Docs: https://github.com/rafal-qa/slopo
+#
+# Setup:
+# 1. Get a free Jina AI API key at https://jina.ai/ (or set another LiteLLM provider)
+# 2. Put the key in .env as SLOPO_EMBEDDING_API_KEY=...
+# 3. Run: slopo index && slopo embed && slopo analyze
+#    For git changes: slopo review
+
+# Product source (Rust). Adjust if you want crates/, scripts/, etc.
+source_dir: src
+
+source_dir_exclude:
+  - "**/.code-index/**"
+
+embedding_model: jina_ai/jina-code-embeddings-0.5b
+embedding_dimensions: 256
+embedding_params:
+  task: code2code.query
+
+# Prefer env var SLOPO_EMBEDDING_API_KEY (also loaded from .env)
+# embedding_api_key:
+
+# Free Jina keys are rate-limited (~100k tokens/min)
+embedding_request_delay: 6
+embedding_batch_size: 40
+
+db_file: slopo.db
+report_dir: slopo-report
+ignore_file: slopo.ignore.txt

@@ -110,7 +110,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 cd ~/src/agent-kuibysheff-test
 chmod +x ./scripts/*.sh
 cp -Rn ./local/aoc-bank.example ./local/aoc-bank   # if bank missing
-# Provide API key via .env / agent-config.local.yaml / POLZA_API_KEY
+# Provide API key via .env / agent-config.local.yaml / OPENAI_API_KEY
 ./scripts/aoc-regression.sh
 ./scripts/aoc-regression.sh --task-id 2024-01-1
 ./scripts/check.sh            # fmt/clippy/cargo test; AoC is opt-in (--aoc)

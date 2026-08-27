@@ -82,7 +82,11 @@ cargo test --workspace
 echo "Running portability guardrails..."
 chmod +x "$SCRIPT_DIR/check-portability.sh"
 "$SCRIPT_DIR/check-portability.sh"
-python3 "$SCRIPT_DIR/test_detached_workflows.py"
+if [[ -d "$SCRIPT_DIR/../workflows" ]]; then
+  python3 "$SCRIPT_DIR/test_detached_workflows.py"
+else
+  echo "Skipping detached workflow tests (workflows/ not present)."
+fi
 
 if [[ "$RUN_AOC_FLAG" -eq 1 || "${RUN_AOC:-}" == "1" ]]; then
   echo "Running AoC agent regression (--aoc / RUN_AOC=1)..."

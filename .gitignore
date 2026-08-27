@@ -22,11 +22,17 @@ agent-config.local.yaml
 # IDE local MCP (keep mcp.json.example tracked)
 .cursor/mcp.json
 
+# Optional local Cursor skills (not vendored in this repo)
+.cursor/skills/
+
 # Local Cursor plans (may contain machine paths / internal notes)
 .cursor/plans/
 
 # Local LLM regression reports (not committed)
 /deepseek__*.json
+
+# Example / eval copy-units (local testing only; not part of the product tree)
+/workflows/
 
 # AoC eval data and run artifacts (not committed)
 /local/aoc-bank/
@@ -36,39 +42,29 @@ agent-config.local.yaml
 /local/security-bank/
 /local/security-runs/
 /local/security-host-canary/
-/workflows/aoc-live/project/
-
-# 1C workflow run homes (not committed)
-/workflows/1c-dev/runs/*
-!/workflows/1c-dev/runs/.gitkeep
-
-# Live AoC ACP workflow run homes (not committed)
-/workflows/aoc-live/runs/*
-!/workflows/aoc-live/runs/.gitkeep
-
-# SWE-bench Verified workflow run artifacts (not committed)
-/workflows/swebench-verified/runs/*
-!/workflows/swebench-verified/runs/.gitkeep
-/workflows/swebench-verified/artifacts/
 
 # Scale-FS live regression (working banks / runs)
 /local/scale-fs-bank/
 /local/scale-fs-runs/
 /local/scale-fs-sandbox-runtime/
 
-# Scale-FS live workflow run homes (not committed)
-/workflows/scale-fs-live/runs/*
-!/workflows/scale-fs-live/runs/.gitkeep
+# A2A live regression (working banks / runs)
+/local/a2a-bank/
+/local/a2a-runs/
+
+# Event-MCP live regression (working banks / runs)
+/local/event-mcp-bank/
+/local/event-mcp-runs/
 
 # Local secret-scan reports (not committed)
 /local/gitleaks-report.json
 
-# Local product adapter paths (keep *.yaml.example in git)
-/workflows/1c-dev/products/*.yaml
-!/workflows/1c-dev/products/*.yaml.example
-
 # Local code-index cache (not source)
 src/.code-index/
+
+# Slopo local DB and analysis reports (config + ignore list are committed)
+/slopo.db
+/slopo-report/
 
 # IDE / OS
 .idea/

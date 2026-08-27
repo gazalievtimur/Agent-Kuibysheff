@@ -77,6 +77,36 @@ pub enum McpError {
 /// Backwards-compatible alias for the MCP-specific error type.
 pub type Error = McpError;
 
+impl McpError {
+    /// Wraps a transport-level HTTP failure for `server`.
+    #[must_use]
+    pub(crate) fn http(server: impl Into<String>, source: reqwest::Error) -> Self {
+        Self::Http {
+            server: server.into(),
+            source,
+        }
+    }
+}
+
+/// Extracts tool names from a `tools/list` JSON-RPC result object.
+#[must_use]
+pub(crate) fn tool_names_from_list_result(response: &serde_json::Value) -> Vec<String> {
+    response
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl From<McpError> for ExternalToolError {
     fn from(err: McpError) -> Self {
         match err {

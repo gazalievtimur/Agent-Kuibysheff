@@ -147,7 +147,9 @@ impl PathGrantScope {
     }
 }
 
-fn display_relative(path: &Path) -> String {
+/// Display a relative path; empty paths render as `"."`.
+#[must_use]
+pub(crate) fn display_relative(path: &Path) -> String {
     if path.as_os_str().is_empty() {
         ".".to_string()
     } else {

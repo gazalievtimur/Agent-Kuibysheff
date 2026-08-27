@@ -18,12 +18,10 @@ channels.
 Prefer one of these private channels:
 
 1. **GitHub Private Vulnerability Reporting** (preferred):  
-   https://github.com/gybson63/Agent-Kuibysheff/security/advisories/new  
+   https://github.com/gazalievtimur/Agent-Kuibysheff/security/advisories/new  
    Enable *Private vulnerability reporting* in the repository Security settings
    if the link is unavailable.
-2. **Email:** `gybson63+kuibysheff-security@users.noreply.github.com`  
-   Maintainers should replace this with a dedicated security mailbox before
-   public Go. Until then, Private Vulnerability Reporting is the required path.
+2. **Email:** `gazalievtimur@gmail.com`
 
 Please include:
 
@@ -47,6 +45,11 @@ Please include:
   and configured MCP servers; untrusted tool output can influence the model.
 - **Network egress** — provider HTTP and MCP HTTP leave the host; `home.run` OS
   sandboxes are intended to have **no network**.
+- **A2A inbound HTTP** (`kbshff a2a`) — new listen surface for peer agents.
+  Default bind is loopback (`127.0.0.1`). Do not expose on a public interface
+  without a reverse proxy and `--token-env` (Bearer). The Agent Card endpoint
+  is intentionally public for discovery; `/jsonrpc` and `/rest` enforce the
+  token when configured. Tokens must not appear in logs.
 - **`KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP`** — opt-in escape hatch; do not enable in
   untrusted environments.
 - **Protected store** (`.kuibysheff/protected/`) — agent profiles and secrets
@@ -55,9 +58,9 @@ Please include:
   AppContainer constrain `home.run` payloads; they are not a full VM isolation
   boundary and do not replace host hardening.
 
-See [CONTRACT.md](CONTRACT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-and [workflows/security-sandbox/README.md](workflows/security-sandbox/README.md)
-for operational detail.
+See [CONTRACT.md](CONTRACT.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for operational detail. Opt-in security LLM regression lives under the local
+`workflows/security-sandbox/` copy-unit (gitignored; restore from git history).
 
 ## Non-security bugs
 

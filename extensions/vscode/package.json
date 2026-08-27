@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gybson63/Agent-Kuibysheff.git",
+    "url": "https://github.com/gazalievtimur/Agent-Kuibysheff.git",
     "directory": "extensions/vscode"
   },
   "engines": {
@@ -148,8 +148,8 @@
         },
         "kuibysheff.binaryPath": {
           "type": "string",
-          "default": "agent_Kuibysheff",
-          "description": "Path or name of the agent_Kuibysheff binary."
+          "default": "kbshff",
+          "description": "Path or name of the kbshff binary."
         },
         "kuibysheff.defaultIssueKey": {
           "type": "string",
@@ -167,13 +167,13 @@
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.3.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.11.0",
-    "@types/vscode": "^1.85.0",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.4.0"
+    "@types/node": "^26.2.0",
+    "@types/vscode": "^1.134.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

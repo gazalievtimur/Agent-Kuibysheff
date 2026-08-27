@@ -31,16 +31,14 @@ The Apache License does not grant rights to use the names **Kuibysheff**,
 | --- | --- |
 | Rust | **1.88+** (MSRV; see `rust-version` in `Cargo.toml`) |
 | Node.js | **20+** (VS Code extension under `extensions/vscode`) |
-| Python | **3.12+** (workflow / eval scripts) |
+| Python | **3.12+** (coverage ratchet / local eval scripts) |
 | Docker / WSL | Optional; required for some Linux sandbox / SWE-bench / security lab flows |
 
-Clone with submodules (Cursor rust-skills under `.cursor/skills/rust-skills`):
+Clone the repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/gybson63/Agent-Kuibysheff.git
+git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
-# or, if already cloned:
-git submodule update --init --recursive
 ```
 
 Install local git hooks:
@@ -65,12 +63,17 @@ Run the offline quality gate before opening a PR:
 ./scripts/check.sh
 ```
 
-Both run `fmt`, Clippy, `cargo deny`, tests, portability, and detached-workflow
-unit tests. Live LLM regressions are **opt-in**:
+Both run `fmt`, Clippy, `cargo deny`, tests, and portability checks. When a local
+`workflows/` tree is present (gitignored copy-units), they also run detached
+workflow smoke tests. Live LLM regressions are **opt-in**:
 
-- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1`
-- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1`
-- Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1`
+- AoC: `-Aoc` / `--aoc` or `RUN_AOC=1` → delegates to [kuibysheff-aoc](https://github.com/gazalievtimur/kuibysheff-aoc) (`KUIBYSHEFF_AOC_ROOT` or sibling clone)
+- SWE-bench: `-Swebench` / `--swebench` or `RUN_SWEBENCH=1` → [kuibysheff-swebench](https://github.com/gazalievtimur/kuibysheff-swebench)
+- Security sandbox: `-Security` / `--security` or `RUN_SECURITY=1` (local `workflows/`)
+- Scale-FS: `-ScaleFs` / `--scale-fs` or `RUN_SCALE_FS=1` (local `workflows/`)
+
+1C CF/CFE live eval is a separate example repo:
+[kuibysheff-1c-live](https://github.com/gazalievtimur/kuibysheff-1c-live) (not hooked to `check`).
 
 Install `cargo-deny` if needed: `cargo install --locked cargo-deny`.
 
