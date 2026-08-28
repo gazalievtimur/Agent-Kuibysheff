@@ -268,7 +268,11 @@ jobs:
             --os "$BASELINE_OS"
           )
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            git fetch origin "$BASE_REF" --depth=1
+            # Named refspec is required: `git fetch origin main` only updates
+            # FETCH_HEAD, so `origin/$BASE_REF...HEAD` would fail with exit 128.
+            # Avoid --depth=1 so three-dot merge-base can walk shared history.
+            git fetch --no-tags origin \
+              "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
             ARGS+=(--changed-from "origin/$BASE_REF" --changed-min "$CHANGED_MIN")
             if [[ -f coverage-main/lcov.info ]]; then
               ARGS+=(--vs-lcov coverage-main/lcov.info --tolerance 0.5)

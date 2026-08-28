@@ -62,10 +62,15 @@ def git_changed_lines(merge_base_ref: str) -> DefaultDict[str, Set[int]]:
     """Map repo-relative path -> set of added/changed line numbers in the diff."""
     result = subprocess.run(
         ["git", "diff", "--unified=0", f"{merge_base_ref}...HEAD"],
-        check=True,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise SystemExit(
+            f"error: git diff {merge_base_ref}...HEAD failed "
+            f"(exit {result.returncode}): {detail}"
+        )
     changed: DefaultDict[str, Set[int]] = defaultdict(set)
     path: Optional[str] = None
     hunk = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
