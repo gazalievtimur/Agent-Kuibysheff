@@ -1,6 +1,7 @@
 //! AppContainer profile RAII.
 
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
@@ -12,6 +13,9 @@ use crate::native::util::to_wide_null;
 
 /// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`.
 const HRESULT_ALREADY_EXISTS: i32 = 0x8007_00B7_u32 as i32;
+
+/// Monotonic suffix so parallel launches never reuse the same profile name.
+static PROFILE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Owned AppContainer profile + package SID.
 pub struct AppContainerProfile {
@@ -26,7 +30,8 @@ impl AppContainerProfile {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let name = format!("agent.kuibysheff.sb.{nanos}");
+        let seq = PROFILE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let name = format!("agent.kuibysheff.sb.{nanos}.{seq}");
         Self::create(&name)
     }
 
