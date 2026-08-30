@@ -33,7 +33,7 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Workspace tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Fail-closed namespace suite
         env:
