@@ -232,7 +232,9 @@ fn deny_child_processes_when_allow_children_false() {
         return;
     };
     let dir = tempdir().unwrap();
-    let script = fixture_script(dir.path(), "sh -c '(echo child)& wait'");
+    // One extra `sh -c` is enough to require fork; avoid `wait`, which can hang
+    // if a background job is created then frozen by the pid namespace.
+    let script = fixture_script(dir.path(), "sh -c 'echo child'");
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     request.allow_children = false;
     let result = LinuxSandbox::run(&request).expect("sandboxed child-denial run");
@@ -257,7 +259,7 @@ fn allow_child_processes_when_allow_children_true() {
         return;
     };
     let dir = tempdir().unwrap();
-    let script = fixture_script(dir.path(), "sh -c '(echo child)& wait'");
+    let script = fixture_script(dir.path(), "sh -c 'echo child'");
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     request.allow_children = true;
     let result = LinuxSandbox::run(&request).expect("sandboxed child-allow run");

@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::SandboxLinuxError;
 
@@ -184,15 +184,7 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
         libc::close(write_fd);
     }
 
-    let mut status = 0;
-    // SAFETY: wait for probe child.
-    let waited = unsafe { libc::waitpid(child, &mut status, 0) };
-    if waited < 0 {
-        return Err(SandboxLinuxError::unavailable(format!(
-            "waitpid for namespace probe failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    let status = waitpid_bounded(child, Duration::from_secs(1))?;
 
     map_result?;
 
@@ -214,6 +206,47 @@ fn probe_userns_mount_capability() -> Result<(), SandboxLinuxError> {
         code => Err(SandboxLinuxError::unavailable(format!(
             "namespace mount probe failed with exit {code}"
         ))),
+    }
+}
+
+fn waitpid_bounded(pid: libc::pid_t, timeout: Duration) -> Result<i32, SandboxLinuxError> {
+    let started = Instant::now();
+    loop {
+        let mut status = 0;
+        // SAFETY: WNOHANG reaps the probe child if it has already exited.
+        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if waited == pid {
+            return Ok(status);
+        }
+        if waited < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(SandboxLinuxError::unavailable(format!(
+                "waitpid for namespace probe failed: {err}"
+            )));
+        }
+        if started.elapsed() >= timeout {
+            // SAFETY: best-effort kill if unshare/mount left the child uninterruptible.
+            let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+            let kill_deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                let mut status = 0;
+                // SAFETY: reap after SIGKILL; do not block if the child is in D-state.
+                let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if waited == pid {
+                    return Ok(status);
+                }
+                if Instant::now() >= kill_deadline {
+                    return Err(SandboxLinuxError::unavailable(
+                        "namespace probe child hung after SIGKILL",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 

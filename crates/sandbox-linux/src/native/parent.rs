@@ -1,8 +1,11 @@
 //! Parent-side supervisor: re-exec helper and collect output.
 
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use libc::{pollfd, POLLIN};
 
 use crate::error::{SandboxLinuxError, SandboxStage};
 use crate::protocol::{HelperRequest, HELPER_ENV, REQUEST_ENV};
@@ -53,11 +56,16 @@ pub fn run_via_helper(
         .ok_or_else(|| SandboxLinuxError::setup(SandboxStage::Helper, "helper stderr missing"))?;
 
     let max = request.max_output_chars;
-    let stdout_thread = std::thread::spawn(move || read_bounded(&mut stdout, max));
-    let stderr_thread = std::thread::spawn(move || read_bounded(&mut stderr, max));
-
     // Helper enforces the payload deadline; add a small parent grace period.
     let parent_wait = request.deadline + Duration::from_secs(5);
+    // Pipe reads must not outlive that window: a helper stuck in D-state after
+    // a userns/mount deadlock never EOFs, and `join` would hang the test binary.
+    let read_deadline = Instant::now() + parent_wait + Duration::from_secs(2);
+    let stdout_thread =
+        std::thread::spawn(move || read_pipe_until(&mut stdout, max, read_deadline));
+    let stderr_thread =
+        std::thread::spawn(move || read_pipe_until(&mut stderr, max, read_deadline));
+
     let status = wait_with_timeout(&mut child, parent_wait)?;
 
     let (stdout_text, stdout_truncated) = stdout_thread
@@ -89,12 +97,7 @@ fn wait_with_timeout(
             Ok(None) => {
                 if started.elapsed() >= deadline {
                     let _ = child.kill();
-                    let status = child
-                        .wait()
-                        .map_err(|err| SandboxLinuxError::TimeoutCleanup {
-                            reason: format!("helper kill/wait failed: {err}"),
-                        })?;
-                    return Ok(status);
+                    return wait_after_kill(child);
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -105,6 +108,93 @@ fn wait_with_timeout(
                 ));
             }
         }
+    }
+}
+
+fn wait_after_kill(
+    child: &mut std::process::Child,
+) -> Result<std::process::ExitStatus, SandboxLinuxError> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    return Err(SandboxLinuxError::TimeoutCleanup {
+                        reason: "helper still running after SIGKILL (uninterruptible wait?)"
+                            .to_string(),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => {
+                return Err(SandboxLinuxError::TimeoutCleanup {
+                    reason: format!("helper kill/wait failed: {err}"),
+                });
+            }
+        }
+    }
+}
+
+fn fd_readable(fd: i32, timeout: Duration) -> bool {
+    if timeout.is_zero() {
+        return false;
+    }
+    let mut pfd = pollfd {
+        fd,
+        events: POLLIN,
+        revents: 0,
+    };
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: poll a live pipe fd owned by this thread's reader.
+    let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+    rc > 0
+}
+
+fn read_pipe_until(
+    reader: &mut (impl Read + AsRawFd),
+    max_chars: usize,
+    deadline: Instant,
+) -> (String, bool) {
+    let fd = reader.as_raw_fd();
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut buf = [0u8; 4096];
+    loop {
+        let remaining = deadline.saturating_sub(Instant::now());
+        if remaining.is_zero() {
+            truncated = true;
+            break;
+        }
+        if !fd_readable(fd, remaining) {
+            truncated = true;
+            break;
+        }
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if truncated {
+                    continue;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                let lossy = String::from_utf8_lossy(&bytes);
+                if lossy.chars().count() > max_chars {
+                    bytes = lossy
+                        .chars()
+                        .take(max_chars)
+                        .collect::<String>()
+                        .into_bytes();
+                    truncated = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let lossy = String::from_utf8_lossy(&bytes);
+    if lossy.chars().count() > max_chars {
+        (lossy.chars().take(max_chars).collect(), true)
+    } else {
+        (lossy.into_owned(), truncated)
     }
 }
 
@@ -247,5 +337,23 @@ mod tests {
         assert!(truncated);
         assert_eq!(out.chars().count(), 5);
         assert_eq!(out, "abcde");
+    }
+
+    #[test]
+    fn wait_with_timeout_kills_long_sleep() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let started = Instant::now();
+        let status = wait_with_timeout(&mut child, Duration::from_millis(200)).expect("wait");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "elapsed {:?}",
+            started.elapsed()
+        );
+        assert!(!status.success());
     }
 }
