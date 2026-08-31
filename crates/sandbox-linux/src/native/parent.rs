@@ -161,7 +161,7 @@ fn read_pipe_until(
     let mut truncated = false;
     let mut buf = [0u8; 4096];
     loop {
-        let remaining = deadline.saturating_sub(Instant::now());
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             truncated = true;
             break;
