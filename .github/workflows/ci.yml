@@ -83,7 +83,9 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Run tests
-        run: cargo test --locked --workspace
+        # Namespace tests deadlock if several unshare/mount overlap. One thread
+        # also avoids cargo's "running for over 60 seconds" on lock waiters.
+        run: cargo test --locked --workspace ${{ runner.os == 'Linux' && '-- --test-threads=1' || '' }}
 
   msrv:
     name: MSRV (${{ matrix.os }})
@@ -240,8 +242,13 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Generate LCOV report + summary
+        shell: bash
         run: |
-          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cargo llvm-cov --workspace --lcov --output-path lcov.info -- --test-threads=1
+          else
+            cargo llvm-cov --workspace --lcov --output-path lcov.info
+          fi
           cargo llvm-cov report --summary-only
 
       - name: Upload coverage artifact
