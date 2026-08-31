@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use sandbox_linux::{LinuxSandbox, SandboxLaunchRequest};
@@ -47,9 +48,20 @@ fn base_request(cwd: PathBuf, exe: PathBuf, argv: Vec<String>) -> SandboxLaunchR
     }
 }
 
-fn require_sandbox() -> Option<()> {
+/// Host user namespaces / mounts deadlock if several tests `unshare` at once.
+/// Run this file with `--test-threads=1` so cargo does not report 60s timeouts
+/// on tests that are only waiting for the lock.
+fn sandbox_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn require_sandbox() -> Option<MutexGuard<'static, ()>> {
+    let guard = sandbox_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match LinuxSandbox::probe() {
-        Ok(()) => Some(()),
+        Ok(()) => Some(guard),
         Err(err) => {
             if std::env::var_os("REQUIRE_LINUX_SANDBOX").is_some() {
                 panic!("Linux sandbox required but unavailable: {err}");
@@ -62,6 +74,9 @@ fn require_sandbox() -> Option<()> {
 
 #[test]
 fn probe_succeeds_or_explains() {
+    let _guard = sandbox_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // On restricted hosts (Docker without userns) probe may fail closed.
     match LinuxSandbox::probe() {
         Ok(()) => {}
@@ -77,7 +92,7 @@ fn probe_succeeds_or_explains() {
 
 #[test]
 fn echo_under_grants() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -96,7 +111,7 @@ fn echo_under_grants() {
 
 #[test]
 fn deny_sibling_write() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let root = tempdir().unwrap();
@@ -127,7 +142,7 @@ fn deny_sibling_write() {
 
 #[test]
 fn timeout_kills_tree() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -144,7 +159,7 @@ fn timeout_kills_tree() {
 
 #[test]
 fn network_namespace_has_no_foreign_ifaces() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -182,7 +197,7 @@ echo net-isolated
 
 #[test]
 fn argv_metacharacters_are_literal() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -204,7 +219,7 @@ fn argv_metacharacters_are_literal() {
 
 #[test]
 fn truncates_large_stdout() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -228,7 +243,7 @@ done
 
 #[test]
 fn deny_child_processes_when_allow_children_false() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -255,7 +270,7 @@ fn deny_child_processes_when_allow_children_false() {
 
 #[test]
 fn allow_child_processes_when_allow_children_true() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -269,7 +284,7 @@ fn allow_child_processes_when_allow_children_true() {
 
 #[test]
 fn timeout_kills_process_tree_with_allow_children() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -305,7 +320,7 @@ while true; do :; done
 
 #[test]
 fn seccomp_denies_unshare_and_mount() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -359,7 +374,7 @@ echo seccomp-denied
 
 #[test]
 fn deny_sibling_read() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let root = tempdir().unwrap();
@@ -402,7 +417,7 @@ echo read-denied
 
 #[test]
 fn deny_symlink_escape_to_sibling() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let root = tempdir().unwrap();
@@ -439,7 +454,7 @@ echo symlink-denied
 
 #[test]
 fn network_namespace_only_lo_and_connect_fails() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
@@ -492,7 +507,7 @@ echo net-lo-only
 
 #[test]
 fn truncates_large_stderr_and_combined_pipes() {
-    let Some(()) = require_sandbox() else {
+    let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
