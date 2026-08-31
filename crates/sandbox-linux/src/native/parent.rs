@@ -198,6 +198,7 @@ fn read_pipe_until(
     }
 }
 
+#[cfg(test)]
 fn read_bounded(reader: &mut impl Read, max_chars: usize) -> (String, bool) {
     let mut bytes = Vec::new();
     let mut truncated = false;
@@ -340,6 +341,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn wait_with_timeout_kills_long_sleep() {
         let mut child = Command::new("sleep")
             .arg("30")
