@@ -15,6 +15,7 @@ jobs:
   deep-linux:
     name: Deep Linux (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -33,9 +34,11 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Workspace tests
+        timeout-minutes: 20
         run: cargo test --locked --workspace -- --test-threads=1
 
       - name: Fail-closed namespace suite
+        timeout-minutes: 10
         env:
           REQUIRE_LINUX_SANDBOX: "1"
         run: cargo test -p sandbox-linux --test namespaces -- --nocapture --test-threads=1
@@ -43,6 +46,7 @@ jobs:
   fuzz-smoke:
     name: Fuzz / mutation smoke (non-gating)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - name: Checkout
@@ -64,6 +68,7 @@ jobs:
   release-smoke:
     name: Release artifact smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
