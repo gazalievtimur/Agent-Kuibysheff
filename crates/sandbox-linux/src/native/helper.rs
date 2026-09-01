@@ -159,7 +159,7 @@ fn pipe_pair() -> Result<(OwnedFd, OwnedFd), SandboxLinuxError> {
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
@@ -253,21 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn waitid_on_pipe_fd_is_error() {
-        let mut fds = [0; 2];
-        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        assert_eq!(rc, 0);
-        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-        let err = waitid_pidfd(&read, libc::WEXITED | libc::WNOHANG).expect_err("pipe waitid");
-        assert!(
-            matches!(err, SandboxLinuxError::Setup { stage: "reap", .. }),
-            "{err}"
-        );
-        drop(write);
-    }
-
-    #[test]
     fn timeout_cleanup_when_waitid_finds_no_child() {
         let mut child = spawn_sleep();
         let pidfd = pidfd_for(child.id());
@@ -281,5 +266,20 @@ mod tests {
         assert!(matches!(err, SandboxLinuxError::TimeoutCleanup { .. }));
         let _ = wait_pidfd(pidfd, Duration::ZERO);
         let _ = child.wait();
+    }
+
+    #[test]
+    fn waitid_on_pipe_fd_is_error() {
+        let mut fds = [0; 2];
+        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        assert_eq!(rc, 0);
+        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let err = waitid_pidfd(&read, libc::WEXITED | libc::WNOHANG).expect_err("pipe waitid");
+        assert!(
+            matches!(err, SandboxLinuxError::Setup { stage: "reap", .. }),
+            "{err}"
+        );
+        drop(write);
     }
 }

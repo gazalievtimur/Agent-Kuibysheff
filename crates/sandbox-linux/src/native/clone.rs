@@ -107,7 +107,7 @@ fn clone3_missing_pidfd(child_pid: pid_t) -> SandboxLinuxError {
     SandboxLinuxError::setup(SandboxStage::Clone, "clone3 returned without a pidfd")
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
