@@ -3,7 +3,7 @@
 use std::mem;
 use std::ptr;
 
-use libc::{c_int, c_long, c_void, pid_t, SIGCHLD};
+use libc::{c_int, c_long, c_void, pid_t, SIGCHLD, SIGKILL};
 
 use crate::error::{SandboxLinuxError, SandboxStage};
 use crate::native::util::errno_err;
@@ -86,6 +86,12 @@ where
     }
 
     if pidfd < 0 {
+        let child_pid = rc as pid_t;
+        // SAFETY: clone3 created a child but failed to return a pidfd; kill and
+        // WNOHANG-reap so the task is not left running.
+        let _ = unsafe { libc::kill(child_pid, SIGKILL) };
+        let mut status = 0;
+        let _ = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
         return Err(SandboxLinuxError::setup(
             SandboxStage::Clone,
             "clone3 returned without a pidfd",
