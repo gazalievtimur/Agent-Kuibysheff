@@ -39,15 +39,12 @@ mod tests {
     #[test]
     fn errno_err_preserves_raw_os_error() {
         let _ = std::fs::File::open("/no/such/kuibysheff-errno-probe-path");
-        match errno_err(SandboxStage::Reap, "open") {
+        assert!(matches!(
+            errno_err(SandboxStage::Reap, "open"),
             SandboxLinuxError::Setup {
-                raw_os_error,
-                reason,
+                raw_os_error: Some(_),
                 ..
-            } => {
-                assert!(raw_os_error.is_some(), "{reason}");
             }
-            other => panic!("unexpected {other:?}"),
-        }
+        ));
     }
 }

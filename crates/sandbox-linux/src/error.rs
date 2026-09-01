@@ -79,11 +79,12 @@ mod tests {
 
     #[test]
     fn setup_records_no_raw_os_error() {
-        match SandboxLinuxError::setup(SandboxStage::Clone, "x") {
-            SandboxLinuxError::Setup { raw_os_error, .. } => {
-                assert_eq!(raw_os_error, None);
+        assert!(matches!(
+            SandboxLinuxError::setup(SandboxStage::Clone, "x"),
+            SandboxLinuxError::Setup {
+                raw_os_error: None,
+                ..
             }
-            other => panic!("unexpected {other:?}"),
-        }
+        ));
     }
 }

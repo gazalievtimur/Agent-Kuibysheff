@@ -158,3 +158,128 @@ fn pipe_pair() -> Result<(OwnedFd, OwnedFd), SandboxLinuxError> {
     // SAFETY: uniquely own both ends.
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    const SYS_PIDFD_OPEN: i64 = 434;
+
+    fn spawn_sleep() -> std::process::Child {
+        Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep")
+    }
+
+    fn pidfd_for(pid: u32) -> OwnedFd {
+        let fd = unsafe { libc::syscall(SYS_PIDFD_OPEN, pid as libc::pid_t, 0) };
+        assert!(
+            fd >= 0,
+            "pidfd_open({pid}) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        unsafe { OwnedFd::from_raw_fd(fd as i32) }
+    }
+
+    #[test]
+    fn wait_pidfd_returns_child_exit_code() {
+        let child = Command::new("sh")
+            .args(["-c", "exit 42"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        let pidfd = pidfd_for(child.id());
+        let code = wait_pidfd(pidfd, Duration::from_secs(5)).expect("wait_pidfd");
+        assert_eq!(code, 42);
+        let mut child = child;
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn wait_pidfd_timeout_reaps_and_returns_124() {
+        let mut child = spawn_sleep();
+        let pidfd = pidfd_for(child.id());
+        let code = wait_pidfd(pidfd, Duration::ZERO).expect("timeout reap");
+        assert_eq!(code, 124);
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn wait_pidfd_killed_child_uses_128_plus_signal() {
+        let mut child = spawn_sleep();
+        let pid = child.id() as libc::pid_t;
+        let pidfd = pidfd_for(child.id());
+        let _ = unsafe { libc::kill(pid, SIGKILL) };
+        let code = wait_pidfd(pidfd, Duration::from_secs(5)).expect("wait killed");
+        assert_eq!(code, 128 + SIGKILL);
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn waitid_wnonhang_on_live_child_is_none() {
+        let mut child = spawn_sleep();
+        let pidfd = pidfd_for(child.id());
+        let got = waitid_pidfd(&pidfd, libc::WEXITED | libc::WNOHANG).expect("wnonhang");
+        assert!(
+            got.is_none(),
+            "live child must not be waitable with WNOHANG"
+        );
+        let _ = wait_pidfd(pidfd, Duration::ZERO);
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn waitid_after_reap_maps_echild_to_none() {
+        let mut child = Command::new("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn true");
+        let pidfd = pidfd_for(child.id());
+        assert!(waitid_pidfd(&pidfd, libc::WEXITED)
+            .expect("first waitid")
+            .is_some());
+        let again = waitid_pidfd(&pidfd, libc::WEXITED | libc::WNOHANG).expect("second waitid");
+        assert!(again.is_none());
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn waitid_on_pipe_fd_is_error() {
+        let mut fds = [0; 2];
+        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        assert_eq!(rc, 0);
+        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        let err = waitid_pidfd(&read, libc::WEXITED | libc::WNOHANG).expect_err("pipe waitid");
+        assert!(
+            matches!(err, SandboxLinuxError::Setup { stage: "reap", .. }),
+            "{err}"
+        );
+        drop(write);
+    }
+
+    #[test]
+    fn timeout_cleanup_when_waitid_finds_no_child() {
+        let mut child = spawn_sleep();
+        let pidfd = pidfd_for(child.id());
+        let err = match waitid_pidfd(&pidfd, libc::WEXITED | libc::WNOHANG).expect("live wnonhang")
+        {
+            Some(_) => panic!("live child should not be reaped with WNOHANG"),
+            None => SandboxLinuxError::TimeoutCleanup {
+                reason: "helper init still alive after SIGKILL".to_string(),
+            },
+        };
+        assert!(matches!(err, SandboxLinuxError::TimeoutCleanup { .. }));
+        let _ = wait_pidfd(pidfd, Duration::ZERO);
+        let _ = child.wait();
+    }
+}
