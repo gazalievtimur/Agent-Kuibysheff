@@ -9,6 +9,7 @@ use libc::{MS_BIND, MS_PRIVATE, MS_RDONLY, MS_REC, MS_REMOUNT};
 use crate::error::{SandboxLinuxError, SandboxStage};
 use crate::native::util::{c_path, c_string_str, errno_err};
 use crate::request::SandboxLaunchRequest;
+use crate::OwnedFd;
 
 const MS_NOSUID: u64 = 2;
 const MS_NODEV: u64 = 4;
@@ -303,13 +304,15 @@ fn remount_ro(path: &Path) -> Result<(), SandboxLinuxError> {
 fn mount_setattr_rdonly(path: &Path) -> Result<(), SandboxLinuxError> {
     let c = c_path(path)?;
     // SAFETY: O_PATH opens the mount point without requiring read access.
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
-    if fd < 0 {
+    let raw = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+    if raw < 0 {
         return Err(errno_err(
             SandboxStage::Mount,
             "open O_PATH for mount_setattr",
         ));
     }
+    // SAFETY: unique ownership of the O_PATH fd from open(2).
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
     let attr = MountAttr {
         attr_set: MOUNT_ATTR_RDONLY,
         attr_clr: 0,
@@ -321,17 +324,13 @@ fn mount_setattr_rdonly(path: &Path) -> Result<(), SandboxLinuxError> {
     let rc = unsafe {
         libc::syscall(
             SYS_MOUNT_SETATTR,
-            fd,
+            fd.as_raw_fd(),
             empty.as_ptr(),
             AT_EMPTY_PATH | AT_RECURSIVE,
             std::ptr::from_ref(&attr),
             std::mem::size_of::<MountAttr>(),
         )
     };
-    // SAFETY: close the O_PATH fd.
-    unsafe {
-        libc::close(fd);
-    }
     if rc != 0 {
         return Err(errno_err(SandboxStage::Mount, "mount_setattr RDONLY"));
     }

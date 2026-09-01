@@ -231,6 +231,42 @@ struct LaunchedProcess {
     thread: OwnedHandle,
 }
 
+/// Terminates a newly created process if launch setup fails before the caller
+/// takes ownership. Closing the process handle does not kill a suspended
+/// AppContainer that was never assigned to a job.
+struct KillOnDrop {
+    process: HANDLE,
+    armed: bool,
+}
+
+impl KillOnDrop {
+    fn arm(process: HANDLE) -> Self {
+        Self {
+            process,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if !self.armed || self.process.is_null() || self.process == INVALID_HANDLE_VALUE {
+            return;
+        }
+        // SAFETY: `process` is still a valid handle owned by `LaunchedProcess`'s
+        // `OwnedHandle`; TerminateProcess is best-effort before that handle closes.
+        let _ = unsafe { TerminateProcess(self.process, 1) };
+        let _ = unsafe { WaitForSingleObject(self.process, 2_000) };
+    }
+}
+
+/// Win32 GetExitCodeProcess value meaning the process has not exited.
+const STILL_ACTIVE: u32 = 259;
+
 fn create_suspended_appcontainer(
     request: &SandboxLaunchRequest,
     profile: &AppContainerProfile,
@@ -327,9 +363,11 @@ fn create_suspended_appcontainer(
     // SAFETY: CreateProcessW returned unique process/thread handles.
     let process = unsafe { OwnedHandle::from_raw(pi.hProcess) };
     let thread = unsafe { OwnedHandle::from_raw(pi.hThread) };
+    let mut kill_on_drop = KillOnDrop::arm(process.as_raw());
 
     job.assign(process.as_raw())?;
     verify_suspended_token(process.as_raw(), profile.sid(), job)?;
+    kill_on_drop.disarm();
     Ok(LaunchedProcess { process, thread })
 }
 
@@ -523,7 +561,13 @@ pub fn run_sandboxed(
         // SAFETY: force-kill the primary process then the whole job tree.
         let _ = unsafe { TerminateProcess(launched.process.as_raw(), 1) };
         job.terminate(1);
-        let _ = unsafe { WaitForSingleObject(launched.process.as_raw(), 5_000) };
+        // SAFETY: wait for termination after kill; do not report success if still alive.
+        let waited = unsafe { WaitForSingleObject(launched.process.as_raw(), 5_000) };
+        if waited != WAIT_OBJECT_0 {
+            return Err(SandboxWindowsError::TimeoutCleanup {
+                reason: "process still alive after TerminateProcess".to_string(),
+            });
+        }
     } else if wait != WAIT_OBJECT_0 {
         // SAFETY: WaitForSingleObject failed; force-kill the primary process then the job tree.
         let _ = unsafe { TerminateProcess(launched.process.as_raw(), 1) };
@@ -534,27 +578,36 @@ pub fn run_sandboxed(
     let mut exit_code = 1u32;
     // SAFETY: process has exited or been terminated.
     let _ = unsafe { GetExitCodeProcess(launched.process.as_raw(), &mut exit_code) };
+    if exit_code == STILL_ACTIVE {
+        return Err(SandboxWindowsError::TimeoutCleanup {
+            reason: "GetExitCodeProcess still reports STILL_ACTIVE after wait".to_string(),
+        });
+    }
 
     // Drop process handles before joining readers so pipe write ends can close.
     drop(launched);
 
-    let (stdout_text, stdout_truncated) =
-        recv_output(stdout_rx, Duration::from_secs(3)).unwrap_or_else(|| (String::new(), true));
-    let (stderr_text, stderr_truncated) =
-        recv_output(stderr_rx, Duration::from_secs(3)).unwrap_or_else(|| (String::new(), true));
+    let stdout_text = recv_output(stdout_rx, Duration::from_secs(3))?;
+    let stderr_text = recv_output(stderr_rx, Duration::from_secs(3))?;
 
     Ok(SandboxLaunchResult {
-        stdout: stdout_text,
-        stderr: stderr_text,
-        stdout_truncated,
-        stderr_truncated,
+        stdout: stdout_text.0,
+        stderr: stderr_text.0,
+        stdout_truncated: stdout_text.1,
+        stderr_truncated: stderr_text.1,
         exit_code: Some(exit_code as i32),
         timed_out,
     })
 }
 
-fn recv_output(rx: mpsc::Receiver<(String, bool)>, timeout: Duration) -> Option<(String, bool)> {
-    rx.recv_timeout(timeout).ok()
+fn recv_output(
+    rx: mpsc::Receiver<(String, bool)>,
+    timeout: Duration,
+) -> Result<(String, bool), SandboxWindowsError> {
+    rx.recv_timeout(timeout)
+        .map_err(|_| SandboxWindowsError::TimeoutCleanup {
+            reason: "pipe reader still blocked after process wait".to_string(),
+        })
 }
 
 fn duration_to_millis(deadline: Duration) -> u32 {

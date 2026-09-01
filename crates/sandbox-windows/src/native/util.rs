@@ -3,8 +3,12 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::ptr;
 
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+};
 
 use crate::error::{SandboxStage, SandboxWindowsError};
 
@@ -23,7 +27,32 @@ pub(crate) fn path_to_wide_null(path: &Path) -> Vec<u16> {
 pub(crate) fn last_error_message(prefix: &str) -> String {
     // SAFETY: GetLastError is a process-local TLS read with no preconditions.
     let code = unsafe { GetLastError() };
-    format!("{prefix} (win32={code})")
+    let mut buf = [0u16; 512];
+    // SAFETY: FormatMessageW writes a system message for `code` into `buf`; IGNORE_INSERTS
+    // means Arguments may be null.
+    let n = unsafe {
+        FormatMessageW(
+            FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            ptr::null(),
+            code,
+            0,
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            ptr::null_mut(),
+        )
+    };
+    let detail = if n > 0 {
+        String::from_utf16_lossy(&buf[..n as usize])
+            .trim()
+            .to_string()
+    } else {
+        String::new()
+    };
+    if detail.is_empty() {
+        format!("{prefix} (win32={code})")
+    } else {
+        format!("{prefix} (win32={code}: {detail})")
+    }
 }
 
 pub(crate) fn setup_last(stage: SandboxStage, prefix: &str) -> SandboxWindowsError {
@@ -109,5 +138,11 @@ mod tests {
         assert_eq!(quote_arg("abc"), "abc");
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn last_error_message_includes_win32_code() {
+        let msg = last_error_message("CreateProcessW");
+        assert!(msg.contains("win32="), "expected win32 code in `{msg}`");
     }
 }

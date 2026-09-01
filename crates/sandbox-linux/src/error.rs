@@ -41,9 +41,16 @@ pub enum SandboxLinuxError {
     #[error("linux sandbox policy denied: {reason}")]
     PolicyDenied { reason: String },
     #[error("linux sandbox setup failed at `{stage}`: {reason}")]
-    Setup { stage: &'static str, reason: String },
+    Setup {
+        stage: &'static str,
+        reason: String,
+        raw_os_error: Option<i32>,
+    },
     #[error("linux sandbox I/O error: {reason}")]
-    Io { reason: String },
+    Io {
+        reason: String,
+        raw_os_error: Option<i32>,
+    },
     #[error("linux sandbox timed out and cleanup failed: {reason}")]
     TimeoutCleanup { reason: String },
 }
@@ -61,6 +68,23 @@ impl SandboxLinuxError {
         Self::Setup {
             stage: stage.as_str(),
             reason: reason.into(),
+            raw_os_error: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_records_no_raw_os_error() {
+        assert!(matches!(
+            SandboxLinuxError::setup(SandboxStage::Clone, "x"),
+            SandboxLinuxError::Setup {
+                raw_os_error: None,
+                ..
+            }
+        ));
     }
 }

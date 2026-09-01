@@ -3,7 +3,7 @@
 use std::mem;
 use std::ptr;
 
-use libc::{c_int, c_long, c_void, pid_t, SIGCHLD};
+use libc::{c_int, c_long, c_void, pid_t, SIGCHLD, SIGKILL};
 
 use crate::error::{SandboxLinuxError, SandboxStage};
 use crate::native::util::errno_err;
@@ -86,10 +86,7 @@ where
     }
 
     if pidfd < 0 {
-        return Err(SandboxLinuxError::setup(
-            SandboxStage::Clone,
-            "clone3 returned without a pidfd",
-        ));
+        return Err(clone3_missing_pidfd(rc as pid_t));
     }
 
     // SAFETY: pidfd is a uniquely owned fd from clone3.
@@ -98,4 +95,49 @@ where
         child_pid: rc as pid_t,
         pidfd,
     })
+}
+
+/// Kills and best-effort reaps a clone3 child that was created without a pidfd.
+fn clone3_missing_pidfd(child_pid: pid_t) -> SandboxLinuxError {
+    // SAFETY: clone3 created a child but failed to return a pidfd; kill and
+    // WNOHANG-reap so the task is not left running.
+    let _ = unsafe { libc::kill(child_pid, SIGKILL) };
+    let mut status = 0;
+    let _ = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
+    SandboxLinuxError::setup(SandboxStage::Clone, "clone3 returned without a pidfd")
+}
+
+#[cfg(all(test, not(miri)))]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    #[test]
+    fn clone3_missing_pidfd_kills_child_and_returns_setup_error() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as pid_t;
+        let err = clone3_missing_pidfd(pid);
+        assert!(
+            matches!(err, SandboxLinuxError::Setup { stage: "clone", .. }),
+            "{err}"
+        );
+        let _ = child.try_wait();
+        std::thread::sleep(Duration::from_millis(50));
+        let waited = unsafe {
+            let mut status = 0;
+            libc::waitpid(pid, &mut status, libc::WNOHANG)
+        };
+        assert!(
+            waited == pid || waited == 0 || waited < 0,
+            "waitpid after clone3_missing_pidfd: {waited}"
+        );
+        let _ = child.wait();
+    }
 }

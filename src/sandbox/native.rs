@@ -68,11 +68,11 @@ mod linux {
         match error {
             SandboxLinuxError::Unavailable { reason } => SandboxError::Unavailable { reason },
             SandboxLinuxError::PolicyDenied { reason } => SandboxError::PolicyDenied { reason },
-            SandboxLinuxError::Setup { stage, reason } => SandboxError::Setup {
+            SandboxLinuxError::Setup { stage, reason, .. } => SandboxError::Setup {
                 stage: stage.to_string(),
                 reason,
             },
-            SandboxLinuxError::Io { reason } => SandboxError::Io { reason },
+            SandboxLinuxError::Io { reason, .. } => SandboxError::Io { reason },
             SandboxLinuxError::TimeoutCleanup { reason } => SandboxError::TimeoutCleanup { reason },
         }
     }
@@ -126,12 +126,16 @@ mod linux {
             assert!(matches!(
                 map_linux_error(SandboxLinuxError::Setup {
                     stage: "seccomp",
-                    reason: "x".into()
+                    reason: "x".into(),
+                    raw_os_error: None,
                 }),
                 SandboxError::Setup { .. }
             ));
             assert!(matches!(
-                map_linux_error(SandboxLinuxError::Io { reason: "x".into() }),
+                map_linux_error(SandboxLinuxError::Io {
+                    reason: "x".into(),
+                    raw_os_error: None,
+                }),
                 SandboxError::Io { .. }
             ));
             assert!(matches!(

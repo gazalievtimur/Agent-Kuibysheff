@@ -9,7 +9,11 @@ use crate::error::{SandboxLinuxError, SandboxStage};
 
 pub(crate) fn errno_err(stage: SandboxStage, what: &str) -> SandboxLinuxError {
     let err = io::Error::last_os_error();
-    SandboxLinuxError::setup(stage, format!("{what}: {err}"))
+    SandboxLinuxError::Setup {
+        stage: stage.as_str(),
+        reason: format!("{what}: {err}"),
+        raw_os_error: err.raw_os_error(),
+    }
 }
 
 pub(crate) fn c_path(path: &Path) -> Result<CString, SandboxLinuxError> {
@@ -26,4 +30,21 @@ pub(crate) fn c_string_str(text: &str) -> Result<CString, SandboxLinuxError> {
     CString::new(text).map_err(|_| SandboxLinuxError::PolicyDenied {
         reason: "string contains NUL".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errno_err_preserves_raw_os_error() {
+        let _ = std::fs::File::open("/no/such/kuibysheff-errno-probe-path");
+        assert!(matches!(
+            errno_err(SandboxStage::Reap, "open"),
+            SandboxLinuxError::Setup {
+                raw_os_error: Some(_),
+                ..
+            }
+        ));
+    }
 }
