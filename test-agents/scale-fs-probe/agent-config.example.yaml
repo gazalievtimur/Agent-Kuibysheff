@@ -16,14 +16,14 @@ provider:
   max_retries: 3
   retry_base_delay_ms: 500
   history:
-    max_tail_messages: 40
-    max_chars: 200000
+    max_tail_messages: 20
+    max_chars: 80000
 
 mcp: []
 
 limits:
   max_iterations: 24
-  max_tokens: 120000
+  max_tokens: 300000
   max_duration_sec: 600
 
 logging:
