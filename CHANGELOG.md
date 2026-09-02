@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-02
+
+### Fixed
+
+- Linux sandbox: fail closed when a timeout cannot reap the child (`waitid` /
+  missing pidfd paths); bound waits so a D-state helper cannot hang CI.
+- Windows sandbox: stop reclaim from deleting live AppContainer profiles.
+- Serialize Linux namespace tests to one thread to avoid unshare deadlocks.
+- Coverage ratchet: fetch `origin/<base>` so the changed-lines gate works on PRs.
+- Nightly / release workflows: job timeouts so hangs fail in minutes.
+- `run-demo` / demo config: grant `access.filesystem.input_roots` so attached
+  project files (for example `README.md`) are allowed after protected import.
+- Scale-FS probe example: raise `max_tokens` and tighten history so oversize
+  windowed-read tasks are less likely to stop on the token budget.
+
+### Changed
+
+- Miri skips process-spawn sandbox unit tests that need real OS isolation.
+
 ## [0.2.0] - 2026-08-26
 
 ### Breaking

@@ -32,6 +32,9 @@ access:
     home:
       read: ["in", "out"]
       write: ["out"]
+    # After import into .kuibysheff/protected/agents/<id>/, project root is four
+    # levels up — required so run-demo.ps1 can attach ./README.md via --files.
+    input_roots: ["../../../.."]
 
   run:
     programs: []
