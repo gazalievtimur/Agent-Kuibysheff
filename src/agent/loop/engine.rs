@@ -6,7 +6,9 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
 
-use super::directive::{approx_json_object_count, content_preview, parse_directive};
+use super::directive::{
+    approx_json_object_count, content_preview, parse_directive, ToolCallDirective,
+};
 use super::history::{prune_message_history, push_message};
 use crate::access::QualifiedTool;
 use crate::agent::{generate_run_id, AgentEvent, AgentEventTx, RunCancel};
@@ -427,13 +429,18 @@ impl AgentEngine {
 
             for (tool_index, tool_call) in directive.tool_calls.into_iter().enumerate() {
                 let tool_call_id = format!("tc-{iteration}-{tool_index}");
-                let qualified = match QualifiedTool::new(&tool_call.server, &tool_call.tool) {
+                let ToolCallDirective {
+                    server,
+                    tool,
+                    arguments,
+                } = tool_call;
+                let qualified = match QualifiedTool::new(&server, &tool) {
                     Ok(qualified) => qualified,
                     Err(reason) => {
                         warn!(
                             iteration,
-                            server = %tool_call.server,
-                            tool = %tool_call.tool,
+                            server = %server,
+                            tool = %tool,
                             error = %reason,
                             "tool call name rejected; returning error to the model"
                         );
@@ -441,8 +448,8 @@ impl AgentEngine {
                             "tool_call_failed",
                             json!({
                                 "iteration": iteration,
-                                "server": tool_call.server,
-                                "tool": tool_call.tool,
+                                "server": server,
+                                "tool": tool,
                                 "ok": false,
                                 "error": reason,
                             }),
@@ -450,9 +457,9 @@ impl AgentEngine {
                         .await;
                         events.emit(AgentEvent::ToolStart {
                             id: tool_call_id.clone(),
-                            server: tool_call.server.clone(),
-                            tool: tool_call.tool.clone(),
-                            arguments: tool_call.arguments.clone(),
+                            server: server.clone(),
+                            tool: tool.clone(),
+                            arguments,
                         });
                         events.emit(AgentEvent::ToolFinish {
                             id: tool_call_id,
@@ -466,8 +473,8 @@ impl AgentEngine {
                                 ChatRole::User,
                                 json!({
                                     "tool_result": {
-                                        "server": tool_call.server,
-                                        "tool": tool_call.tool,
+                                        "server": server,
+                                        "tool": tool,
                                         "error": reason
                                     }
                                 })
@@ -479,8 +486,6 @@ impl AgentEngine {
                         continue;
                     }
                 };
-                let server = qualified.server().to_string();
-                let tool = qualified.tool().to_string();
                 let qualified_tool = qualified.qualified();
 
                 self.log_tool_event(
@@ -497,7 +502,7 @@ impl AgentEngine {
                     id: tool_call_id.clone(),
                     server: server.clone(),
                     tool: tool.clone(),
-                    arguments: tool_call.arguments.clone(),
+                    arguments: arguments.clone(),
                 });
 
                 let tool_response = tokio::select! {
@@ -531,7 +536,7 @@ impl AgentEngine {
                     response = self.tools.call_tool(
                         qualified.server(),
                         qualified.tool(),
-                        tool_call.arguments,
+                        arguments,
                     ) => response,
                 };
                 let tool_response = match tool_response {

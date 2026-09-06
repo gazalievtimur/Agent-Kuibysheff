@@ -207,6 +207,7 @@ impl AclJournal {
             LocalFree(new_dacl.cast());
         }
         if set_status != ERROR_SUCCESS {
+            // SAFETY: sd was allocated by GetNamedSecurityInfoW and is uniquely owned here.
             unsafe {
                 LocalFree(sd.cast());
             }

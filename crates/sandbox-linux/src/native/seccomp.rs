@@ -96,8 +96,14 @@ pub fn install_denylist(allow_children: bool) -> Result<(), SandboxLinuxError> {
     }
     filters.push(bpf(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW));
 
+    let len = u16::try_from(filters.len()).map_err(|_| {
+        SandboxLinuxError::setup(
+            SandboxStage::Seccomp,
+            "seccomp BPF program exceeds u16::MAX instructions",
+        )
+    })?;
     let mut prog = sock_fprog {
-        len: filters.len() as u16,
+        len,
         filter: filters.as_mut_ptr(),
     };
 
