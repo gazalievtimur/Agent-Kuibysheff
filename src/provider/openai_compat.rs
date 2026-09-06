@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use rand::Rng;
+use rand::RngExt;
 use reqwest::header::HeaderMap;
 use reqwest::redirect::{Attempt, Policy};
 use reqwest::{Client, StatusCode, Url};
@@ -238,7 +238,7 @@ impl OpenAiCompatClient {
         let base = self.cfg.retry_base_delay_ms.max(1);
         let factor = 2u64.saturating_pow(attempt.min(10));
         let raw = base.saturating_mul(factor);
-        let jitter: u64 = rand::thread_rng().gen_range(0..=raw / 4 + 1);
+        let jitter: u64 = rand::rng().random_range(0..=raw / 4 + 1);
         Duration::from_millis(raw.saturating_add(jitter))
     }
 
