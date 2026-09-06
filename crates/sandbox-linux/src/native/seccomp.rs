@@ -31,6 +31,20 @@ fn bpf(code: u16, jt: u8, jf: u8, k: u32) -> sock_filter {
     sock_filter { code, jt, jf, k }
 }
 
+/// Converts a BPF instruction count to the `sock_fprog.len` field.
+///
+/// # Errors
+///
+/// Returns a setup error when `instruction_count` exceeds `u16::MAX`.
+fn bpf_prog_len(instruction_count: usize) -> Result<u16, SandboxLinuxError> {
+    u16::try_from(instruction_count).map_err(|_| {
+        SandboxLinuxError::setup(
+            SandboxStage::Seccomp,
+            "seccomp BPF program exceeds u16::MAX instructions",
+        )
+    })
+}
+
 /// Installs a fail-closed denylist (x86_64). Unknown arches refuse to proceed.
 ///
 /// When `allow_children` is `false`, `fork`/`clone`/`vfork` are denied with `ENOSYS`,
@@ -96,8 +110,9 @@ pub fn install_denylist(allow_children: bool) -> Result<(), SandboxLinuxError> {
     }
     filters.push(bpf(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW));
 
+    let len = bpf_prog_len(filters.len())?;
     let mut prog = sock_fprog {
-        len: filters.len() as u16,
+        len,
         filter: filters.as_mut_ptr(),
     };
 
@@ -115,4 +130,29 @@ pub fn install_denylist(allow_children: bool) -> Result<(), SandboxLinuxError> {
         return Err(errno_err(SandboxStage::Seccomp, "PR_SET_SECCOMP"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bpf_prog_len_accepts_u16_range() {
+        assert_eq!(bpf_prog_len(0).expect("zero"), 0);
+        assert_eq!(bpf_prog_len(64).expect("small"), 64);
+        assert_eq!(bpf_prog_len(usize::from(u16::MAX)).expect("max"), u16::MAX);
+    }
+
+    #[test]
+    fn bpf_prog_len_rejects_overflow() {
+        let err =
+            bpf_prog_len(usize::from(u16::MAX).saturating_add(1)).expect_err("overflow must fail");
+        match err {
+            SandboxLinuxError::Setup { stage, reason, .. } => {
+                assert_eq!(stage, "seccomp");
+                assert!(reason.contains("u16::MAX"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected Setup error, got {other}"),
+        }
+    }
 }
