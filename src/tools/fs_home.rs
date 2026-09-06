@@ -64,11 +64,7 @@ impl HomeFs {
             let probe_sandbox = Arc::clone(&sandbox);
             tokio::task::spawn_blocking(move || probe_sandbox.probe())
                 .await
-                .map_err(|error| HomeFsError::Io {
-                    operation: "spawn_blocking".to_string(),
-                    path: String::new(),
-                    source: std::io::Error::other(error.to_string()),
-                })?
+                .map_err(|error| map_spawn_blocking_join_error("", error))?
                 .map_err(map_sandbox_error)?;
         }
         Ok(Self {
@@ -180,11 +176,7 @@ impl HomeFs {
         let path_display = path.display().to_string();
         let window = task::spawn_blocking(move || read_char_window(&path, offset, max_chars))
             .await
-            .map_err(|error| HomeFsError::Io {
-                operation: "spawn_blocking".to_string(),
-                path: path_display.clone(),
-                source: std::io::Error::other(error.to_string()),
-            })?
+            .map_err(|error| map_spawn_blocking_join_error(&path_display, error))?
             .map_err(|error| home_io("read_char_window", Path::new(&path_display), error))?;
 
         Ok(json!({
@@ -492,6 +484,14 @@ fn home_io(operation: &str, path: &Path, error: std::io::Error) -> HomeFsError {
     }
 }
 
+fn map_spawn_blocking_join_error(path: &str, error: tokio::task::JoinError) -> HomeFsError {
+    HomeFsError::Io {
+        operation: "spawn_blocking".to_string(),
+        path: path.to_string(),
+        source: std::io::Error::other(error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,5 +796,29 @@ mod tests {
             .await
             .expect_err("unknown alias");
         assert!(matches!(error, HomeFsError::ProgramDenied { .. }));
+    }
+
+    #[tokio::test]
+    async fn maps_spawn_blocking_join_failure_to_io_error() {
+        let join_err = tokio::task::spawn_blocking(|| panic!("forced join failure"))
+            .await
+            .expect_err("panicking worker must produce JoinError");
+        let error = map_spawn_blocking_join_error("out/file.txt", join_err);
+        match error {
+            HomeFsError::Io {
+                operation,
+                path,
+                source,
+            } => {
+                assert_eq!(operation, "spawn_blocking");
+                assert_eq!(path, "out/file.txt");
+                assert!(
+                    source.to_string().contains("forced join failure")
+                        || source.to_string().contains("panic"),
+                    "unexpected source: {source}"
+                );
+            }
+            other => panic!("expected Io error, got {other}"),
+        }
     }
 }
