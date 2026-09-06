@@ -44,7 +44,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 url = "2"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.23"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tracing = "0.1"
