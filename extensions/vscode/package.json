@@ -172,7 +172,7 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.5.0",
-    "@types/vscode": "^1.134.0",
+    "@types/vscode": "^1.136.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   }
