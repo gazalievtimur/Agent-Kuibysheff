@@ -4,6 +4,7 @@
   "description": "Manage Kuibysheff agent parameters and 1C ACP workflow in VS Code",
   "version": "0.1.0",
   "publisher": "kuibysheff",
+  "icon": "media/kuibyshev-app-icon.png",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -28,7 +29,7 @@
         {
           "id": "kuibysheff",
           "title": "Kuibysheff",
-          "icon": "media/icon.svg"
+          "icon": "media/kuibyshev-app-icon.png"
         }
       ]
     },
