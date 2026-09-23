@@ -124,11 +124,7 @@ mod tests {
     use crate::app::AgentPromptArgs;
     use crate::output::{RunOutput, StopReason};
     use crate::project_paths::ResolvedAgentPaths;
-    use a2a::{
-        GetTaskRequest, Message, Part, Role, SendMessageRequest, SendMessageResponse, TaskState,
-        TRANSPORT_PROTOCOL_JSONRPC,
-    };
-    use a2a_client::A2AClientFactory;
+    use a2a::TRANSPORT_PROTOCOL_JSONRPC;
     use a2a_server::StaticAgentCard;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -235,7 +231,11 @@ mod tests {
         });
         ready_rx.await.expect("server ready");
 
-        let http = reqwest::Client::new();
+        // Bypass OS/Docker HTTP proxies so loopback test traffic stays local.
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("http client");
         let card_resp = http
             .get(format!("{base}/.well-known/agent-card.json"))
             .send()
@@ -249,41 +249,72 @@ mod tests {
             .iter()
             .any(|i| i.url.contains("/jsonrpc")));
 
-        // a2a-client uses its own reqwest 0.13 tree via default factory.
-        let factory = A2AClientFactory::builder().build();
-        let client = factory.create_from_card(&card).await.expect("client");
-
-        let resp = client
-            .send_message(&SendMessageRequest {
-                message: Message::new(Role::User, vec![Part::text("hello")]),
-                configuration: None,
-                metadata: None,
-                tenant: None,
-            })
+        // Drive JSON-RPC over the same no-proxy client. a2a-client's default
+        // factory uses a separate reqwest 0.13 Client that still honors the
+        // OS/Docker system proxy and returns 503 for loopback on this host.
+        let send_resp = http
+            .post(format!("{base}/jsonrpc"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {
+                    "message": {
+                        "messageId": "m1",
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "hello"}]
+                    }
+                }
+            }))
+            .send()
             .await
             .expect("send");
+        assert!(
+            send_resp.status().is_success(),
+            "send status {}",
+            send_resp.status()
+        );
+        let send_body: serde_json::Value = send_resp.json().await.expect("send json");
+        assert!(send_body.get("error").is_none(), "send error: {send_body}");
+        let task = send_body
+            .pointer("/result/task")
+            .or_else(|| send_body.get("result"))
+            .unwrap_or_else(|| panic!("task result missing: {send_body}"));
+        let task_id = task
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("task id missing: {task}"))
+            .to_string();
+        let state = task
+            .pointer("/status/state")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("task state missing: {task}"));
+        assert_eq!(state, "TASK_STATE_COMPLETED");
+        let text = task
+            .pointer("/status/message/parts/0/text")
+            .and_then(|v| v.as_str());
+        assert_eq!(text, Some("echo:hello"), "body={send_body}");
 
-        let task_id = match resp {
-            SendMessageResponse::Task(task) => {
-                assert_eq!(task.status.state, TaskState::Completed);
-                assert_eq!(
-                    task.status.message.as_ref().and_then(|m| m.text()),
-                    Some("echo:hello")
-                );
-                task.id
-            }
-            other => panic!("expected Task, got {other:?}"),
-        };
-
-        let got = client
-            .get_task(&GetTaskRequest {
-                id: task_id,
-                history_length: None,
-                tenant: None,
-            })
+        let get_resp = http
+            .post(format!("{base}/jsonrpc"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "GetTask",
+                "params": { "id": task_id }
+            }))
+            .send()
             .await
             .expect("get");
-        assert_eq!(got.status.state, TaskState::Completed);
+        assert!(get_resp.status().is_success());
+        let get_body: serde_json::Value = get_resp.json().await.expect("get json");
+        assert!(get_body.get("error").is_none(), "get error: {get_body}");
+        let got_state = get_body
+            .pointer("/result/status/state")
+            .or_else(|| get_body.pointer("/result/task/status/state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("get state missing: {get_body}"));
+        assert_eq!(got_state, "TASK_STATE_COMPLETED");
 
         handle.abort();
     }
@@ -298,7 +329,10 @@ mod tests {
         );
         let (base, handle) = serve_app(app).await;
 
-        let http = reqwest::Client::new();
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("http client");
         // Card stays public.
         let card_status = http
             .get(format!("{base}/.well-known/agent-card.json"))
@@ -342,7 +376,10 @@ mod tests {
         );
         let (base, handle) = serve_app(app).await;
 
-        let http = reqwest::Client::new();
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("http client");
         let rpc_status = http
             .post(format!("{base}/jsonrpc"))
             .header("Authorization", "Bearer secret-token")
