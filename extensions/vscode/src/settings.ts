@@ -12,9 +12,9 @@ export function getRepoRoot(): string {
 export function getBinaryPath(): string {
   const value = vscode.workspace
     .getConfiguration("kuibysheff")
-    .get<string>("binaryPath", "agent_Kuibysheff")
+    .get<string>("binaryPath", "kbshff")
     .trim();
-  return value || "agent_Kuibysheff";
+  return value || "kbshff";
 }
 
 export function getDefaultIssueKey(): string {
