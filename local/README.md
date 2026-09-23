@@ -11,6 +11,9 @@ restored from git history when needed:
 git checkout <commit-before-untrack> -- workflows
 ```
 
+After restore, point release binary lookups at **`kbshff`** (not the old
+`agent_Kuibysheff` CLI name): e.g. `target/release/kbshff(.exe)` and
+`cargo build --release -p agent_Kuibysheff --bin kbshff`.
 | Path | In git? | Purpose |
 | --- | --- | --- |
 | `security-bank.example/` | yes | Adversarial prompt bank sample (containment scoring) |
