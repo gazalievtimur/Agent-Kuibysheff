@@ -57,6 +57,8 @@ sandbox-windows = { workspace = true }
 
 [dev-dependencies]
 a2a-client = { package = "a2a-client-lf", version = "0.2", default-features = false }
+# Same reqwest tree as a2a-client-lf; lets tests hand it a no-proxy client.
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["json"] }
 tempfile = { workspace = true }
 wiremock = "0.6"
 
