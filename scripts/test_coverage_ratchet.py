@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from coverage_ratchet import changed_line_coverage, parse_lcov
+from coverage_ratchet import changed_line_coverage, git_changed_lines, parse_lcov
 
 
 class CoverageRatchetTests(unittest.TestCase):
@@ -47,6 +49,21 @@ end_of_record
         self.assertEqual(covered, 2)
         self.assertAlmostEqual(percent, 200.0 / 3.0)
         self.assertTrue(any("src/foo.rs:2" in d for d in details))
+
+    def test_git_changed_lines_decodes_non_cp1252_diff(self) -> None:
+        # Byte 0x81 is undefined in cp1252 and appears inside UTF-8 text.
+        diff = (
+            b"diff --git a/src/foo.rs b/src/foo.rs\n"
+            b"+++ b/src/foo.rs\n"
+            b"@@ -1 +10 @@\n"
+            b"+// \x81\n"
+        )
+        completed = subprocess.CompletedProcess(
+            args=["git"], returncode=0, stdout=diff, stderr=b""
+        )
+        with patch("coverage_ratchet.subprocess.run", return_value=completed):
+            changed = git_changed_lines("origin/main")
+        self.assertEqual(changed["src/foo.rs"], {10})
 
 
 if __name__ == "__main__":

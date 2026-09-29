@@ -130,6 +130,19 @@ No blockers found in reviewed scope.
 12. `crates/sandbox-linux/src/request.rs`, `crates/sandbox-windows/src/request.rs`  
     Document intentional serialization asymmetry between Linux and Windows request types.
 
+## Status as of 2026-09-29
+
+Re-checked against `main` (`4a90c9e`) while writing [architecture-review/review-2026-09.md](architecture-review/review-2026-09.md). This section does not rewrite the 2026-08-04 findings above.
+
+| Item | Status |
+|------|--------|
+| Warning 2 — cancel stop text matches the duration limit | **Closed.** The cancel arm calls `set_cancel_or_duration_stop`. |
+| Warning 3 — `ToolStart` without `ToolFinish` when a tool call is cancelled | **Closed.** `ToolFinish` is emitted in that arm (`src/agent/loop/engine.rs`, cancel branch of the tool `select!`). |
+| Warning 9 — ACP sessions inserted and never removed | **Closed.** `evict_lru_session_if_needed` in `src/acp/server.rs`. |
+| Suggestion 1 — one Tokio runtime builder for worker and ACP | **Still open.** Now [item 18](architecture-review/18-app-composition-root-hygiene.md); `a2a` grew a third copy of the same builder. |
+
+New findings from that pass are items 13–19 in [architecture-review/README.md](architecture-review/README.md). Warnings 1, 4–8, and 10–15 were not re-verified line by line and stay as written on 2026-08-04.
+
 ## Residual Risk / Test Gaps
 
 - Linux native namespace paths were reviewed statically on this host; runtime Linux validation remains dependent on Linux CI/jobs.
