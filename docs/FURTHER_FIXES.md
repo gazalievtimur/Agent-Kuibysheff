@@ -6,6 +6,14 @@ Roadmap for remaining rust-skills improvements for `agent_Kuibysheff`.
 
 **Last updated:** 2026-07-11
 
+> **Superseded for open work (2026-09-29).** Anything in this file that is not
+> already checked is tracked in [architecture-review/](architecture-review/README.md),
+> starting with the [2026-09-29 review](architecture-review/review-2026-09.md).
+> This document still names `src/main.rs` as the composition root (now `src/app.rs`),
+> `src/agent/loop.rs` (now `src/agent/loop/`), `rust-version = "1.80"` (now `1.88`),
+> and Phase 1.2 boundary errors (done: `provider::Error` / `tool_api::ToolError`).
+> Do not open new work from the unchecked boxes below.
+
 ---
 
 ## Completed (baseline)
