@@ -58,15 +58,25 @@ def load_baseline(path: Path, os_key: str) -> float:
     return float(data[os_key]["min_lines_percent"])
 
 
+def _decode_git_output(data: Optional[bytes]) -> str:
+    """Decode git stdout/stderr as UTF-8.
+
+    ``text=True`` uses the Windows ANSI code page (cp1252 on GitHub-hosted
+    runners). Diff bodies contain the file's raw bytes, so a UTF-8 source byte
+    such as ``0x81`` raises ``UnicodeDecodeError`` in the reader thread and
+    leaves ``CompletedProcess.stdout`` as ``None``.
+    """
+    return (data or b"").decode("utf-8", errors="replace")
+
+
 def git_changed_lines(merge_base_ref: str) -> DefaultDict[str, Set[int]]:
     """Map repo-relative path -> set of added/changed line numbers in the diff."""
     result = subprocess.run(
         ["git", "diff", "--unified=0", f"{merge_base_ref}...HEAD"],
         capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
+        detail = _decode_git_output(result.stderr or result.stdout).strip()
         raise SystemExit(
             f"error: git diff {merge_base_ref}...HEAD failed "
             f"(exit {result.returncode}): {detail}"
@@ -74,7 +84,7 @@ def git_changed_lines(merge_base_ref: str) -> DefaultDict[str, Set[int]]:
     changed: DefaultDict[str, Set[int]] = defaultdict(set)
     path: Optional[str] = None
     hunk = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-    for line in result.stdout.splitlines():
+    for line in _decode_git_output(result.stdout).splitlines():
         if line.startswith("+++ b/"):
             path = line[6:].replace("\\", "/")
             continue
