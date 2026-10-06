@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-07
+
+### Fixed
+
+- Bump `rustls` to 0.23.45 for [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285).
+- VS Code extension: binary fallback looks up `kbshff` after the CLI rename.
+- Coverage ratchet: decode `git diff` output as UTF-8 on Windows.
+- Apply rust-skills remediations for numeric casts, `spawn_blocking` joins, and
+  tool-loop clones; add coverage for seccomp `bpf_prog_len` and home join mapping.
+- A2A server loopback tests: bypass the system HTTP proxy via a typed client.
+
+### Changed
+
+- Split the MCP stdio client into process, registry, and executor modules.
+- Dependency bumps: `rand` 0.10, `sha2` 0.11, `base64` 0.23, `clap`,
+  `agent-client-protocol`, `thiserror`, `rust_decimal`, and related VS Code
+  npm pins / GitHub Actions.
+
+### Added
+
+- Kuibyshev app icon assets and wiring in the VS Code extension.
+- Architecture-review follow-ups from the 2026-09 rust-skills review.
+
 ## [0.2.1] - 2026-09-02
 
 ### Fixed
