@@ -14,7 +14,9 @@ targets = [
 yanked = "warn"
 # vulnerability / unsound / unmaintained use cargo-deny defaults.
 ignore = [
-    # Add RUSTSEC-YYYY-NNNN entries here with a reason and prefer an expiry date.
+    # serde_yaml 0.9 → unsafe-libyaml; no safe upgrade until we migrate parsers
+    # (e.g. serde-saphyr). Issued to the advisory DB 2026-10-12.
+    { id = "RUSTSEC-2024-0449", reason = "blocked on serde_yaml → serde-saphyr migration (revisit by 2026-12-31)" },
 ]
 
 [licenses]
