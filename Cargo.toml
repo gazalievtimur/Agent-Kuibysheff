@@ -23,7 +23,7 @@ publish = false
 [dependencies]
 a2a = { package = "a2a-lf", version = "0.3" }
 a2a-server = { package = "a2a-server-lf", version = "0.4", default-features = false }
-agent-client-protocol = "2.0"
+agent-client-protocol = { version = "3", features = ["stdio"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }

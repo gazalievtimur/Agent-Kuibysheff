@@ -218,9 +218,9 @@ let mut child = Command::new("agent_Kuibysheff")
 - Kuibysheff does **not** implement an AHP host; VS Code already owns that.
 - The official AHP Rust crates (`ahp` / `ahp-ws`) are **clients** to a host and
   are not used here.
-- Protocol version: ACP schema **v1** via `agent-client-protocol` 2.x
-  (`InitializeRequest` / `session/new` / `session/prompt` / `session/cancel` /
-  `session/update`).
+- Protocol version: ACP schema **v1** via `agent-client-protocol` 3.x
+  (`stdio` feature for `Stdio::new()`; `InitializeRequest` / `session/new` /
+  `session/prompt` / `session/cancel` / `session/update`).
 - Each `session/prompt` runs the same worker wiring as `run` (access, sandbox,
   MCP, `AgentEngine`). Deliverables still land under `--home`.
 - `session/new` supplies `cwd`. Effective project root is non-empty session
