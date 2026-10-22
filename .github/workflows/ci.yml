@@ -252,7 +252,7 @@ jobs:
           cargo llvm-cov report --summary-only
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.os }}
           path: lcov.info
@@ -261,7 +261,7 @@ jobs:
       - name: Download main coverage artifact
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@27e4ae67c24b67d3b54bc6d6a45475be1e28031b # v26
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477 # v27
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           workflow: ci.yml
@@ -313,7 +313,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
           cache: npm
