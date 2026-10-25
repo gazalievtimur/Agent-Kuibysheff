@@ -1,0 +1,77 @@
+# Managed by agent_Kuibysheff config
+provider:
+  base_url: https://polza.ai/api/v1
+  model: openai/gpt-4o
+  api_key_env: POLZA_API_KEY
+  api_key: null
+  timeout_ms: 60000
+  max_retries: 3
+  retry_base_delay_ms: 500
+  history:
+    max_tail_messages: 30
+    max_chars: 200000
+mcp: []
+event_mcp:
+  events: {}
+  max_payload_bytes: 1048576
+  max_outcome_bytes: 1048576
+billing:
+  provider_id: openai_compatible
+  currency: USD
+  source_order:
+  - provider_reported
+  - mcp
+  - catalog
+  provider_reported:
+    unit: null
+    json_pointers:
+    - /usage/cost
+    - /usage/response_cost/total_cost
+    headers:
+    - x-litellm-response-cost
+  catalog_path: null
+  mcp: null
+  on_unpriced: continue
+limits:
+  max_iterations: 8
+  max_tokens: 12000
+  max_duration_sec: 120
+  max_cost: null
+logging:
+  enable_ai_log: true
+  enable_mcp_log: true
+  enable_chat_history: false
+  output_dir: ./logs
+  sink:
+    type: file
+    path: null
+  audit_redaction:
+    enabled: true
+    max_string_chars: 4096
+    extra_sensitive_keys: []
+access:
+  mode: strict
+  tools:
+    builtins:
+    - home.list
+    - home.read
+    - home.write
+    - home.run
+    - local_tools.search_docs
+    - local_tools.read_file
+  filesystem:
+    home:
+      read:
+      - in
+      - out
+      write:
+      - out
+    workspace: null
+    input_roots:
+    - ../../../..
+  run:
+    programs: []
+    max_args: 32
+    max_arg_chars: 4096
+    max_output_chars: 200000
+    max_timeout_ms: 120000
