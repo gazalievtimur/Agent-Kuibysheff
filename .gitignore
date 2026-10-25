@@ -59,6 +59,15 @@ agent-config.local.yaml
 # Local secret-scan reports (not committed)
 /local/gitleaks-report.json
 
+# Local test-run logs from integration / live harnesses
+/local/test-run-*.log
+
+# Local RAG index cache (not source)
+/build/rag/
+
+# Agent home run artifacts (manifest/summary under homes/*/out)
+.kuibysheff/homes/*/out/
+
 # Local code-index cache (not source)
 src/.code-index/
 
