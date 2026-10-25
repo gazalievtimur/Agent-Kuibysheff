@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -51,6 +51,8 @@ pub enum CommonError {
     },
     #[error("path `{0}` is a symlink; copy contents only (symlinks are rejected)")]
     SymlinkRejected(String),
+    #[error("{0}")]
+    Message(String),
 }
 
 /// Resolve identity and load config + settings from the protected profile.
@@ -119,6 +121,36 @@ pub fn read_file_no_symlink(path: &Path) -> Result<Vec<u8>, CommonError> {
         path: path.display().to_string(),
         source,
     })
+}
+
+/// Read prompt/rules text from `--text`, `--file`, or stdin.
+///
+/// # Errors
+///
+/// Returns when the source is missing, more than one source is set, or the file cannot be read.
+pub fn read_cli_text(
+    text: Option<&str>,
+    file: Option<&Path>,
+    from_stdin: bool,
+    label: &str,
+) -> Result<String, CommonError> {
+    match (text, file, from_stdin) {
+        (Some(text), None, false) => Ok(text.to_string()),
+        (None, Some(path), false) => read_text_no_symlink(path),
+        (None, None, true) => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|source| CommonError::ReadFile {
+                    path: "stdin".to_string(),
+                    source,
+                })?;
+            Ok(buf)
+        }
+        _ => Err(CommonError::Message(format!(
+            "{label} set requires exactly one of `--text`, `--file`, or `--stdin`"
+        ))),
+    }
 }
 
 /// Read UTF-8 text after rejecting symlinks.

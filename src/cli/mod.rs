@@ -1,8 +1,11 @@
 //! CLI argument parsing with clap subcommands.
 
+mod agent;
 mod check;
 mod config;
 mod init;
+mod mcp;
+mod ui;
 
 use std::path::PathBuf;
 
@@ -10,13 +13,26 @@ use clap::{Parser, Subcommand};
 
 use crate::billing::Money;
 
+/// Where `run` writes live progress events. Stdout stays a single `RunOutput`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum ProgressOutput {
+    /// No progress events.
+    #[default]
+    Off,
+    /// One NDJSON [`crate::agent::ProgressEvent`] per line on stderr.
+    Stderr,
+}
+
+pub use agent::{AgentArgs, AgentCommand, AgentOutCommand};
 pub use check::CheckArgs;
 pub use config::{
-    AccessCmd, BillingCmd, BuiltinsCmd, ConfigArgs, ConfigCommand, ConfigFormat, EventMcpCmd,
-    ImportArgs, LimitsCmd, McpCmd, PromptCmd, ProviderCmd, RulesCmd, SkillCmd, SkillToolsCmd,
-    ToolsCmd,
+    AccessCmd, BillingCmd, BuiltinsCmd, ConfigArgs, ConfigCommand, ConfigFormat, DocumentCmd,
+    EventMcpCmd, ImportArgs, LimitsCmd, McpCmd, PromptCmd, ProviderCmd, RulesCmd, SecretCmd,
+    SkillCmd, SkillToolsCmd, ToolsCmd,
 };
 pub use init::InitArgs;
+pub use mcp::{McpProbeArgs, McpProbeCommand};
+pub use ui::UiArgs;
 
 /// Top-level CLI.
 #[derive(Debug, Parser)]
@@ -45,6 +61,12 @@ pub enum Commands {
     Check(CheckArgs),
     /// Manage agent settings (CRUD) without exposing storage paths.
     Config(ConfigArgs),
+    /// List agents and preview home output files.
+    Agent(AgentArgs),
+    /// Discover or call tools on the agent's saved MCP servers.
+    Mcp(McpProbeArgs),
+    /// Launch the separate studio app when `kbshff-studio` is installed.
+    Ui(UiArgs),
 }
 
 /// Shared identity: project root + agent id (canonical store under `.kuibysheff`).
@@ -97,6 +119,10 @@ pub struct RunArgs {
     /// Persist the full unpruned chat transcript for this run.
     #[arg(long)]
     pub save_chat_history: bool,
+
+    /// Stream progress events. Does not change the stdout `RunOutput` contract.
+    #[arg(long, value_enum, default_value_t = ProgressOutput::Off)]
+    pub progress: ProgressOutput,
 }
 
 /// Arguments for the ACP stdio server (no prompt; IDE drives turns).
@@ -307,6 +333,66 @@ mod tests {
         assert!(rendered.contains("init"), "{rendered}");
         assert!(rendered.contains("check"), "{rendered}");
         assert!(rendered.contains("config"), "{rendered}");
+        assert!(rendered.contains("ui"), "{rendered}");
+    }
+
+    #[test]
+    fn parses_ui_subcommand() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "ui",
+            "--project-root",
+            "/proj",
+            "--bind",
+            "127.0.0.1:8791",
+            "--open",
+        ])
+        .expect("parse ui");
+        let Some(Commands::Ui(args)) = cli.command else {
+            panic!("expected Ui");
+        };
+        assert_eq!(args.project_root, PathBuf::from("/proj"));
+        assert_eq!(args.bind, "127.0.0.1:8791");
+        assert!(args.open);
+    }
+
+    #[test]
+    fn parses_run_progress_stderr_and_agent_list() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "run",
+            "--project-root",
+            "/proj",
+            "--agent",
+            "demo",
+            "--prompt",
+            "work",
+            "--progress",
+            "stderr",
+        ])
+        .expect("parse run progress");
+        let Some(Commands::Run(args)) = cli.command else {
+            panic!("expected Run");
+        };
+        assert_eq!(args.progress, ProgressOutput::Stderr);
+
+        let cli = Cli::try_parse_from([
+            "agent",
+            "agent",
+            "list",
+            "--project-root",
+            "/proj",
+            "--format",
+            "json",
+        ])
+        .expect("parse agent list");
+        let Some(Commands::Agent(args)) = cli.command else {
+            panic!("expected Agent");
+        };
+        let AgentCommand::List(list) = args.command else {
+            panic!("expected list");
+        };
+        assert_eq!(list.format, ConfigFormat::Json);
     }
 
     #[test]

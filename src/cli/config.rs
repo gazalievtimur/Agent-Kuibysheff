@@ -33,6 +33,12 @@ pub enum ConfigCommand {
     Import(ImportArgs),
     /// Show a short profile summary.
     Show,
+    /// Read or replace the whole agent config document (secrets stay redacted).
+    #[command(subcommand)]
+    Document(DocumentCmd),
+    /// Write a profile `.env` secret. The value is read from stdin, not argv.
+    #[command(subcommand)]
+    Secret(SecretCmd),
     #[command(subcommand)]
     Provider(ProviderCmd),
     #[command(subcommand)]
@@ -186,6 +192,31 @@ pub enum EventMcpCmd {
     },
 }
 
+/// `config document` — whole-profile read and secret-preserving write.
+#[derive(Debug, Subcommand)]
+pub enum DocumentCmd {
+    Get,
+    /// Replace the profile from JSON `{ "config": ..., "clear_api_key": bool }` on stdin or `--from-file`.
+    Set {
+        /// JSON file. When omitted, the document is read from stdin.
+        #[arg(long, value_name = "FILE")]
+        from_file: Option<PathBuf>,
+        /// Drop an inline `provider.api_key` even when the body leaves it null.
+        #[arg(long)]
+        clear_api_key: bool,
+    },
+}
+
+/// `config secret` — profile `.env` values.
+#[derive(Debug, Subcommand)]
+pub enum SecretCmd {
+    /// Set `KEY` from stdin (a single trailing newline is stripped).
+    Set {
+        #[arg(long, value_name = "NAME")]
+        key: String,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum SkillCmd {
     List,
@@ -210,6 +241,8 @@ pub enum SkillCmd {
     Remove {
         name: String,
     },
+    /// Replace the catalog from JSON `{ "skills": [...] }` on stdin.
+    Replace,
     #[command(subcommand)]
     Tools(SkillToolsCmd),
 }
@@ -224,10 +257,13 @@ pub enum SkillToolsCmd {
 pub enum PromptCmd {
     Get,
     Set {
-        #[arg(long, conflicts_with = "file")]
+        #[arg(long, conflicts_with_all = ["file", "stdin"])]
         text: Option<String>,
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["text", "stdin"])]
         file: Option<PathBuf>,
+        /// Read the full prompt from stdin.
+        #[arg(long, conflicts_with_all = ["text", "file"])]
+        stdin: bool,
     },
 }
 
@@ -235,10 +271,13 @@ pub enum PromptCmd {
 pub enum RulesCmd {
     Get,
     Set {
-        #[arg(long, conflicts_with = "file")]
+        #[arg(long, conflicts_with_all = ["file", "stdin"])]
         text: Option<String>,
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["text", "stdin"])]
         file: Option<PathBuf>,
+        /// Read the full rules text from stdin.
+        #[arg(long, conflicts_with_all = ["text", "file"])]
+        stdin: bool,
     },
     Clear,
 }

@@ -124,6 +124,8 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         history: agent_Kuibysheff::config::ProviderHistoryConfig::default(),
         cancel: RunCancel::new(),
         events: agent_Kuibysheff::agent::AgentEventTx::noop(),
+        home: std::path::PathBuf::new(),
+        pinned_files: Vec::new(),
     }
 }
 

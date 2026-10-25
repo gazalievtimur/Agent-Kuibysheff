@@ -43,6 +43,8 @@ kbshff run \
   are always denied.
 - `--home` is optional and must be **relative** under `.kuibysheff/` (never under
   `protected/`). Default: `homes/<agent>`. Absolute `--home` is rejected.
+  On start the agent creates grant directories under home (`in`/`out` by default
+  from `access.filesystem.home`); the orchestrator still stages input files.
 - External settings enter the profile only via `config import --from <PATH>`
   (write into protected store, then validate; see `config import` below).
 
@@ -57,6 +59,11 @@ newest `max_tail_messages` turns are kept, and the whole window is capped at
 `max_chars` UTF-8 characters. Defaults are `30` / `200000`. These knobs belong
 with the model because larger context windows need a larger working history;
 they are independent of `limits.max_tokens`.
+`context.pinned_files` lists home-relative paths (for example
+`out/coder_memory.md`) that the engine rereads before every model call into a
+slot just after the system prompt and the goal. That slot is not dropped when
+the tail is pruned. A `home.read` or `home.list` path that is missing
+(`os error 2`) is not called again in the same run.
 `billing` resolves each physical provider attempt through configured
 provider-reported, MCP, and catalog sources. `RunOutput.usage.cost` is always
 present; missing prices are `partial`/`unavailable`, never zero. `max_cost` is
@@ -67,6 +74,11 @@ The `run` process prints exactly one JSON `RunOutput` document to stdout. A
 run-level failure is represented by `stop_reason: "error"` and an error message
 in `result`. In that case the process also exits with a non-zero status
 (stdout still contains the JSON). `goal_reached` and `limit_reached` exit 0.
+`--progress stderr` is off unless the caller sets it. When set, stderr also
+carries one NDJSON progress object per line (`thought`, `message`,
+`usage_summary`, `tool_start`, `tool_finish`, `done`). Orchestrators that do
+not pass the flag keep stderr as diagnostics only. Ctrl+C (and Ctrl+Break on
+Windows) cancels the run and still prints `RunOutput` on stdout.
 Serialize failure of `RunOutput` likewise prints a minimal error JSON and exits
 non-zero. Policy denials and sandbox unavailability are returned as tool-result
 errors (for example `PolicyDenied`, `SandboxUnavailable`) without performing
@@ -451,9 +463,23 @@ Tool calls use `server: "home"`:
 ```json
 {"server":"home","tool":"list","arguments":{"path":"."}}
 {"server":"home","tool":"read","arguments":{"path":"in/src/foo.rs","offset":0,"max_chars":50000}}
-{"server":"home","tool":"write","arguments":{"path":"out/src/foo.rs","content":"..."}}
+{"server":"home","tool":"write","arguments":{"path":"out/notes.md","content":"short text"}}
 {"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"],"timeout_ms":30000}}
 ```
+
+Short files stay in `arguments.content`. BSL, XML, and any text with quotes or longer than a few hundred characters must not be embedded in that string. Set `arguments.body` to `"raw"`, omit `content`, and put the file bytes after the JSON object:
+
+```json
+{"done":false,"thought":"write module","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/src/Module.bsl","body":"raw","mode":"create"}}],"result":null}
+```
+
+```text
+<<<FILE
+file bytes, not JSON-escaped
+FILE>>>
+```
+
+`mode` is `create` (replace the file; the default) or `append` (add to the same path). A reply whose raw body is missing the closing `FILE>>>` is not written. The next turn resends only the remaining bytes with `mode` `append`. `content` and `body: "raw"` together are rejected. One `home.write` per turn.
 
 Paths for `list` / `read` / `write` must be relative, cannot contain `..`, and
 are checked after filesystem canonicalization. Symlinks that resolve outside

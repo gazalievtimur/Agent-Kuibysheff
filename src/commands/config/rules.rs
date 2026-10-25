@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli::{ConfigArgs, RulesCmd};
 use crate::settings::{clear_rules, write_rules};
 
-use super::common::{load_profile, read_text_no_symlink};
+use super::common::{load_profile, read_cli_text};
 use super::{emit_ok, ConfigCmdError};
 
 #[derive(Debug, Serialize)]
@@ -26,21 +26,8 @@ pub fn run(args: &ConfigArgs, cmd: &RulesCmd) -> Result<(), ConfigCmdError> {
                 },
             )
         }
-        RulesCmd::Set { text, file } => {
-            let content = match (text.as_ref(), file.as_ref()) {
-                (Some(t), None) => (*t).clone(),
-                (None, Some(path)) => read_text_no_symlink(path)?,
-                (Some(_), Some(_)) => {
-                    return Err(ConfigCmdError::message(
-                        "rules set: pass either `--text` or `--file`, not both",
-                    ));
-                }
-                (None, None) => {
-                    return Err(ConfigCmdError::message(
-                        "rules set requires `--text` or `--file`",
-                    ));
-                }
-            };
+        RulesCmd::Set { text, file, stdin } => {
+            let content = read_cli_text(text.as_deref(), file.as_deref(), *stdin, "rules")?;
             let profile = load_profile(&args.identity)?;
             write_rules(&profile.paths.settings_dir, &content)?;
             emit_ok(args.format, "rules", "set", &RulesView { rules: content })

@@ -56,6 +56,7 @@ pub fn build_runtime_rules(
 
     if effective.allows_server_tool("home", "write") {
         lines.push("- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.".to_string());
+        lines.push("- Put short files in home.write arguments.content. Put BSL, XML, and any text with quotes or longer than a few hundred characters in a raw <<<FILE body after the JSON object (arguments.body = \"raw\"). One home.write per turn.".to_string());
     }
 
     lines.push("- When the goal is achieved, return done=true and fill `result`.".to_string());
@@ -80,6 +81,10 @@ fn prompt_line_for(
                 descriptor.name
             ))
         }
+        BuiltinPrompt::HomeWrite => Some(
+            "- home.write {\"path\":\"out/file.md\",\"content\":\"short text\"} for a short file. For BSL, XML, or any text with quotes or longer than a few hundred characters, omit content and use {\"path\":\"out/src/Module.bsl\",\"body\":\"raw\",\"mode\":\"create\"}. After the JSON object write <<<FILE, a newline, the file bytes, a newline, and FILE>>>. Use mode append when a previous raw body was cut off."
+                .to_string(),
+        ),
         BuiltinPrompt::HomeRead => Some(format!(
             "- {} {{\"path\":\"relative/path\",\"offset\":0,\"max_chars\":50000}}. Reads a character window from the agent home directory. If truncated, continue with next_offset.",
             descriptor.name
@@ -161,6 +166,10 @@ mod tests {
         assert!(rules.contains("home.list"));
         assert!(rules.contains("home.read"));
         assert!(rules.contains("home.write"));
+        assert!(
+            rules.contains("<<<FILE"),
+            "home.write must teach the raw file body: {rules}"
+        );
         assert!(rules.contains("local_tools.search_docs"));
         assert!(rules.contains("local_tools.read_file"));
         assert!(!rules.contains("home.run"));
@@ -191,7 +200,9 @@ mod tests {
                 BuiltinPrompt::StaticArgs(args) => {
                     assert!(args.starts_with('{'), "static args for {}", descriptor.name);
                 }
-                BuiltinPrompt::HomeRead | BuiltinPrompt::WorkspaceReadFile => {}
+                BuiltinPrompt::HomeRead
+                | BuiltinPrompt::HomeWrite
+                | BuiltinPrompt::WorkspaceReadFile => {}
                 BuiltinPrompt::HomeRun => {
                     panic!("home.run should set requires_programs");
                 }

@@ -72,6 +72,17 @@ pub struct AppConfig {
     /// enforcement is fail-closed (anything not listed is denied).
     #[serde(default)]
     pub access: Option<AccessPolicyConfig>,
+    /// Files reread into a history slot that pruning does not drop.
+    #[serde(default)]
+    pub context: ContextConfig,
+}
+
+/// Operator-selected files kept in the model window across history pruning.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ContextConfig {
+    /// Paths relative to the agent home, for example `out/coder_memory.md`.
+    pub pinned_files: Vec<String>,
 }
 
 /// Monetary accounting configuration. An omitted section still emits an
@@ -710,6 +721,7 @@ pub fn bootstrap_app_config() -> AppConfig {
             ..Default::default()
         },
         access: Some(AccessPolicyConfig::minimal_profile()),
+        context: ContextConfig::default(),
     }
 }
 
@@ -1120,7 +1132,14 @@ mod tests {
                 ..Default::default()
             },
             access: Some(AccessPolicyConfig::default()),
+            context: ContextConfig::default(),
         }
+    }
+
+    #[test]
+    fn context_pinned_files_default_to_empty() {
+        let cfg = sample_config();
+        assert!(cfg.context.pinned_files.is_empty());
     }
 
     #[test]

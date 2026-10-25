@@ -27,6 +27,16 @@ pub struct McpIsolationContext {
     pub agent_id: String,
 }
 
+/// One tool from a live `tools/list` response (includes schema when the server sends it).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpToolDescriptor {
+    pub server: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub input_schema: Value,
+}
+
 /// Connected MCP servers and their discovered tools.
 ///
 /// Prefer [`McpRegistry::shutdown`] over dropping: drop only closes actor channels
@@ -229,7 +239,12 @@ impl McpRegistry {
         self.call_discovered_tool(server, tool, arguments).await
     }
 
-    pub(super) async fn call_discovered_tool(
+    /// Invokes a previously discovered tool via `tools/call`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownServer`], [`Error::UnknownTool`], or transport errors.
+    pub(crate) async fn call_discovered_tool(
         &self,
         server: &str,
         tool: &str,
@@ -256,6 +271,40 @@ impl McpRegistry {
                 }),
             )
             .await
+    }
+
+    /// Re-fetches `tools/list` and returns name/description/`inputSchema` per tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns transport errors from any connected server.
+    pub(crate) async fn list_tool_descriptors(&self) -> Result<Vec<McpToolDescriptor>, Error> {
+        let mut out = Vec::new();
+        for (server, handle) in &self.servers {
+            let response = handle.client.request("tools/list", json!({})).await?;
+            let Some(tools) = response.get("tools").and_then(Value::as_array) else {
+                continue;
+            };
+            for entry in tools {
+                let Some(name) = entry.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                out.push(McpToolDescriptor {
+                    server: server.clone(),
+                    name: name.to_string(),
+                    description: entry
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    input_schema: entry
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or_else(|| json!({ "type": "object" })),
+                });
+            }
+        }
+        out.sort_by(|a, b| (&a.server, &a.name).cmp(&(&b.server, &b.name)));
+        Ok(out)
     }
 
     /// Test helper: registry with one server whose every request returns `result`.

@@ -8,7 +8,7 @@ pub(crate) mod run_cancel;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use events::{AgentEvent, AgentEventTx};
+pub use events::{write_progress_line, AgentEvent, AgentEventTx, ProgressEvent};
 pub use r#loop::{AgentEngine, AgentError, AgentRunRequest};
 pub use run_cancel::RunCancel;
 

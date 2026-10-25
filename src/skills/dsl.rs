@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::access::QualifiedTool;
@@ -23,7 +23,7 @@ pub enum SkillsError {
     Parse(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillDefinition {
     pub name: String,
     pub policy: String,

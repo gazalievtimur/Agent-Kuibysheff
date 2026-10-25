@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::access::{parse_tool_list, AccessMode, EffectiveToolPolicy};
@@ -33,7 +34,8 @@ pub enum CheckError {
 }
 
 /// Outcome of one resource probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Ok,
     Fail,
@@ -51,7 +53,7 @@ impl fmt::Display for CheckStatus {
 }
 
 /// One named probe result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CheckItem {
     pub name: String,
     pub status: CheckStatus,
@@ -59,7 +61,7 @@ pub struct CheckItem {
 }
 
 /// Aggregate report for `check`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CheckReport {
     pub config_path: String,
     pub items: Vec<CheckItem>,
@@ -68,7 +70,7 @@ pub struct CheckReport {
 }
 
 /// Snapshot of configured and discovered resources.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct ResourceInventory {
     /// Built-in tools allowed by the access policy (qualified names).
     pub builtins_allowed: Vec<String>,
@@ -83,7 +85,7 @@ pub struct ResourceInventory {
 }
 
 /// One successfully connected MCP server.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct McpInventory {
     pub name: String,
     pub transport: String,
@@ -137,7 +139,12 @@ pub fn run(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     runtime.block_on(run_async(args))
 }
 
-async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
+/// Async entry for hosts that already own a Tokio runtime.
+///
+/// # Errors
+///
+/// Same as [`run`].
+pub async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     let paths = resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)?;
     let config_path = paths.config.clone();
     let settings_dir = paths.settings_dir.clone();
@@ -649,6 +656,7 @@ mod tests {
             skip_provider: true,
             skip_mcp: true,
             skip_sandbox: true,
+            format: crate::cli::ConfigFormat::Text,
         }
     }
 

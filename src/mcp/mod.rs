@@ -15,7 +15,7 @@ use crate::tool_api::{ExternalToolError, ToolError};
 
 pub use crate::tool_api::ToolExecutor;
 pub use oauth::BearerChallenge;
-pub use stdio_client::{McpIsolationContext, McpRegistry};
+pub use stdio_client::{McpIsolationContext, McpRegistry, McpToolDescriptor};
 
 /// MCP-specific error (JSON-RPC, transport, OAuth, server lifecycle).
 #[derive(Debug, Error)]

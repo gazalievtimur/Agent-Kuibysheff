@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +11,7 @@ use tracing::{info, instrument, warn};
 use super::directive::{
     approx_json_object_count, content_preview, parse_directive, ToolCallDirective,
 };
-use super::history::{prune_message_history, push_message};
+use super::history::{prune_message_history, push_message, HISTORY_PREFIX_LEN};
 use crate::access::QualifiedTool;
 use crate::agent::{generate_run_id, AgentEvent, AgentEventTx, RunCancel};
 use crate::billing::{BillingError, CostResolverChain, RunCostReport, RunCostTracker};
@@ -20,6 +22,13 @@ use crate::logging::{Loggers, LoggingError};
 use crate::output::{RunOutput, StopReason, UsageReport};
 use crate::provider::{ChatMessage, ChatRole, ModelClient};
 use crate::tool_api::ToolExecutor;
+
+const REJECTED_ASSISTANT: &str =
+    r#"{"done":false,"thought":"previous reply was not executed","tool_calls":[],"result":null}"#;
+const MODEL_TOOL_RESULT_MAX_CHARS: usize = 32_000;
+const PINNED_MAX_CHARS: usize = 12_000;
+const PINNED_HEADER: &str =
+    "Pinned files (refreshed each turn; do not re-read a path listed here):";
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -49,6 +58,10 @@ pub struct AgentRunRequest {
     pub cancel: RunCancel,
     /// Optional progress sink (ACP streaming); no-op for CLI `run`.
     pub events: AgentEventTx,
+    /// Agent home used to refresh [`Self::pinned_files`] each turn.
+    pub home: PathBuf,
+    /// Relative home paths kept in a history slot that pruning does not drop.
+    pub pinned_files: Vec<String>,
 }
 
 pub struct AgentEngine {
@@ -130,6 +143,8 @@ impl AgentEngine {
             history,
             cancel,
             events,
+            home,
+            pinned_files,
         } = request;
 
         let available_tools = self.tools.available_tools();
@@ -152,11 +167,17 @@ impl AgentEngine {
         let mut final_result = String::new();
         let mut stop_reason = StopReason::LimitReached;
         let mut diag = RunDiagnostics::default();
+        let mut absent_paths: HashSet<String> = HashSet::new();
+        let model_prefix = HISTORY_PREFIX_LEN.saturating_add(usize::from(!pinned_files.is_empty()));
 
         // Align hard deadline with RunMetrics wall clock (not composition-root setup time).
         cancel.arm_deadline(Duration::from_secs(limits.max_duration_sec));
 
         loop {
+            if !pinned_files.is_empty() {
+                let pinned = load_pinned_message(&home, &pinned_files);
+                upsert_pinned_message(&mut messages, &pinned);
+            }
             if should_stop_for_duration(&metrics, &limits, &mut final_result, &mut stop_reason) {
                 break;
             }
@@ -354,7 +375,7 @@ impl AgentEngine {
                 break;
             }
 
-            let directive = match parse_directive(&completion.content) {
+            let parsed = match parse_directive(&completion.content) {
                 Ok(v) => v,
                 Err(err) => {
                     diag.parse_failures = diag.parse_failures.saturating_add(1);
@@ -393,7 +414,7 @@ impl AgentEngine {
                     push_message(
                         &mut messages,
                         &mut full_history,
-                        ChatMessage::new(ChatRole::Assistant, completion.content),
+                        ChatMessage::new(ChatRole::Assistant, REJECTED_ASSISTANT.to_string()),
                         &history,
                     );
                     push_message(
@@ -403,21 +424,22 @@ impl AgentEngine {
                             ChatRole::User,
                             json!({
                                 "parse_error": err.to_string(),
-                                "hint": "Respond with exactly one JSON object only. Previous turn was not executed. No markdown fences. Required shape: {\"done\": bool, \"thought\": string, \"tool_calls\": [...], \"result\": string|null}"
+                                "hint": err.hint()
                             })
                             .to_string(),
                         ),
                         &history,
                     );
-                    prune_message_history(&mut messages, &history);
+                    prune_message_history(&mut messages, &history, model_prefix);
                     continue;
                 }
             };
+            let directive = parsed.directive;
 
             push_message(
                 &mut messages,
                 &mut full_history,
-                ChatMessage::new(ChatRole::Assistant, completion.content),
+                ChatMessage::new(ChatRole::Assistant, parsed.json_text),
                 &history,
             );
 
@@ -482,11 +504,64 @@ impl AgentEngine {
                             ),
                             &history,
                         );
-                        prune_message_history(&mut messages, &history);
+                        prune_message_history(&mut messages, &history, model_prefix);
                         continue;
                     }
                 };
                 let qualified_tool = qualified.qualified();
+                let tracked_path = home_read_path(&server, &tool, &arguments);
+                if let Some(path) = tracked_path.as_deref() {
+                    if absent_paths.contains(path) {
+                        let error = format!(
+                            "path `{path}` is already absent in this run; do not read it again"
+                        );
+                        warn!(
+                            iteration,
+                            tool = %qualified_tool,
+                            %error,
+                            "skipping repeat read of a missing path"
+                        );
+                        self.log_tool_event(
+                            "tool_call_failed",
+                            json!({
+                                "iteration": iteration,
+                                "server": server,
+                                "tool": tool,
+                                "ok": false,
+                                "error": error,
+                            }),
+                        )
+                        .await;
+                        events.emit(AgentEvent::ToolStart {
+                            id: tool_call_id.clone(),
+                            server: server.clone(),
+                            tool: tool.clone(),
+                            arguments: arguments.clone(),
+                        });
+                        events.emit(AgentEvent::ToolFinish {
+                            id: tool_call_id,
+                            ok: false,
+                            output: json!({ "error": error }),
+                        });
+                        push_message(
+                            &mut messages,
+                            &mut full_history,
+                            ChatMessage::new(
+                                ChatRole::User,
+                                model_tool_result(json!({
+                                    "tool_result": {
+                                        "server": server,
+                                        "tool": tool,
+                                        "error": error
+                                    }
+                                })),
+                            ),
+                            &history,
+                        );
+                        prune_message_history(&mut messages, &history, model_prefix);
+                        continue;
+                    }
+                }
 
                 self.log_tool_event(
                     "tool_call_started",
@@ -542,6 +617,11 @@ impl AgentEngine {
                 let tool_response = match tool_response {
                     Ok(value) => value,
                     Err(err) => {
+                        if err.to_string().contains("os error 2") {
+                            if let Some(path) = tracked_path.clone() {
+                                absent_paths.insert(path);
+                            }
+                        }
                         warn!(
                             iteration,
                             tool = %qualified_tool,
@@ -569,18 +649,17 @@ impl AgentEngine {
                             &mut full_history,
                             ChatMessage::new(
                                 ChatRole::User,
-                                json!({
+                                model_tool_result(json!({
                                     "tool_result": {
                                         "server": server,
                                         "tool": tool,
                                         "error": err.to_string()
                                     }
-                                })
-                                .to_string(),
+                                })),
                             ),
                             &history,
                         );
-                        prune_message_history(&mut messages, &history);
+                        prune_message_history(&mut messages, &history, model_prefix);
                         continue;
                     }
                 };
@@ -627,18 +706,17 @@ impl AgentEngine {
                     &mut full_history,
                     ChatMessage::new(
                         ChatRole::User,
-                        json!({
+                        model_tool_result(json!({
                             "tool_result": {
                                 "server": server,
                                 "tool": tool,
                                 "result": tool_response
                             }
-                        })
-                        .to_string(),
+                        })),
                     ),
                     &history,
                 );
-                prune_message_history(&mut messages, &history);
+                prune_message_history(&mut messages, &history, model_prefix);
             }
 
             if stop_reason == StopReason::LimitReached && !final_result.is_empty() {
@@ -663,7 +741,7 @@ impl AgentEngine {
                 break;
             }
 
-            prune_message_history(&mut messages, &history);
+            prune_message_history(&mut messages, &history, model_prefix);
         }
 
         if !final_result.is_empty()
@@ -867,6 +945,94 @@ fn decode_run_before_output(payload: Value) -> Result<String, EventMcpError> {
         })
 }
 
+fn home_read_path(server: &str, tool: &str, arguments: &Value) -> Option<String> {
+    if server != "home" || (tool != "read" && tool != "list") {
+        return None;
+    }
+    arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .map(normalize_home_path)
+}
+
+fn normalize_home_path(path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(rest) = normalized.strip_prefix("./") {
+        normalized = rest.to_string();
+    }
+    if normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
+}
+
+fn model_tool_result(payload: Value) -> String {
+    truncate_chars(&payload.to_string(), MODEL_TOOL_RESULT_MAX_CHARS)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    const MARKER: &str = "\n...[truncated for model context]";
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let keep = max_chars.saturating_sub(MARKER.chars().count());
+    let mut out: String = text.chars().take(keep).collect();
+    out.push_str(MARKER);
+    out
+}
+
+fn upsert_pinned_message(messages: &mut Vec<ChatMessage>, text: &str) {
+    let message = ChatMessage::new(ChatRole::User, text.to_string());
+    if messages.len() > HISTORY_PREFIX_LEN
+        && messages[HISTORY_PREFIX_LEN]
+            .content
+            .as_ref()
+            .starts_with(PINNED_HEADER)
+    {
+        messages[HISTORY_PREFIX_LEN] = message;
+    } else {
+        messages.insert(HISTORY_PREFIX_LEN, message);
+    }
+}
+
+fn load_pinned_message(home: &Path, files: &[String]) -> String {
+    let mut out = String::from(PINNED_HEADER);
+    out.push('\n');
+    for relative in files {
+        out.push('\n');
+        out.push_str("--- ");
+        out.push_str(relative);
+        out.push_str(" ---\n");
+        if !is_safe_relative(relative) {
+            out.push_str("(skipped: path must be relative and stay inside home)\n");
+            continue;
+        }
+        match std::fs::read_to_string(home.join(relative)) {
+            Ok(text) => out.push_str(&text),
+            Err(_) => out.push_str("(absent)\n"),
+        }
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if out.chars().count() >= PINNED_MAX_CHARS {
+            break;
+        }
+    }
+    truncate_chars(&out, PINNED_MAX_CHARS)
+}
+
+fn is_safe_relative(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return false;
+    }
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_)))
+}
+
 fn build_user_message(
     prompt: &str,
     input_files_context: &str,
@@ -878,7 +1044,7 @@ fn build_user_message(
         format!("Attached input files (read-only context):\n{input_files_context}")
     };
     format!(
-        "Goal: {prompt}\n\n{attached_files}\n\nAvailable tools: {tools}\n\nRespond with JSON only. No markdown fences. No text outside JSON.\n\nRequired response shape:\n{{\"done\": bool, \"thought\": string, \"tool_calls\": [{{\"server\":\"home\", \"tool\":\"write\", \"arguments\": {{\"path\":\"out/file.md\", \"content\":\"...\"}}}}], \"result\": string|null}}\n\nRules:\n- Use done=false and tool_calls while files still need to be written.\n- Use server=\"home\" for filesystem tools.\n- Set done=true only after required files were written.\n- Never describe tool calls in plain text.",
+        "Goal: {prompt}\n\n{attached_files}\n\nAvailable tools: {tools}\n\nRespond with one JSON object. No markdown fences.\n\nRequired response shape:\n{{\"done\": bool, \"thought\": string, \"tool_calls\": [{{\"server\":\"home\", \"tool\":\"write\", \"arguments\": {{\"path\":\"out/file.md\", \"content\":\"short text\"}}}}], \"result\": string|null}}\n\nFor BSL, XML, or any file with quotes or longer than a few hundred characters, omit content and set \"body\":\"raw\". The only text allowed after the JSON object is the file itself:\n<<<FILE\nfile bytes\nFILE>>>\nUse \"mode\":\"append\" to continue a file whose previous raw body was cut off. Do not put that file text inside the JSON string.\n\nRules:\n- Use done=false and tool_calls while files still need to be written.\n- Use server=\"home\" for filesystem tools.\n- One home.write per turn.\n- Set done=true only after required files were written.\n- Never describe tool calls in plain text.",
         tools = available_tools.join(", ")
     )
 }
@@ -1189,6 +1355,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1231,6 +1399,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1272,6 +1442,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1325,6 +1497,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1385,6 +1559,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1434,6 +1610,8 @@ mod tests {
                 history: test_history(),
                 cancel: RunCancel::new(),
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1486,6 +1664,8 @@ mod tests {
                 history: test_history(),
                 cancel,
                 events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1526,6 +1706,8 @@ mod tests {
                 history: test_history(),
                 cancel,
                 events: crate::agent::AgentEventTx::from_sender(tx),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
             })
             .await;
 
@@ -1548,5 +1730,261 @@ mod tests {
         assert_eq!(output.result, "Execution cancelled by user");
         assert!(saw_tool_start);
         assert!(saw_cancelled_tool_finish);
+    }
+
+    struct ContentTools {
+        content: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for ContentTools {
+        async fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            arguments: Value,
+        ) -> Result<Value, crate::tool_api::ToolError> {
+            if let Some(text) = arguments.get("content").and_then(Value::as_str) {
+                *self.content.lock().expect("content") = Some(text.to_string());
+            }
+            Ok(json!({"ok": true}))
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            vec!["home.write".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_file_body_is_passed_as_write_content() {
+        let raw = concat!(
+            r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/src/Module.bsl","body":"raw"}}],"result":null}"#,
+            "\n<<<FILE\n",
+            "Сообщить(\"ok\");\n",
+            "FILE>>>\n",
+        );
+        let tools = Arc::new(ContentTools {
+            content: std::sync::Mutex::new(None),
+        });
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![
+                raw.to_string(),
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"wrote"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let engine = AgentEngine::new(provider, tools.clone(), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "write".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+            })
+            .await;
+
+        assert_eq!(output.result, "wrote");
+        assert_eq!(
+            tools.content.lock().expect("content").as_deref(),
+            Some("Сообщить(\"ok\");")
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_reply_is_not_copied_into_the_next_prompt() {
+        let secret = "UNIQUE_SECRET_BODY_SHOULD_NOT_ECHO";
+        let broken = format!(
+            "{{\"done\":false,\"thought\":\"{secret}\",\"tool_calls\":[{{\"server\":\"home\",\"tool\":\"write\",\"arguments\":{{\"path\":\"out/a.bsl\",\"content\":\"{secret}\n\"}}}}],\"result\":null}}"
+        );
+        let provider = Arc::new(RecordingProvider {
+            responses: vec![
+                broken,
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"done"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine = AgentEngine::new(provider.clone(), Arc::new(NoopTools), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "write".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+            })
+            .await;
+
+        assert_eq!(output.result, "done");
+        let seen = provider.seen_messages.lock().expect("seen");
+        let second = seen[1]
+            .iter()
+            .map(|message| message.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!second.contains(secret));
+        assert!(second.contains("parse_error"));
+    }
+
+    struct MissingTools {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for MissingTools {
+        async fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            _arguments: Value,
+        ) -> Result<Value, crate::tool_api::ToolError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(crate::tool_api::ToolError::HomeFs(
+                crate::tool_api::HomeFsError::Io {
+                    operation: "canonicalize".to_string(),
+                    path: "in/missing.md".to_string(),
+                    source: std::io::Error::from_raw_os_error(2),
+                },
+            ))
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            vec!["home.read".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_path_is_not_read_twice() {
+        let read = r#"{"done":false,"thought":"read","tool_calls":[{"server":"home","tool":"read","arguments":{"path":"in/missing.md"}}],"result":null}"#;
+        let tools = Arc::new(MissingTools {
+            calls: AtomicUsize::new(0),
+        });
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![
+                read.to_string(),
+                read.to_string(),
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"stop"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let engine = AgentEngine::new(provider, tools.clone(), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "read".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+            })
+            .await;
+
+        assert_eq!(output.result, "stop");
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+    }
+
+    struct HugeTools;
+
+    #[async_trait]
+    impl ToolExecutor for HugeTools {
+        async fn call_tool(
+            &self,
+            _server: &str,
+            _tool: &str,
+            _arguments: Value,
+        ) -> Result<Value, crate::tool_api::ToolError> {
+            Ok(json!({ "blob": "x".repeat(40_000) }))
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            vec!["home.read".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_result_in_model_history_is_truncated() {
+        let provider = Arc::new(RecordingProvider {
+            responses: vec![
+                r#"{"done":false,"thought":"read","tool_calls":[{"server":"home","tool":"read","arguments":{"path":"in/big.txt"}}],"result":null}"#.to_string(),
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"done"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine = AgentEngine::new(provider.clone(), Arc::new(HugeTools), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "read".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+            })
+            .await;
+
+        assert_eq!(output.result, "done");
+        let seen = provider.seen_messages.lock().expect("seen");
+        let second = seen[1]
+            .iter()
+            .map(|message| message.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(second.contains("truncated for model context"));
+        assert!(second.chars().count() < 40_000);
+    }
+
+    #[tokio::test]
+    async fn pinned_file_is_on_the_first_turn() {
+        let dir = tempfile::tempdir().expect("temp");
+        std::fs::create_dir(dir.path().join("out")).expect("out");
+        std::fs::write(dir.path().join("out/coder_memory.md"), "inputs_read: yes").expect("mem");
+        let provider = Arc::new(RecordingProvider {
+            responses: vec![
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"done"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine = AgentEngine::new(provider.clone(), Arc::new(NoopTools), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "go".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: dir.path().to_path_buf(),
+                pinned_files: vec!["out/coder_memory.md".to_string()],
+            })
+            .await;
+
+        assert_eq!(output.result, "done");
+        let seen = provider.seen_messages.lock().expect("seen");
+        let first = seen[0]
+            .iter()
+            .map(|message| message.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(first.contains("inputs_read: yes"));
     }
 }

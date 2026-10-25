@@ -1,5 +1,6 @@
 use clap::Parser;
 
+use super::config::ConfigFormat;
 use super::AgentIdentityArgs;
 
 /// Arguments for checking configured agent resources.
@@ -19,4 +20,8 @@ pub struct CheckArgs {
     /// Skip the OS sandbox availability probe.
     #[arg(long)]
     pub skip_sandbox: bool,
+
+    /// `json` prints the [`crate::commands::check::CheckReport`] document.
+    #[arg(long, value_enum, default_value_t = ConfigFormat::Text)]
+    pub format: ConfigFormat,
 }

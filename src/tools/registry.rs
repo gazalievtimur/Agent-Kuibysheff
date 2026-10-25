@@ -19,6 +19,8 @@ pub enum BuiltinPrompt {
     HomeRun,
     /// `home.read` — windowed home file read with next_offset pagination.
     HomeRead,
+    /// `home.write` — short `content` or a raw body after the JSON object.
+    HomeWrite,
     /// `local_tools.read_file` — example mentions the workspace root.
     WorkspaceReadFile,
 }
@@ -76,12 +78,12 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "home.write",
         server: "home",
         tool: "write",
-        description: "Write a file under the agent home directory.",
-        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}"#,
+        description: "Write a file under the agent home directory. Short text goes in content. BSL, XML, and any text with quotes or longer than a few hundred characters uses body \"raw\" plus a <<<FILE block after the JSON object. mode is create (default) or append.",
+        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"body":{"type":"string","enum":["raw"]},"mode":{"type":"string","enum":["create","append"]}},"required":["path"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::Home,
-        prompt: BuiltinPrompt::StaticArgs(r#"{"path":"relative/path","content":"..."}"#),
+        prompt: BuiltinPrompt::HomeWrite,
     },
     ToolDescriptor {
         name: "home.run",

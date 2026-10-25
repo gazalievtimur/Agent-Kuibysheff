@@ -4,7 +4,7 @@
 //! but it is **not** part of the stable library facade for downstream dependents.
 
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -17,12 +17,17 @@ use crate::access::{
     WorkspaceFsPolicy,
 };
 use crate::acp;
-use crate::agent::{generate_run_id, AgentEngine, AgentEventTx, AgentRunRequest, RunCancel};
+use crate::agent::{
+    generate_run_id, write_progress_line, AgentEngine, AgentEventTx, AgentRunRequest,
+    ProgressEvent, RunCancel,
+};
 use crate::billing::{
     CatalogCostResolver, CostResolver, CostResolverChain, McpCostResolver, Money, PricingCatalog,
     ProviderReportedCostResolver, UnavailableCostResolver,
 };
-use crate::cli::{A2aArgs, AcpArgs, Cli, Commands, RunArgs};
+use crate::cli::{
+    A2aArgs, AcpArgs, AgentCommand, Cli, Commands, ConfigFormat, ProgressOutput, RunArgs, UiArgs,
+};
 use crate::commands;
 use crate::config::{
     apply_limit_overrides, load_config, load_dotenv_layered, validate, AppConfig, BillingSource,
@@ -93,7 +98,7 @@ impl TryFrom<RunArgs> for AgentPromptArgs {
     }
 }
 
-/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `a2a` / `config` / wizard.
+/// Parse CLI args and dispatch to `run` / `init` / `check` / `acp` / `a2a` / `config` / `ui` / wizard.
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
@@ -146,7 +151,20 @@ pub fn run() -> ExitCode {
                 .ok()
                 .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
         }
-        Commands::Init(_) => None,
+        Commands::Init(_) | Commands::Ui(_) => None,
+        Commands::Agent(args) => match &args.command {
+            AgentCommand::List(_) => None,
+            AgentCommand::Out(out) => {
+                resolve_agent_identity(&out.identity.project_root, &out.identity.agent, None)
+                    .ok()
+                    .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
+            }
+        },
+        Commands::Mcp(args) => {
+            resolve_agent_identity(&args.identity.project_root, &args.identity.agent, None)
+                .ok()
+                .map(|p| resolve_config_path_for_dotenv(&p.config, &launch_cwd))
+        }
     };
     // Precedence: process env > config-dir .env > launch CWD .env
     load_dotenv_layered(resolved_config_env.as_deref());
@@ -167,7 +185,14 @@ pub fn run() -> ExitCode {
         },
         Commands::Check(args) => match commands::check::run(&args) {
             Ok(report) => {
-                commands::check::print_report(&report);
+                if args.format == ConfigFormat::Json {
+                    if let Err(err) = commands::print_json(&report) {
+                        eprintln!("error: failed to write check JSON: {err}");
+                        return ExitCode::FAILURE;
+                    }
+                } else {
+                    commands::check::print_report(&report);
+                }
                 if report.all_passed() {
                     ExitCode::SUCCESS
                 } else {
@@ -186,10 +211,26 @@ pub fn run() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Commands::Agent(args) => match commands::agent::run(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Commands::Mcp(args) => match commands::mcp_probe::run(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        Commands::Ui(args) => run_ui(args),
     }
 }
 
 fn run_worker(args: RunArgs) -> ExitCode {
+    let progress = args.progress;
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -201,15 +242,50 @@ fn run_worker(args: RunArgs) -> ExitCode {
         }
     };
 
-    let prompt_args = match AgentPromptArgs::try_from(args) {
+    let mut prompt_args = match AgentPromptArgs::try_from(args) {
         Ok(a) => a,
         Err(err) => {
             eprintln!("error: {err:#}");
             return ExitCode::FAILURE;
         }
     };
+    let cancel = RunCancel::new();
+    prompt_args.cancel = cancel.clone();
+    let progress_rx = if progress == ProgressOutput::Stderr {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        prompt_args.events = AgentEventTx::from_sender(tx);
+        Some(rx)
+    } else {
+        None
+    };
 
-    let output = match runtime.block_on(run_agent_prompt(prompt_args)) {
+    let output = match runtime.block_on(async move {
+        let progress_task = progress_rx.map(|mut rx| {
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    write_progress_line(&ProgressEvent::from(&event));
+                }
+                write_progress_line(&ProgressEvent::Done);
+            })
+        });
+        let run = run_agent_prompt(prompt_args);
+        tokio::pin!(run);
+        let mut interrupt = std::pin::pin!(wait_for_interrupt());
+        let mut interrupt_seen = false;
+        let result = loop {
+            tokio::select! {
+                result = &mut run => break result,
+                _ = &mut interrupt, if !interrupt_seen => {
+                    cancel.cancel();
+                    interrupt_seen = true;
+                }
+            }
+        };
+        if let Some(task) = progress_task {
+            let _ = task.await;
+        }
+        result
+    }) {
         Ok(out) => out,
         Err(err) => RunOutput::error(format!("{err:#}")),
     };
@@ -225,6 +301,37 @@ fn run_worker(args: RunArgs) -> ExitCode {
                 "{{\"run_id\":\"serialization-error\",\"result\":\"failed to serialize output\",\"usage\":{{\"iterations\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"elapsed_ms\":0,\"cost\":{{\"status\":\"unavailable\",\"known_total\":null,\"priced_requests\":0,\"unpriced_requests\":0,\"budget_status\":\"not_configured\",\"requests\":[]}}}},\"stop_reason\":\"error\",\"logs\":{{\"ai_log\":null,\"mcp_log\":null,\"system_log\":null,\"chat_log\":null}}}}"
             );
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Ctrl+C cancels the run. On Windows, Ctrl+Break does too so a parent process
+/// group can interrupt `kbshff run` without killing the console's other processes.
+async fn wait_for_interrupt() {
+    #[cfg(windows)]
+    {
+        let ctrl_c = tokio::signal::ctrl_c();
+        let ctrl_break = async {
+            match tokio::signal::windows::ctrl_break() {
+                Ok(mut signal) => {
+                    let _ = signal.recv().await;
+                }
+                Err(_) => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            result = ctrl_c => {
+                if result.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            () = ctrl_break => {}
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
         }
     }
 }
@@ -270,6 +377,63 @@ fn run_a2a(args: A2aArgs) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn run_ui(args: UiArgs) -> ExitCode {
+    let studio = match find_studio_bin() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut cmd = Command::new(&studio);
+    cmd.arg("--project-root").arg(&args.project_root);
+    cmd.arg("--bind").arg(&args.bind);
+    if args.open {
+        cmd.arg("--open");
+    } else {
+        cmd.arg("--no-open");
+    }
+    match cmd.status() {
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(err) => {
+            eprintln!(
+                "error: failed to start `{}`: {err}. Build `kbshff-studio` and place it next to kbshff, or put it on PATH.",
+                studio.display()
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `KBSHFF_STUDIO`, then a sibling of this executable, then the name on `PATH`.
+fn find_studio_bin() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("KBSHFF_STUDIO") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!("KBSHFF_STUDIO `{}` is not a file", path.display()));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let name = if cfg!(windows) {
+                "kbshff-studio.exe"
+            } else {
+                "kbshff-studio"
+            };
+            let sibling = dir.join(name);
+            if sibling.is_file() {
+                return Ok(sibling);
+            }
+        }
+    }
+    Ok(PathBuf::from(if cfg!(windows) {
+        "kbshff-studio.exe"
+    } else {
+        "kbshff-studio"
+    }))
 }
 
 /// Exit code after printing `RunOutput`: non-zero only for `stop_reason: error`.
@@ -582,6 +746,8 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             history: cfg.provider.history.clone(),
             cancel: run_cancel,
             events: args.events,
+            home: args.home.clone(),
+            pinned_files: cfg.context.pinned_files.clone(),
         })
         .await)
 }

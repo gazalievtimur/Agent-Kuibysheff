@@ -6,4 +6,4 @@ mod executor;
 mod process;
 mod registry;
 
-pub use registry::{McpIsolationContext, McpRegistry};
+pub use registry::{McpIsolationContext, McpRegistry, McpToolDescriptor};

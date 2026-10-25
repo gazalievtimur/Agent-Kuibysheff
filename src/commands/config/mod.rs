@@ -3,6 +3,7 @@
 mod access;
 mod billing;
 mod common;
+mod document;
 mod event_mcp;
 mod import;
 mod limits;
@@ -10,7 +11,9 @@ mod mcp;
 mod output;
 mod prompt;
 mod provider;
+mod redact;
 mod rules;
+mod secret;
 mod show;
 mod skill;
 mod tools;
@@ -71,6 +74,8 @@ fn run_inner(args: &ConfigArgs) -> Result<(), ConfigCmdError> {
     match &args.command {
         ConfigCommand::Import(import_args) => import::run(args, import_args),
         ConfigCommand::Show => show::run(args),
+        ConfigCommand::Document(cmd) => document::run(args, cmd),
+        ConfigCommand::Secret(cmd) => secret::run(args, cmd),
         ConfigCommand::Provider(cmd) => provider::run(args, cmd),
         ConfigCommand::Limits(cmd) => limits::run(args, cmd),
         ConfigCommand::Access(cmd) => access::run(args, cmd),

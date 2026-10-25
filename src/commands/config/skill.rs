@@ -1,6 +1,8 @@
 //! `config skill` CRUD and tools mutations.
 
-use serde::Serialize;
+use std::io::{self, Read};
+
+use serde::{Deserialize, Serialize};
 
 use crate::access::QualifiedTool;
 use crate::cli::{ConfigArgs, SkillCmd, SkillToolsCmd};
@@ -8,6 +10,7 @@ use crate::settings::write_skills_source;
 use crate::skills::dsl::{SkillDefinition, SkillsCatalog};
 
 use super::common::{load_profile, parse_skills};
+use super::redact::validate_skill_fields;
 use super::{emit_ok, ConfigCmdError};
 
 #[derive(Debug, Serialize)]
@@ -88,6 +91,7 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
             save_catalog(&profile.paths.settings_dir, &catalog)?;
             emit_ok(args.format, "skill", "set", &snapshot)
         }
+        SkillCmd::Replace => replace_catalog(args),
         SkillCmd::Remove { name } => {
             let profile = load_profile(&args.identity)?;
             let mut catalog = parse_skills(&profile.settings)?;
@@ -111,6 +115,38 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
         }
         SkillCmd::Tools(sub) => run_tools(args, sub),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillReplaceBody {
+    skills: Vec<SkillDefinition>,
+}
+
+fn replace_catalog(args: &ConfigArgs) -> Result<(), ConfigCmdError> {
+    let mut raw = String::new();
+    io::stdin().read_to_string(&mut raw)?;
+    let body: SkillReplaceBody = serde_json::from_str(&raw)
+        .map_err(|err| ConfigCmdError::message(format!("invalid skills JSON: {err}")))?;
+    if body.skills.is_empty() {
+        return Err(ConfigCmdError::message("at least one skill is required"));
+    }
+    for skill in &body.skills {
+        validate_skill_fields(&skill.name, &skill.policy).map_err(ConfigCmdError::message)?;
+        for tool in &skill.allowed_tools {
+            QualifiedTool::parse(tool).map_err(ConfigCmdError::message)?;
+        }
+    }
+    let profile = load_profile(&args.identity)?;
+    let catalog = SkillsCatalog {
+        skills: body.skills,
+    };
+    save_catalog(&profile.paths.settings_dir, &catalog)?;
+    emit_ok(
+        args.format,
+        "skill",
+        "replace",
+        &serde_json::json!({ "ok": true, "skills": catalog.skills }),
+    )
 }
 
 fn run_tools(args: &ConfigArgs, cmd: &SkillToolsCmd) -> Result<(), ConfigCmdError> {

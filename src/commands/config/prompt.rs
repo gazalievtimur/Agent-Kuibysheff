@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli::{ConfigArgs, PromptCmd};
 use crate::settings::write_master_prompt;
 
-use super::common::{load_profile, read_text_no_symlink};
+use super::common::{load_profile, read_cli_text};
 use super::{emit_ok, ConfigCmdError};
 
 #[derive(Debug, Serialize)]
@@ -26,21 +26,8 @@ pub fn run(args: &ConfigArgs, cmd: &PromptCmd) -> Result<(), ConfigCmdError> {
                 },
             )
         }
-        PromptCmd::Set { text, file } => {
-            let content = match (text.as_ref(), file.as_ref()) {
-                (Some(t), None) => (*t).clone(),
-                (None, Some(path)) => read_text_no_symlink(path)?,
-                (Some(_), Some(_)) => {
-                    return Err(ConfigCmdError::message(
-                        "prompt set: pass either `--text` or `--file`, not both",
-                    ));
-                }
-                (None, None) => {
-                    return Err(ConfigCmdError::message(
-                        "prompt set requires `--text` or `--file`",
-                    ));
-                }
-            };
+        PromptCmd::Set { text, file, stdin } => {
+            let content = read_cli_text(text.as_deref(), file.as_deref(), *stdin, "prompt")?;
             let profile = load_profile(&args.identity)?;
             write_master_prompt(&profile.paths.settings_dir, &content)?;
             emit_ok(

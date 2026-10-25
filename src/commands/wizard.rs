@@ -238,6 +238,7 @@ fn run_check_and_inventory<W: Write>(
         skip_provider: false,
         skip_mcp: false,
         skip_sandbox: false,
+        format: crate::cli::ConfigFormat::Text,
     })?;
     check::print_report(&report);
     check::print_inventory(&report.inventory);
