@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/sandbox-linux", "crates/sandbox-windows"]
+members = [".", "crates/sandbox-linux", "crates/sandbox-windows", "crates/kbshff-studio"]
 
 [workspace.dependencies]
 sandbox-linux = { path = "crates/sandbox-linux" }
@@ -40,7 +40,7 @@ dotenvy = "0.15"
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync", "net", "signal"] }
 subtle = "2"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 url = "2"

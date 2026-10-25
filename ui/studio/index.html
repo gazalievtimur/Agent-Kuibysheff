@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kuibysheff Studio</title>
+  <link rel="stylesheet" href="/studio.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <header class="brand">
+        <div class="brand-name">Kuibysheff</div>
+        <div class="brand-sub">Agent studio</div>
+      </header>
+      <div class="sidebar-actions">
+        <button type="button" id="btn-refresh" class="btn ghost">Refresh</button>
+        <button type="button" id="btn-new" class="btn">New agent</button>
+        <button type="button" id="btn-import" class="btn ghost">Import…</button>
+      </div>
+      <ul id="agent-list" class="agent-list"></ul>
+    </aside>
+    <main class="main">
+      <div id="empty-state" class="empty">
+        Select or create an agent to configure and test it.
+      </div>
+      <div id="workspace" class="workspace hidden">
+        <header class="workspace-head">
+          <h1 id="agent-title">agent</h1>
+          <nav class="tabs" role="tablist">
+            <button type="button" class="tab active" data-tab="config">Configure</button>
+            <button type="button" class="tab" data-tab="mcp">MCP</button>
+            <button type="button" class="tab" data-tab="check">Check</button>
+            <button type="button" class="tab" data-tab="run">Test run</button>
+          </nav>
+        </header>
+
+        <section id="tab-config" class="tab-panel">
+          <div class="grid">
+            <article class="panel">
+              <h2>Provider</h2>
+              <label>Base URL <input id="cfg-base-url" type="text" /></label>
+              <label>Model <input id="cfg-model" type="text" /></label>
+              <label>API key env <input id="cfg-api-key-env" type="text" /></label>
+              <p id="api-key-status" class="hint"></p>
+              <label>Set API key value (writes profile <code>.env</code>)
+                <input id="cfg-api-key-value" type="password" autocomplete="off" placeholder="leave blank to keep" />
+              </label>
+              <label class="row">
+                <input id="cfg-clear-api-key" type="checkbox" />
+                Clear inline <code>provider.api_key</code> on save
+              </label>
+              <label>Timeout ms <input id="cfg-timeout" type="number" min="1" /></label>
+              <label>Max retries <input id="cfg-retries" type="number" min="0" /></label>
+            </article>
+
+            <article class="panel">
+              <h2>Limits</h2>
+              <label>Max iterations <input id="cfg-max-iter" type="number" min="1" /></label>
+              <label>Max tokens <input id="cfg-max-tokens" type="number" min="1" /></label>
+              <label>Max duration sec <input id="cfg-max-duration" type="number" min="1" /></label>
+              <label>Max cost (<code>USD:1.00</code>) <input id="cfg-max-cost" type="text" placeholder="optional" /></label>
+            </article>
+
+            <article class="panel">
+              <h2>Logging</h2>
+              <label class="row"><input id="cfg-log-ai" type="checkbox" /> AI log</label>
+              <label class="row"><input id="cfg-log-mcp" type="checkbox" /> MCP log</label>
+              <label class="row"><input id="cfg-log-chat" type="checkbox" /> Chat history</label>
+              <label>Output dir <input id="cfg-log-dir" type="text" /></label>
+            </article>
+
+            <article class="panel">
+              <h2>Access</h2>
+              <label>Mode
+                <select id="cfg-access-mode">
+                  <option value="strict">strict</option>
+                  <option value="legacy">legacy</option>
+                </select>
+              </label>
+              <label>Builtins (one per line)
+                <textarea id="cfg-builtins" rows="6"></textarea>
+              </label>
+              <label>Home read paths (one per line)
+                <textarea id="cfg-home-read" rows="3"></textarea>
+              </label>
+              <label>Home write paths (one per line)
+                <textarea id="cfg-home-write" rows="3"></textarea>
+              </label>
+              <label>Run programs (one per line)
+                <textarea id="cfg-run-programs" rows="3"></textarea>
+              </label>
+            </article>
+
+            <article class="panel wide">
+              <h2>MCP servers</h2>
+              <div id="mcp-list" class="mcp-list"></div>
+              <div class="footer-actions">
+                <button type="button" id="btn-add-mcp" class="btn">Add MCP</button>
+              </div>
+              <p class="hint">Env/headers: one <code>KEY=value</code> per line. Existing secrets show as <code>KEY=&lt;set&gt;</code> — leave that to keep the stored value.</p>
+            </article>
+
+            <article class="panel wide">
+              <h2>Billing (JSON)</h2>
+              <textarea id="cfg-billing" rows="6" spellcheck="false"></textarea>
+            </article>
+
+            <article class="panel wide">
+              <h2>Event-MCP (JSON)</h2>
+              <textarea id="cfg-event-mcp" rows="6" spellcheck="false"></textarea>
+            </article>
+
+            <article class="panel wide">
+              <h2>Master prompt</h2>
+              <textarea id="cfg-prompt" rows="12" spellcheck="false"></textarea>
+            </article>
+
+            <article class="panel wide">
+              <h2>Rules</h2>
+              <textarea id="cfg-rules" rows="8" spellcheck="false"></textarea>
+            </article>
+
+            <article class="panel wide">
+              <h2>Skills</h2>
+              <textarea id="cfg-skills" rows="12" spellcheck="false"></textarea>
+              <p class="hint">JSON array of <code>{name, policy, allowed_tools}</code>. Names/policies cannot contain <code>"</code>.</p>
+            </article>
+          </div>
+          <div class="footer-actions">
+            <button type="button" id="btn-save" class="btn primary">Save</button>
+            <span id="save-status" class="status"></span>
+          </div>
+        </section>
+
+        <section id="tab-mcp" class="tab-panel hidden">
+          <div class="grid">
+            <article class="panel wide">
+              <h2>Test MCP tools</h2>
+              <p class="hint">Uses the <strong>saved</strong> agent config. Save Configure first if you changed MCP servers.</p>
+              <div class="footer-actions">
+                <button type="button" id="btn-mcp-discover" class="btn primary">Discover tools</button>
+                <span id="mcp-discover-status" class="status"></span>
+              </div>
+              <div id="mcp-discover-report" class="report"></div>
+              <div class="inline-fields">
+                <label>Server
+                  <select id="mcp-server"></select>
+                </label>
+                <label>Tool
+                  <select id="mcp-tool"></select>
+                </label>
+              </div>
+              <p id="mcp-tool-desc" class="hint"></p>
+              <label>Arguments (JSON object)
+                <textarea id="mcp-args" rows="8" spellcheck="false">{}</textarea>
+              </label>
+              <details class="mcp-schema">
+                <summary>inputSchema</summary>
+                <pre id="mcp-schema" class="log-view"></pre>
+              </details>
+              <div class="footer-actions">
+                <button type="button" id="btn-mcp-call" class="btn primary" disabled>Call tool</button>
+                <span id="mcp-call-status" class="status"></span>
+              </div>
+              <div class="mcp-result-head">
+                <h2>Result</h2>
+                <div class="mcp-result-toolbar">
+                  <button type="button" id="btn-mcp-view-pretty" class="btn ghost active" data-view="pretty">Pretty</button>
+                  <button type="button" id="btn-mcp-view-raw" class="btn ghost" data-view="raw">Raw</button>
+                  <button type="button" id="btn-mcp-copy" class="btn ghost" disabled>Copy</button>
+                </div>
+              </div>
+              <div id="mcp-result" class="mcp-result-view log-view"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-check" class="tab-panel hidden">
+          <div class="footer-actions">
+            <button type="button" id="btn-check" class="btn primary">Run check</button>
+            <span id="check-status" class="status"></span>
+          </div>
+          <div id="check-report" class="report"></div>
+        </section>
+
+        <section id="tab-run" class="tab-panel hidden">
+          <div class="grid">
+            <article class="panel wide">
+              <h2>Prompt</h2>
+              <textarea id="run-prompt" rows="6" placeholder="Task for a single test run"></textarea>
+              <label>Input files (one absolute or project-relative path per line)
+                <textarea id="run-files" rows="3"></textarea>
+              </label>
+              <label>Home (relative under <code>.kuibysheff/</code>, optional)
+                <input id="run-home" type="text" placeholder="homes/&lt;agent&gt;" />
+              </label>
+              <div class="inline-fields">
+                <label>Max iterations <input id="run-max-iter" type="number" min="1" /></label>
+                <label>Max tokens <input id="run-max-tokens" type="number" min="1" /></label>
+                <label>Max duration sec <input id="run-max-duration" type="number" min="1" /></label>
+                <label>Max cost <input id="run-max-cost" type="text" placeholder="USD:1.00" /></label>
+              </div>
+              <label class="row"><input id="run-save-chat" type="checkbox" /> Save chat history</label>
+              <div class="footer-actions">
+                <button type="button" id="btn-run" class="btn primary">Start run</button>
+                <button type="button" id="btn-cancel" class="btn ghost" disabled>Cancel</button>
+                <span id="run-status" class="status"></span>
+              </div>
+            </article>
+            <article class="panel wide">
+              <div class="mcp-result-head">
+                <h2>Events</h2>
+                <div class="mcp-result-toolbar">
+                  <button type="button" id="btn-run-events-pretty" class="btn ghost active" data-view="pretty">Pretty</button>
+                  <button type="button" id="btn-run-events-raw" class="btn ghost" data-view="raw">Raw</button>
+                  <button type="button" id="btn-run-events-clear" class="btn ghost">Clear</button>
+                </div>
+              </div>
+              <div id="run-events" class="mcp-result-view log-view"></div>
+            </article>
+            <article class="panel wide">
+              <div class="mcp-result-head">
+                <h2>Result</h2>
+                <div class="mcp-result-toolbar">
+                  <button type="button" id="btn-run-out-pretty" class="btn ghost active" data-view="pretty">Pretty</button>
+                  <button type="button" id="btn-run-out-raw" class="btn ghost" data-view="raw">Raw</button>
+                  <button type="button" id="btn-run-out-copy" class="btn ghost" disabled>Copy</button>
+                </div>
+              </div>
+              <div id="run-output" class="mcp-result-view log-view"></div>
+            </article>
+            <article class="panel">
+              <h2>Logs</h2>
+              <div class="footer-actions">
+                <button type="button" class="btn ghost" data-log="ai">AI</button>
+                <button type="button" class="btn ghost" data-log="mcp">MCP</button>
+                <button type="button" class="btn ghost" data-log="system">System</button>
+                <button type="button" class="btn ghost" data-log="chat">Chat</button>
+              </div>
+              <pre id="run-log" class="log-view"></pre>
+            </article>
+            <article class="panel">
+              <h2>Home out/</h2>
+              <ul id="out-list" class="file-list"></ul>
+              <pre id="out-preview" class="log-view"></pre>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
