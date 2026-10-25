@@ -14,6 +14,7 @@ User-facing docs for `agent_Kuibysheff`.
 | [OUTPUT.md](OUTPUT.md) | `RunOutput` JSON and exit codes |
 | [RELEASING.md](RELEASING.md) | Prebuilt binaries and release tags |
 | [INSTALL.md](INSTALL.md) | Install / upgrade / uninstall |
+| [UI.md](UI.md) | Browser studio (`kbshff-studio`) — handoff for GUI work |
 | [../CHANGELOG.md](../CHANGELOG.md) | Version history and migrations |
 | [../SECURITY.md](../SECURITY.md) | Vulnerability reporting |
 | [../SUPPORT.md](../SUPPORT.md) | Support policy |

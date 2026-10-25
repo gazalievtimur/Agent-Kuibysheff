@@ -12,22 +12,25 @@
 
 ## Workspace layout
 
-The repository is a Cargo workspace with three crates:
+The repository is a Cargo workspace with four crates:
 
 | Crate | Path | Role |
 |-------|------|------|
 | `agent_Kuibysheff` | repository root | Main library and `kbshff` CLI binary. Forbids `unsafe_code` at the lint level. |
+| `kbshff-studio` | `crates/kbshff-studio` | Browser studio. Spawns `kbshff` and does not link the agent library. |
 | `sandbox-linux` | `crates/sandbox-linux` | Linux namespace sandbox with `libc` FFI. Contains all Linux-specific `unsafe`. |
 | `sandbox-windows` | `crates/sandbox-windows` | Windows AppContainer sandbox with `windows-sys` FFI. Contains all Windows-specific `unsafe`. |
 
 ```mermaid
 flowchart TD
     subgraph workspace [Cargo workspace]
+        STUDIO[kbshff-studio]
         AGENT[agent_Kuibysheff]
         LX[sandbox-linux]
         WX[sandbox-windows]
     end
 
+    STUDIO -->|subprocess| AGENT
     AGENT -->|always| LX
     AGENT -->|cfg(windows)| WX
 ```
@@ -85,7 +88,8 @@ flowchart TD
 - `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
 - `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` / `a2a` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio; `a2a` serves A2A 1.0 over HTTP.
 - `src/cli/` — `clap` subcommands (`pub(crate)`): `run` / `acp` / `a2a` (`--project-root`,
-  `--agent`, optional `--home`), `init`, `check`, and `config` (CRUD + import).
+  `--agent`, optional `--home`), `init`, `check`, `config` (CRUD + import), `agent`,
+  `mcp`, and `ui` (executes `kbshff-studio` when that binary is installed).
 - `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
 - `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.
 - `src/a2a/` — Agent-to-Agent (A2A) 1.0 HTTP server via official `a2a-lf` / `a2a-server-lf` SDK (`AgentExecutor` → `run_agent_prompt`, Agent Card from profile, JSON-RPC + REST, optional Bearer).
@@ -96,7 +100,7 @@ flowchart TD
 ### Agent core
 
 - `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, prices every physical attempt, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/cost/duration limits, prunes message history using `provider.history` (`history`), emits optional `AgentEvent` progress (`events`), and returns `RunOutput`.
-- `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming (no-op for CLI `run`).
+- `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming. CLI `run` leaves it no-op unless `--progress stderr` is set, in which case events are NDJSON lines on stderr. Stdout stays one `RunOutput`.
 - `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, optional exact monetary budget, and elapsed time.
 - `src/billing/` — exact decimal money, normalized billable meters, per-attempt ledger, resolver chain, versioned local catalog, and optional host-owned MCP calculator.
 - `src/output.rs` — `RunOutput` schema: `run_id`, `result`, token/per-request cost `usage`, `stop_reason`, `logs`.

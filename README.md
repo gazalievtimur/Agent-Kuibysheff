@@ -38,6 +38,7 @@ Or build from source (Rust MSRV **1.88**):
 git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
+cargo build --release --bin kbshff-studio
 ```
 
 Breaking changes and migration notes (including required `access` in **0.2.0**):
@@ -115,10 +116,21 @@ Scaffold, probe, or manage settings (no storage path flags):
 
 ```text
 kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
-kbshff check --project-root <DIR> --agent <ID>
+kbshff check --project-root <DIR> --agent <ID> [--format json]
 kbshff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
 kbshff config --project-root <DIR> --agent <ID> show
+kbshff agent list --project-root <DIR> [--format json]
+kbshff mcp discover --project-root <DIR> --agent <ID>
+kbshff ui --project-root <DIR> [--bind 127.0.0.1:8790] [--open]
+kbshff-studio [--project-root <DIR>] [--bind 127.0.0.1:8790] [--no-open]
 ```
+
+`kbshff-studio` with no flags serves the current directory and opens the browser
+at `http://127.0.0.1:8790/`. `kbshff ui` only launches that binary (next to `kbshff`,
+on `PATH`, or `KBSHFF_STUDIO`). The studio edits profiles by calling the CLI.
+Orchestrator `run` still prints one `RunOutput` JSON on stdout. `--progress stderr`
+adds NDJSON events on stderr and does not change that stdout document.
+Handoff for GUI work: [docs/UI.md](docs/UI.md).
 
 ACP stdio server (VS Code, messengers, mail bridges):
 
