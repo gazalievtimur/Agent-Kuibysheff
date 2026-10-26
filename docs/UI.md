@@ -86,7 +86,7 @@ Sidebar: agent list, Refresh, New agent, Import.
 
 | Tab | Purpose |
 | --- | --- |
-| **Configure** | Provider, limits, logging, **MCP form cards** (not raw JSON), access, billing, event-mcp, prompt / rules / skills textareas. Save writes profile files. |
+| **Configure** | Provider, limits, logging, **MCP form cards** (not raw JSON), access, billing, event-mcp, prompt / rules / skills JSON, and the selected skill's `skill.md`. Save writes profile files. |
 | **MCP** | Discover tools from **saved** config; pick server/tool; JSON args (stubbed from `inputSchema`); Call; Pretty/Raw/Copy result. |
 | **Check** | Same probes as `kbshff check`; inventory (tools, MCP connected/failed/gated). |
 | **Test run** | One active run per studio process: prompt, files, home, limits; SSE events; `RunOutput`; log tails; `homes/<id>/out/` preview. |
@@ -137,6 +137,7 @@ Mutating routes need `X-Kbshff-Studio: 1`. Errors: `{ "error": "..." }` with app
 | GET/PUT | `/api/agents/:id/prompt` | `{ content }` |
 | GET/PUT | `/api/agents/:id/rules` | `{ content }` |
 | GET/PUT | `/api/agents/:id/skills` | `{ skills: [...] }` |
+| GET/PUT | `/api/agents/:id/skills/:name/body` | `{ content }` — `skills/<name>/skill.md` |
 | POST | `/api/agents/:id/secret` | Write env var for API key |
 | POST | `/api/agents/:id/check` | Check report + inventory |
 | POST | `/api/agents/:id/mcp/discover` | Body optional `{ "server": "name" }` → `{ servers: [{ name, tools, error? }] }` tools include `name`, `description?`, `input_schema` |
@@ -161,6 +162,8 @@ Under `--project-root`:
   master_prompt.md
   rules.md
   skills.dsl
+  skills/<name>/skill.md
+  skills/<name>/...    # companion files; not edited in the studio textarea
   .env                 # secrets (api keys); never returned by GET
 .kuibysheff/homes/<id>/
   in/ out/             # created on run when grants allow; out/ previewed in Test run

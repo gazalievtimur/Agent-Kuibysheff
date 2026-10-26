@@ -5,17 +5,37 @@ use std::io::{self, Read};
 use serde::{Deserialize, Serialize};
 
 use crate::access::QualifiedTool;
-use crate::cli::{ConfigArgs, SkillCmd, SkillToolsCmd};
+use crate::cli::{ConfigArgs, SkillBodyCmd, SkillCmd, SkillFileCmd, SkillToolsCmd};
 use crate::settings::write_skills_source;
 use crate::skills::dsl::{SkillDefinition, SkillsCatalog};
+use crate::skills::package::{self, SkillPackage};
 
-use super::common::{load_profile, parse_skills};
+use super::common::{load_profile, parse_skills, read_cli_text};
 use super::redact::validate_skill_fields;
 use super::{emit_ok, ConfigCmdError};
 
 #[derive(Debug, Serialize)]
+struct SkillListEntry {
+    name: String,
+    policy: String,
+    allowed_tools: Vec<String>,
+    has_body: bool,
+    file_count: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct SkillList {
-    skills: Vec<SkillDefinition>,
+    skills: Vec<SkillListEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillGet {
+    name: String,
+    policy: String,
+    allowed_tools: Vec<String>,
+    has_body: bool,
+    file_count: usize,
+    content: String,
 }
 
 pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
@@ -28,7 +48,11 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
                 "skill",
                 "list",
                 &SkillList {
-                    skills: catalog.skills,
+                    skills: catalog
+                        .skills
+                        .iter()
+                        .map(|skill| skill_list_entry(skill, &profile.settings.skill_packages))
+                        .collect(),
                 },
             )
         }
@@ -40,7 +64,20 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
                 .iter()
                 .find(|s| s.name == *name)
                 .ok_or_else(|| ConfigCmdError::message(format!("skill `{name}` not found")))?;
-            emit_ok(args.format, "skill", "get", skill)
+            let package = profile.settings.skill_packages.get(&skill.name);
+            emit_ok(
+                args.format,
+                "skill",
+                "get",
+                &SkillGet {
+                    name: skill.name.clone(),
+                    policy: skill.policy.clone(),
+                    allowed_tools: skill.allowed_tools.clone(),
+                    has_body: package.is_some(),
+                    file_count: package.map(|item| item.files.len()).unwrap_or(0),
+                    content: package.map(|item| item.body.clone()).unwrap_or_default(),
+                },
+            )
         }
         SkillCmd::Add {
             name,
@@ -106,6 +143,7 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
                 ));
             }
             save_catalog(&profile.paths.settings_dir, &catalog)?;
+            package::remove_package_dir(&profile.paths.settings_dir, name)?;
             emit_ok(
                 args.format,
                 "skill",
@@ -114,12 +152,49 @@ pub fn run(args: &ConfigArgs, cmd: &SkillCmd) -> Result<(), ConfigCmdError> {
             )
         }
         SkillCmd::Tools(sub) => run_tools(args, sub),
+        SkillCmd::Body(sub) => run_body(args, sub),
+        SkillCmd::File(sub) => run_file(args, sub),
     }
+}
+
+fn skill_list_entry(
+    skill: &SkillDefinition,
+    packages: &std::collections::BTreeMap<String, SkillPackage>,
+) -> SkillListEntry {
+    let package = packages.get(&skill.name);
+    SkillListEntry {
+        name: skill.name.clone(),
+        policy: skill.policy.clone(),
+        allowed_tools: skill.allowed_tools.clone(),
+        has_body: package.is_some(),
+        file_count: package.map(|item| item.files.len()).unwrap_or(0),
+    }
+}
+
+fn require_skill<'a>(
+    catalog: &'a SkillsCatalog,
+    name: &str,
+) -> Result<&'a SkillDefinition, ConfigCmdError> {
+    catalog
+        .skills
+        .iter()
+        .find(|skill| skill.name == name)
+        .ok_or_else(|| ConfigCmdError::message(format!("skill `{name}` not found")))
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillReplaceEntry {
+    name: String,
+    policy: String,
+    allowed_tools: Vec<String>,
+    /// `None` leaves the skill folder untouched. Empty text clears `skill.md`.
+    #[serde(default)]
+    body: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SkillReplaceBody {
-    skills: Vec<SkillDefinition>,
+    skills: Vec<SkillReplaceEntry>,
 }
 
 fn replace_catalog(args: &ConfigArgs) -> Result<(), ConfigCmdError> {
@@ -137,16 +212,153 @@ fn replace_catalog(args: &ConfigArgs) -> Result<(), ConfigCmdError> {
         }
     }
     let profile = load_profile(&args.identity)?;
+    let previous: Vec<String> = parse_skills(&profile.settings)?
+        .skills
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect();
     let catalog = SkillsCatalog {
-        skills: body.skills,
+        skills: body
+            .skills
+            .iter()
+            .map(|skill| SkillDefinition {
+                name: skill.name.clone(),
+                policy: skill.policy.clone(),
+                allowed_tools: skill.allowed_tools.clone(),
+            })
+            .collect(),
     };
     save_catalog(&profile.paths.settings_dir, &catalog)?;
+    for name in &previous {
+        if !catalog.skills.iter().any(|skill| skill.name == *name) {
+            package::remove_package_dir(&profile.paths.settings_dir, name)?;
+        }
+    }
+    for skill in &body.skills {
+        match skill.body.as_deref() {
+            None => {}
+            Some(content) if content.trim().is_empty() => {
+                package::clear_body(&profile.paths.settings_dir, &skill.name)?;
+            }
+            Some(content) => {
+                package::write_body(&profile.paths.settings_dir, &skill.name, content)?;
+            }
+        }
+    }
     emit_ok(
         args.format,
         "skill",
         "replace",
         &serde_json::json!({ "ok": true, "skills": catalog.skills }),
     )
+}
+
+fn run_body(args: &ConfigArgs, cmd: &SkillBodyCmd) -> Result<(), ConfigCmdError> {
+    match cmd {
+        SkillBodyCmd::Get { name } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, name)?;
+            let content =
+                package::read_body(&profile.paths.settings_dir, name)?.unwrap_or_default();
+            emit_ok(
+                args.format,
+                "skill.body",
+                "get",
+                &serde_json::json!({ "name": name, "content": content }),
+            )
+        }
+        SkillBodyCmd::Set {
+            name,
+            text,
+            file,
+            stdin,
+        } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, name)?;
+            let content = read_cli_text(text.as_deref(), file.as_deref(), *stdin, "skill body")?;
+            package::write_body(&profile.paths.settings_dir, name, &content)?;
+            emit_ok(
+                args.format,
+                "skill.body",
+                "set",
+                &serde_json::json!({ "name": name, "content": content }),
+            )
+        }
+        SkillBodyCmd::Clear { name } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, name)?;
+            package::clear_body(&profile.paths.settings_dir, name)?;
+            emit_ok(
+                args.format,
+                "skill.body",
+                "clear",
+                &serde_json::json!({ "name": name, "content": "" }),
+            )
+        }
+    }
+}
+
+fn run_file(args: &ConfigArgs, cmd: &SkillFileCmd) -> Result<(), ConfigCmdError> {
+    match cmd {
+        SkillFileCmd::List { skill } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, skill)?;
+            let files = package::list_package_files(&profile.paths.settings_dir, skill)?;
+            emit_ok(
+                args.format,
+                "skill.file",
+                "list",
+                &serde_json::json!({ "skill": skill, "files": files }),
+            )
+        }
+        SkillFileCmd::Get { skill, path } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, skill)?;
+            let content = package::read_package_file(&profile.paths.settings_dir, skill, path)?;
+            emit_ok(
+                args.format,
+                "skill.file",
+                "get",
+                &serde_json::json!({ "skill": skill, "path": path, "content": content }),
+            )
+        }
+        SkillFileCmd::Put {
+            skill,
+            path,
+            text,
+            file,
+            stdin,
+        } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, skill)?;
+            let content = read_cli_text(text.as_deref(), file.as_deref(), *stdin, "skill file")?;
+            package::write_package_file(&profile.paths.settings_dir, skill, path, &content)?;
+            emit_ok(
+                args.format,
+                "skill.file",
+                "put",
+                &serde_json::json!({ "skill": skill, "path": path }),
+            )
+        }
+        SkillFileCmd::Remove { skill, path } => {
+            let profile = load_profile(&args.identity)?;
+            let catalog = parse_skills(&profile.settings)?;
+            require_skill(&catalog, skill)?;
+            package::remove_package_file(&profile.paths.settings_dir, skill, path)?;
+            emit_ok(
+                args.format,
+                "skill.file",
+                "remove",
+                &serde_json::json!({ "skill": skill, "path": path }),
+            )
+        }
+    }
 }
 
 fn run_tools(args: &ConfigArgs, cmd: &SkillToolsCmd) -> Result<(), ConfigCmdError> {
@@ -220,4 +432,59 @@ fn save_catalog(
     SkillsCatalog::parse(&rendered)?;
     write_skills_source(settings_dir, &rendered)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::cli::{
+        AgentIdentityArgs, ConfigArgs, ConfigFormat, InitArgs, SkillBodyCmd, SkillCmd,
+    };
+    use crate::commands::init;
+    use crate::project_paths::resolve_agent_identity;
+    use crate::settings::load_settings;
+
+    use super::run;
+
+    #[test]
+    fn skill_body_set_writes_skill_md() {
+        let root = tempfile::tempdir().expect("temp");
+        let agent_id = "body-demo";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let args = config_args(root.path(), agent_id);
+        run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Set {
+                name: "workspace".to_string(),
+                text: Some("# Hello\n".to_string()),
+                file: None,
+                stdin: false,
+            }),
+        )
+        .expect("set body");
+
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let settings = load_settings(&paths.settings_dir).expect("settings");
+        let package = settings.skill_packages.get("workspace").expect("package");
+        assert_eq!(package.body, "# Hello\n");
+        assert_eq!(package.files.len(), 1);
+    }
+
+    fn config_args(root: &Path, agent_id: &str) -> ConfigArgs {
+        ConfigArgs {
+            identity: AgentIdentityArgs {
+                project_root: root.to_path_buf(),
+                agent: agent_id.to_string(),
+            },
+            format: ConfigFormat::Json,
+            command: crate::cli::ConfigCommand::Show,
+        }
+    }
 }

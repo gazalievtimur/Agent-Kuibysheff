@@ -8,6 +8,7 @@
 pub enum BuiltinHandlerId {
     Home,
     LocalTools,
+    Profile,
 }
 
 /// How the tool is described in the runtime prompt fragment.
@@ -118,6 +119,30 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         handler: BuiltinHandlerId::LocalTools,
         prompt: BuiltinPrompt::WorkspaceReadFile,
     },
+    ToolDescriptor {
+        name: "profile.list_skill",
+        server: "profile",
+        tool: "list_skill",
+        description: "List files in one skill folder from the agent profile. Paths are relative to that folder.",
+        schema_json: r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Profile,
+        prompt: BuiltinPrompt::StaticArgs(r#"{"name":"research"}"#),
+    },
+    ToolDescriptor {
+        name: "profile.read_skill",
+        server: "profile",
+        tool: "read_skill",
+        description: "Read a UTF-8 character window from skill.md or a companion file in one skill folder. Omit path to read skill.md. Use offset/next_offset for large files.",
+        schema_json: r#"{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_chars":{"type":"integer","minimum":1}},"required":["name"],"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Profile,
+        prompt: BuiltinPrompt::StaticArgs(
+            r#"{"name":"research","path":"scripts/example.py","offset":0,"max_chars":50000}"#,
+        ),
+    },
 ];
 
 /// Qualified names of every built-in tool.
@@ -196,14 +221,19 @@ mod tests {
         let known: HashSet<_> = known_builtin_names().collect();
         let legacy: HashSet<_> = legacy_builtin_names().collect();
         assert!(legacy.is_subset(&known));
-        let diff: Vec<_> = known.difference(&legacy).copied().collect();
-        assert_eq!(diff, vec!["home.run"]);
+        let mut diff: Vec<_> = known.difference(&legacy).copied().collect();
+        diff.sort_unstable();
+        assert_eq!(
+            diff,
+            vec!["home.run", "profile.list_skill", "profile.read_skill"]
+        );
     }
 
     #[test]
     fn reserved_servers_match_descriptor_servers() {
         assert!(is_builtin_server("home"));
         assert!(is_builtin_server("local_tools"));
+        assert!(is_builtin_server("profile"));
         assert!(!is_builtin_server("docs"));
     }
 
@@ -219,6 +249,8 @@ mod tests {
                 "home.run",
                 "local_tools.search_docs",
                 "local_tools.read_file",
+                "profile.list_skill",
+                "profile.read_skill",
             ]
         );
         for name in &names {

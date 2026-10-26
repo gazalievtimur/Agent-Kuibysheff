@@ -2,11 +2,9 @@
 
 use serde::Serialize;
 
-use crate::cli::ConfigArgs;
-use crate::skills::dsl::SkillsCatalog;
-
-use super::common::load_profile;
+use super::common::{load_profile, parse_skills};
 use super::{emit_ok, ConfigCmdError};
+use crate::cli::ConfigArgs;
 
 #[derive(Debug, Serialize)]
 struct ShowData {
@@ -30,7 +28,7 @@ struct LimitsSummary {
 
 pub fn run(args: &ConfigArgs) -> Result<(), ConfigCmdError> {
     let profile = load_profile(&args.identity)?;
-    let skills = SkillsCatalog::parse(&profile.settings.skills_source)?;
+    let skills = parse_skills(&profile.settings)?;
     let max_cost = profile
         .config
         .limits

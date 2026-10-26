@@ -43,10 +43,11 @@ use crate::prompt::build_runtime_rules;
 use crate::provider::openai_compat::{OpenAiCompatClient, ProviderAccountingOptions};
 use crate::sandbox::SandboxRunner;
 use crate::settings::load_settings;
-use crate::skills::dsl::SkillsCatalog;
+use crate::skills::package::catalog_from_settings;
 use crate::tool_api::ToolExecutor;
 use crate::tools::fs_home::HomeFs;
 use crate::tools::local_tools::LocalTools;
+use crate::tools::profile_skills::SkillLibrary;
 use crate::tools::{CompositeToolExecutor, PolicyToolExecutor};
 
 /// Shared inputs for one agent turn (CLI `run` or ACP `session/prompt`).
@@ -585,9 +586,15 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         .context("loading settings task")?
         .with_context(|| format!("loading settings from `{}`", args.settings_dir.display()))?;
 
-    let catalog = SkillsCatalog::parse(&settings.skills_source).context("parsing skills DSL")?;
+    let catalog = catalog_from_settings(&settings.skills_source, &settings.skill_packages)
+        .context("parsing skills DSL")?;
     let skills_allowed = catalog.allowed_qualified_tools();
-    let skill_prompt = catalog.build_prompt_fragment();
+    let file_counts: std::collections::BTreeMap<String, usize> = settings
+        .skill_packages
+        .iter()
+        .map(|(name, package)| (name.clone(), package.files.len()))
+        .collect();
+    let skill_prompt = catalog.build_prompt_fragment(&file_counts);
 
     let input_policy = InputFilesPolicy::from_access(&access_policy);
     let input_files = args.files.clone();
@@ -653,7 +660,10 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
     );
     let mcp_tools = parse_tool_list(mcp.available_tools())
         .map_err(|reason| anyhow::anyhow!("parsing MCP tool names: {reason}"))?;
-    let effective = EffectiveToolPolicy::compile(&access_policy, &skills_allowed, mcp_tools);
+    let mut effective = EffectiveToolPolicy::compile(&access_policy, &skills_allowed, mcp_tools);
+    if !settings.skill_packages.is_empty() {
+        effective.grant_profile_skills();
+    }
     let pipeline_events = EventMcpDispatcher::new(&cfg.event_mcp, mcp.clone(), loggers.mcp.clone())
         .context("compiling Event-MCP handlers")?;
 
@@ -708,8 +718,11 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         },
     )
     .context("initializing provider")?;
+    let skill_library = SkillLibrary::new(settings.skill_packages.clone());
     let tools = PolicyToolExecutor::new(
-        Arc::new(CompositeToolExecutor::new(home, local_tools, mcp)),
+        Arc::new(
+            CompositeToolExecutor::new(home, local_tools, mcp).with_skill_library(skill_library),
+        ),
         effective.clone(),
     );
 

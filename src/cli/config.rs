@@ -242,9 +242,64 @@ pub enum SkillCmd {
         name: String,
     },
     /// Replace the catalog from JSON `{ "skills": [...] }` on stdin.
+    ///
+    /// An optional `body` field writes or clears `skills/<name>/skill.md`.
+    /// Omitting `body` leaves an existing skill folder in place.
     Replace,
     #[command(subcommand)]
     Tools(SkillToolsCmd),
+    /// Read or write `skills/<name>/skill.md`.
+    #[command(subcommand)]
+    Body(SkillBodyCmd),
+    /// List, read, write, or remove companion files inside a skill folder.
+    #[command(subcommand)]
+    File(SkillFileCmd),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillBodyCmd {
+    Get {
+        name: String,
+    },
+    Set {
+        name: String,
+        #[arg(long, conflicts_with_all = ["file", "stdin"])]
+        text: Option<String>,
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["text", "stdin"])]
+        file: Option<PathBuf>,
+        /// Read skill.md from stdin.
+        #[arg(long, conflicts_with_all = ["text", "file"])]
+        stdin: bool,
+    },
+    Clear {
+        name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillFileCmd {
+    List {
+        skill: String,
+    },
+    Get {
+        skill: String,
+        path: String,
+    },
+    Put {
+        skill: String,
+        path: String,
+        #[arg(long, conflicts_with_all = ["file", "stdin"])]
+        text: Option<String>,
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["text", "stdin"])]
+        file: Option<PathBuf>,
+        /// Read the file body from stdin.
+        #[arg(long, conflicts_with_all = ["text", "file"])]
+        stdin: bool,
+    },
+    Remove {
+        skill: String,
+        path: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -88,7 +88,10 @@ pub fn save_profile_config(paths: &ResolvedAgentPaths, cfg: &AppConfig) -> Resul
 ///
 /// Returns [`SkillsError`] when the DSL is invalid.
 pub fn parse_skills(settings: &AgentSettings) -> Result<SkillsCatalog, CommonError> {
-    Ok(SkillsCatalog::parse(&settings.skills_source)?)
+    Ok(crate::skills::package::catalog_from_settings(
+        &settings.skills_source,
+        &settings.skill_packages,
+    )?)
 }
 
 /// Parse `KEY=VALUE` pairs into a map (later entries win).

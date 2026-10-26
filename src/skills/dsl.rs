@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -21,6 +21,8 @@ static QUOTED_RE: LazyLock<Regex> =
 pub enum SkillsError {
     #[error("skills DSL parse error: {0}")]
     Parse(String),
+    #[error("skill package `{0}` is not declared in skills.dsl")]
+    UndeclaredPackage(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,17 +127,31 @@ impl SkillsCatalog {
         blocks.join("\n\n")
     }
 
+    /// Prompt catalog. `file_counts` maps a skill name to the number of files in its folder.
+    ///
+    /// A missing or zero count means the skill has no stored instructions.
     #[must_use]
-    pub fn build_prompt_fragment(&self) -> String {
+    pub fn build_prompt_fragment(&self, file_counts: &BTreeMap<String, usize>) -> String {
         let mut lines = vec![
             "Skills available to the agent:".to_string(),
             "Follow skill policies strictly when deciding tool usage.".to_string(),
             "Hard tool enforcement uses qualified names only; both built-in and MCP tools must be listed in a skill allowed_tools block.".to_string(),
         ];
+        let any_stored = self
+            .skills
+            .iter()
+            .any(|skill| file_counts.get(&skill.name).copied().unwrap_or(0) > 0);
+        if any_stored {
+            lines.push(
+                "When a skill has instructions=stored, call profile.read_skill {\"name\":\"<skill>\"} to read skill.md, then profile.list_skill {\"name\":\"<skill>\"} and profile.read_skill {\"name\":\"<skill>\",\"path\":\"<relative>\"} for companion files. The policy line is only a summary. Do not run scripts from the skill folder. Copy a script into the home directory with home.write and run it with home.run only when that tool is allowed.".to_string(),
+            );
+        }
 
         for skill in &self.skills {
+            let files = file_counts.get(&skill.name).copied().unwrap_or(0);
+            let instructions = if files > 0 { "stored" } else { "none" };
             lines.push(format!(
-                "- skill `{}` policy=`{}` allowed_tools={}",
+                "- skill `{}` policy=`{}` instructions={instructions} files={files} allowed_tools={}",
                 skill.name,
                 skill.policy,
                 skill.allowed_tools.join(",")
@@ -224,5 +240,29 @@ mod tests {
         assert!(rendered
             .contains("allowed_tools: [\"local_tools.search_docs\", \"local_tools.read_file\"]"));
         assert!(rendered.contains("\n\nskill \"edit\""));
+    }
+
+    #[test]
+    fn prompt_fragment_marks_stored_instructions_and_file_count() {
+        let catalog = SkillsCatalog::parse(
+            r#"
+            skill "research" {
+              policy: "read first"
+              allowed_tools: ["home.read"]
+            }
+            skill "workspace" {
+              policy: "write home"
+              allowed_tools: ["home.write"]
+            }
+            "#,
+        )
+        .expect("parse");
+        let counts = BTreeMap::from([("research".to_string(), 2usize)]);
+        let fragment = catalog.build_prompt_fragment(&counts);
+        assert!(fragment.contains("instructions=stored files=2"));
+        assert!(fragment.contains("instructions=none files=0"));
+        assert!(fragment.contains("profile.read_skill"));
+        assert!(fragment.contains("profile.list_skill"));
+        assert!(fragment.contains("Do not run scripts from the skill folder"));
     }
 }

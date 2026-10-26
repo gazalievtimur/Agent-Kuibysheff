@@ -135,11 +135,16 @@ kbshff config --project-root <DIR> --agent <ID> [--format text|json] \
   import --from <PATH> [--force]
   | show | provider … | limits … | access … | mcp … | billing … \
   | event-mcp … | skill … | prompt … | rules … | tools effective [--connect]
+
+kbshff config … skill body get|set|clear <name>
+kbshff config … skill file list|get|put|remove …
 ```
 
 `init` creates the protected profile under
 `.kuibysheff/protected/agents/<id>/` (`master_prompt.md`, `skills.dsl`,
-`rules.md`, `agent-config.yaml`). With `--interactive`, the CLI prompts for
+`rules.md`, `agent-config.yaml`). Optional skill instructions live in
+`skills/<name>/skill.md` with companion files beside that file. With
+`--interactive`, the CLI prompts for
 `provider` and `limits`.
 
 `config import` copies an external config file or settings directory into the
@@ -159,8 +164,10 @@ minimal policy before validation.
 
 Settings under `.kuibysheff/protected/` are readable/writable only by the
 `agent_Kuibysheff` process (load + `config` CRUD). Tool paths (`home.*`,
-`local_tools.*`, `--files`) hard-deny that tree. `home.run` sandbox specs must
-not grant it. Stdio MCP children use `mcp-runtime/{agent}/{server}/` with a
+`local_tools.*`, `--files`) hard-deny that tree. `profile.list_skill` and
+`profile.read_skill` are the exception: they read only files indexed under
+`skills/<name>/` at startup, not `master_prompt.md`, `rules.md`, config, or
+`.env`. `home.run` sandbox specs must not grant the protected tree. Stdio MCP children use `mcp-runtime/{agent}/{server}/` with a
 cleared environment and require a working OS sandbox probe unless
 `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (dev/emergency only; also required for the
 nested Docker Desktop Linux SWE-bench runner, which lacks `clone3` —
@@ -332,11 +339,12 @@ fails config validation. Prior releases treated omission as silent legacy
 Effective tools are computed as follows:
 
 ```text
-KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file}
+KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file, profile.list_skill, profile.read_skill}
 
 effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
 effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
 effective_tools    = effective_builtins ∪ effective_mcp
+                     ∪ {profile.list_skill, profile.read_skill}  # only when a skill folder exists
 ```
 
 - Tool names must be qualified `server.tool` (bare names are rejected).
@@ -349,6 +357,11 @@ effective_tools    = effective_builtins ∪ effective_mcp
   it.
 - `rules.md` and the `policy` string inside a `skills.dsl` block are prompt-only
   guidance for the model. They are not enforced by the runtime policy engine.
+- When `skills/<name>/skill.md` exists, the system prompt lists that skill as
+  `instructions=stored` plus a file count. `profile.list_skill` and
+  `profile.read_skill` are granted automatically and can read only files indexed
+  in that folder. They do not accept a filesystem path, and scripts in the folder
+  are not executed in place.
 - There is no generic `network` config section. The agent process may call only
   the configured `provider.base_url` origin (no proxy, no cross-origin
   redirects). MCP stdio subprocesses and configured MCP HTTP endpoints may use
@@ -395,6 +408,17 @@ skill "coding" {
   ]
 }
 ```
+
+Optional instructions for that skill (the prompt lists the catalog only):
+
+```text
+settings/skills/coding/skill.md
+settings/skills/coding/scripts/example.py
+```
+
+The model reads `skill.md` with `profile.read_skill {"name":"coding"}` and a
+companion file with `path` set to its relative name. A script is copied into
+home and run with `home.run` only when that tool is already allowed.
 
 See [`agent-config.example.yaml`](agent-config.example.yaml) for the full schema
 and comments.
