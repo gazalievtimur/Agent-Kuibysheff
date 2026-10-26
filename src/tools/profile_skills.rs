@@ -231,5 +231,43 @@ mod tests {
             .await
             .expect_err("unknown");
         assert!(unknown.to_string().contains("no folder"), "{unknown}");
+        assert!(!library.is_empty());
+        assert!(SkillLibrary::default().is_empty());
+
+        let bad_tool = library
+            .call("nope", json!({}))
+            .await
+            .expect_err("unknown tool");
+        assert!(bad_tool.to_string().contains("unknown"), "{bad_tool}");
+        let bad_args = library
+            .call("list_skill", json!({}))
+            .await
+            .expect_err("args");
+        assert!(bad_args.to_string().contains("invalid"), "{bad_args}");
+
+        let clamped = library
+            .call(
+                "read_skill",
+                json!({"name": "research", "offset": 2, "max_chars": 9_999_999}),
+            )
+            .await
+            .expect("clamp");
+        assert_eq!(clamped["offset"], 2);
+        assert_eq!(clamped["truncated"], false);
+
+        fs::write(skill.join("scripts").join("blob.bin"), [0xff, 0xfe]).expect("bin");
+        let packages = package::load_skill_packages(dir.path()).expect("reindex");
+        let library = SkillLibrary::new(packages);
+        let binary = library
+            .call(
+                "read_skill",
+                json!({"name": "research", "path": "scripts/blob.bin"}),
+            )
+            .await
+            .expect_err("utf8");
+        assert!(
+            binary.to_string().contains("utf-8") || binary.to_string().contains("read_skill"),
+            "{binary}"
+        );
     }
 }

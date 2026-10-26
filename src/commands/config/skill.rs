@@ -438,8 +438,10 @@ fn save_catalog(
 mod tests {
     use std::path::Path;
 
+    use std::fs;
+
     use crate::cli::{
-        AgentIdentityArgs, ConfigArgs, ConfigFormat, InitArgs, SkillBodyCmd, SkillCmd,
+        AgentIdentityArgs, ConfigArgs, ConfigFormat, InitArgs, SkillBodyCmd, SkillCmd, SkillFileCmd,
     };
     use crate::commands::init;
     use crate::project_paths::resolve_agent_identity;
@@ -475,6 +477,180 @@ mod tests {
         let package = settings.skill_packages.get("workspace").expect("package");
         assert_eq!(package.body, "# Hello\n");
         assert_eq!(package.files.len(), 1);
+    }
+
+    #[test]
+    fn skill_folder_commands_list_files_clear_and_remove() {
+        let root = tempfile::tempdir().expect("temp");
+        let agent_id = "folder-demo";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let args = config_args(root.path(), agent_id);
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+
+        let before_body = run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::Put {
+                skill: "workspace".to_string(),
+                path: "scripts/example.py".to_string(),
+                text: Some("print(1)\n".to_string()),
+                file: None,
+                stdin: false,
+            }),
+        );
+        assert!(before_body.is_err(), "companion before skill.md");
+
+        let missing_source = run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Set {
+                name: "workspace".to_string(),
+                text: None,
+                file: None,
+                stdin: false,
+            }),
+        );
+        assert!(missing_source.is_err(), "set needs text, file, or stdin");
+
+        let body_file = root.path().join("body.md");
+        fs::write(&body_file, "# From file\n").expect("body file");
+        run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Set {
+                name: "workspace".to_string(),
+                text: None,
+                file: Some(body_file),
+                stdin: false,
+            }),
+        )
+        .expect("set from file");
+        run(&args, &SkillCmd::List).expect("list");
+        run(
+            &args,
+            &SkillCmd::Get {
+                name: "workspace".to_string(),
+            },
+        )
+        .expect("get");
+        run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Get {
+                name: "workspace".to_string(),
+            }),
+        )
+        .expect("body get");
+
+        run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::Put {
+                skill: "workspace".to_string(),
+                path: "scripts/example.py".to_string(),
+                text: Some("print(1)\n".to_string()),
+                file: None,
+                stdin: false,
+            }),
+        )
+        .expect("put script");
+        run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::List {
+                skill: "workspace".to_string(),
+            }),
+        )
+        .expect("file list");
+        run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::Get {
+                skill: "workspace".to_string(),
+                path: "scripts/example.py".to_string(),
+            }),
+        )
+        .expect("file get");
+        assert!(run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::Put {
+                skill: "workspace".to_string(),
+                path: "skill.md".to_string(),
+                text: Some("no\n".to_string()),
+                file: None,
+                stdin: false,
+            }),
+        )
+        .is_err());
+        assert!(run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Clear {
+                name: "workspace".to_string(),
+            }),
+        )
+        .is_err());
+        run(
+            &args,
+            &SkillCmd::File(SkillFileCmd::Remove {
+                skill: "workspace".to_string(),
+                path: "scripts/example.py".to_string(),
+            }),
+        )
+        .expect("remove script");
+        run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Clear {
+                name: "workspace".to_string(),
+            }),
+        )
+        .expect("clear");
+
+        run(
+            &args,
+            &SkillCmd::Add {
+                name: "notes".to_string(),
+                policy: "short".to_string(),
+                tools: vec!["home.read".to_string()],
+            },
+        )
+        .expect("add");
+        run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Get {
+                name: "notes".to_string(),
+            }),
+        )
+        .expect("empty body");
+        crate::skills::package::write_body(&paths.settings_dir, "workspace", "# Again\n")
+            .expect("rewrite");
+        run(
+            &args,
+            &SkillCmd::Remove {
+                name: "workspace".to_string(),
+            },
+        )
+        .expect("remove");
+        assert!(!paths.settings_dir.join("skills").join("workspace").exists());
+        assert!(run(
+            &args,
+            &SkillCmd::Body(SkillBodyCmd::Get {
+                name: "missing".to_string(),
+            }),
+        )
+        .is_err());
+        let last = run(
+            &args,
+            &SkillCmd::Remove {
+                name: "notes".to_string(),
+            },
+        )
+        .expect_err("last skill");
+        assert!(last.to_string().contains("last skill"), "{last}");
+
+        let extra = paths.settings_dir.join("skills").join("extra");
+        fs::create_dir_all(&extra).expect("extra");
+        fs::write(extra.join("skill.md"), "extra\n").expect("extra body");
+        let undeclared = run(&args, &SkillCmd::List).expect_err("undeclared");
+        assert!(undeclared.to_string().contains("extra"), "{undeclared}");
     }
 
     fn config_args(root: &Path, agent_id: &str) -> ConfigArgs {

@@ -753,4 +753,115 @@ access:
         // Bootstrap may exist; it must still load.
         let _ = load_config(&paths.config).expect("bootstrap remains valid");
     }
+
+    #[test]
+    fn import_rejects_a_skills_path_that_is_not_a_skill_tree() {
+        let root = tempfile::tempdir().expect("temp root");
+        let bundle = tempfile::tempdir().expect("bundle");
+        write_settings_bundle(bundle.path(), None);
+        fs::write(bundle.path().join("skills"), "not a directory").expect("file");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-skills-file",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("skills file");
+        assert!(err.to_string().contains("directory"), "{err}");
+
+        fs::remove_file(bundle.path().join("skills")).expect("rm");
+        let loose = bundle.path().join("skills");
+        fs::create_dir_all(&loose).expect("skills");
+        fs::write(loose.join("notes.txt"), "nope").expect("loose");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-loose",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("loose");
+        assert!(err.to_string().contains("skill directory"), "{err}");
+
+        fs::remove_file(loose.join("notes.txt")).expect("rm loose");
+        let extra = loose.join("extra");
+        fs::create_dir_all(&extra).expect("extra");
+        fs::write(extra.join("skill.md"), "# Extra\n").expect("body");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-undeclared",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("undeclared");
+        assert!(err.to_string().contains("not declared"), "{err}");
+
+        fs::remove_dir_all(&extra).expect("rm extra");
+        let workspace = loose.join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-missing-body",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("missing body");
+        assert!(err.to_string().contains("skill.md"), "{err}");
+
+        fs::write(workspace.join("skill.md"), " \n").expect("blank");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-blank-body",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("blank");
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn import_replaces_an_existing_skill_directory() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-replace-skill";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let bundle = tempfile::tempdir().expect("bundle");
+        let profile = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let cfg_body = fs::read_to_string(&profile.config).expect("cfg");
+        write_settings_bundle(bundle.path(), Some(&cfg_body));
+        let skill = bundle.path().join("skills").join("workspace");
+        fs::create_dir_all(skill.join("scripts")).expect("skill");
+        fs::write(skill.join("skill.md"), "# Workspace\n").expect("body");
+        fs::write(skill.join("scripts").join("example.py"), "print(1)\n").expect("script");
+        fs::write(skill.join("notes.md"), "leftover\n").expect("note");
+        run_import(&config_args(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+        ))
+        .expect("first");
+
+        fs::remove_file(skill.join("notes.md")).expect("drop note from bundle");
+        run_import(&config_args(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+        ))
+        .expect("second");
+        let installed = profile
+            .settings_dir
+            .join("skills")
+            .join("workspace")
+            .join("notes.md");
+        assert!(
+            !installed.exists(),
+            "leftover companion must not survive replace"
+        );
+    }
 }

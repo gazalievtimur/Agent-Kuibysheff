@@ -739,4 +739,75 @@ access:
             .any(|i| { i.name == "provider.api_key" && i.status == CheckStatus::Fail }));
         let _ = AGENT_CONFIG_FILE;
     }
+
+    #[test]
+    fn check_grants_profile_tools_when_a_skill_folder_exists() {
+        let dir = tempdir().expect("tempdir");
+        scaffold_agent(dir.path(), "demo");
+        let paths = resolve_agent_identity(dir.path(), "demo", None).unwrap();
+        let _ = fs::remove_file(paths.settings_dir.join("rules.md"));
+        fs::create_dir_all(paths.settings_dir.join("skills").join("workspace")).expect("skill");
+        fs::write(
+            paths
+                .settings_dir
+                .join("skills")
+                .join("workspace")
+                .join("skill.md"),
+            "# Workspace\n",
+        )
+        .expect("body");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Ok);
+        assert!(
+            settings.detail.contains("1 skill folder"),
+            "{}",
+            settings.detail
+        );
+        assert!(
+            settings.detail.contains("rules.md absent"),
+            "{}",
+            settings.detail
+        );
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "profile.read_skill"));
+    }
+
+    #[test]
+    fn check_reports_invalid_skill_package_and_unreadable_dsl() {
+        let dir = tempdir().expect("tempdir");
+        scaffold_agent(dir.path(), "demo");
+        let paths = resolve_agent_identity(dir.path(), "demo", None).unwrap();
+        fs::create_dir_all(paths.settings_dir.join("skills").join("workspace")).expect("skill");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Fail);
+        assert!(settings.detail.contains("skill.md"), "{}", settings.detail);
+
+        fs::write(paths.settings_dir.join("skills.dsl"), "not a skill\n").expect("dsl");
+        fs::remove_dir_all(paths.settings_dir.join("skills")).expect("rm skills");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Fail);
+        assert!(
+            settings.detail.contains("parse") || settings.detail.contains("skill"),
+            "{}",
+            settings.detail
+        );
+    }
 }

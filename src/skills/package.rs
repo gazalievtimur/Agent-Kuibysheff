@@ -260,12 +260,9 @@ pub fn clear_body(settings_dir: &Path, name: &str) -> Result<(), SettingsError> 
             "skill `{name}` still has companion files; remove them before clearing skill.md"
         )));
     }
-    let body = dir.join(SKILL_BODY_FILE);
-    fs::remove_file(&body).map_err(|source| SettingsError::WriteFile {
-        path: body.display().to_string(),
-        source,
-    })?;
-    fs::remove_dir(&dir).map_err(|source| SettingsError::WriteFile {
+    // Companion files are gone. Empty directories (for example `scripts/`) may remain,
+    // so remove the skill folder rather than only `skill.md` plus the top directory.
+    fs::remove_dir_all(&dir).map_err(|source| SettingsError::WriteFile {
         path: dir.display().to_string(),
         source,
     })?;
@@ -839,5 +836,69 @@ mod tests {
             .join(SKILL_PACKAGES_DIR)
             .join("research")
             .exists());
+    }
+
+    #[test]
+    fn rejects_unsafe_names_empty_body_and_a_skills_path_that_is_not_a_directory() {
+        assert!(validate_skill_dir_name("").is_err());
+        assert!(validate_skill_dir_name(" CON").is_err());
+        assert!(validate_skill_dir_name("-bad").is_err());
+        assert!(validate_skill_dir_name("AUX").is_err());
+        assert!(validate_skill_dir_name("ok name").is_ok());
+        assert!(validate_relative_skill_path("").is_err());
+        assert!(validate_relative_skill_path("/abs").is_err());
+        assert!(validate_relative_skill_path("foo/").is_err());
+        assert!(validate_relative_skill_path("foo.").is_err());
+        assert!(validate_relative_skill_path("nul").is_err());
+        assert!(validate_relative_skill_path("scripts/example.py").is_ok());
+
+        let dir = tempfile::tempdir().expect("temp");
+        let err = write_body(dir.path(), "research", " \n").expect_err("empty");
+        assert!(err.to_string().contains("empty"), "{err}");
+        assert!(read_body(dir.path(), "research")
+            .expect("missing")
+            .is_none());
+        assert!(read_body(dir.path(), "..").expect("unsafe").is_none());
+        assert!(list_package_files(dir.path(), "..")
+            .expect("unsafe")
+            .is_empty());
+        assert!(remove_package_dir(dir.path(), "..").is_ok());
+
+        fs::write(dir.path().join(SKILL_PACKAGES_DIR), "not a dir").expect("file");
+        let err = load_skill_packages(dir.path()).expect_err("not a dir");
+        assert!(err.to_string().contains("directory"), "{err}");
+        fs::remove_file(dir.path().join(SKILL_PACKAGES_DIR)).expect("rm");
+
+        let loose = dir.path().join(SKILL_PACKAGES_DIR);
+        fs::create_dir_all(&loose).expect("skills");
+        fs::write(loose.join("notes.txt"), "nope").expect("loose");
+        let err = load_skill_packages(dir.path()).expect_err("loose file");
+        assert!(err.to_string().contains("skill directory"), "{err}");
+        fs::remove_file(loose.join("notes.txt")).expect("rm loose");
+
+        let skill = loose.join("research");
+        fs::create_dir_all(&skill).expect("skill");
+        fs::write(skill.join(SKILL_BODY_FILE), " \n").expect("blank");
+        let err = load_skill_packages(dir.path()).expect_err("blank body");
+        assert!(err.to_string().contains("empty"), "{err}");
+        fs::write(skill.join(SKILL_BODY_FILE), "# Steps\n").expect("body");
+        fs::write(skill.join("blob.bin"), [0xff, 0xfe]).expect("bin");
+        let err = read_package_file(dir.path(), "research", SKILL_BODY_FILE).expect_err("body");
+        assert!(err.to_string().contains("skill body"), "{err}");
+        let err = read_package_file(dir.path(), "research", "blob.bin").expect_err("utf8");
+        let message = err.to_string().to_lowercase();
+        assert!(
+            message.contains("utf-8") || message.contains("utf8"),
+            "{err}"
+        );
+        let err = write_package_file(dir.path(), "research", SKILL_BODY_FILE, "x").expect_err("md");
+        assert!(err.to_string().contains("skill body"), "{err}");
+        let err = remove_package_file(dir.path(), "research", SKILL_BODY_FILE).expect_err("md");
+        assert!(err.to_string().contains("skill body"), "{err}");
+        let err = write_package_file(dir.path(), "other", "notes.md", "x").expect_err("no body");
+        assert!(err.to_string().contains("skill.md"), "{err}");
+        remove_package_dir(dir.path(), "research").expect("remove");
+        assert!(!skill.exists());
+        clear_body(dir.path(), "research").expect("clear missing");
     }
 }

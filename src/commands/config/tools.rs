@@ -126,3 +126,36 @@ fn connect_discovered(
         Ok(tools)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{AgentIdentityArgs, ConfigArgs, ConfigCommand, ConfigFormat, InitArgs};
+    use crate::commands::init;
+    use crate::project_paths::resolve_agent_identity;
+    use crate::skills::package::write_body;
+
+    #[test]
+    fn effective_tools_include_profile_readers_when_a_skill_folder_exists() {
+        let root = tempfile::tempdir().expect("temp");
+        let agent_id = "tools-demo";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        write_body(&paths.settings_dir, "workspace", "# Steps\n").expect("body");
+        let args = ConfigArgs {
+            identity: AgentIdentityArgs {
+                project_root: root.path().to_path_buf(),
+                agent: agent_id.to_string(),
+            },
+            format: ConfigFormat::Json,
+            command: ConfigCommand::Show,
+        };
+        run(&args, &ToolsCmd::Effective { connect: false }).expect("effective");
+    }
+}

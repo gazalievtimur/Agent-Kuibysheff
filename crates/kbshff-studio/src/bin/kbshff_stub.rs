@@ -31,6 +31,10 @@ fn main() {
         return;
     }
     if joined.contains("skill") && joined.contains("body") && joined.contains("get") {
+        if joined.contains("missing") {
+            eprintln!("missing skill body");
+            std::process::exit(2);
+        }
         println!(
             r#"{{"ok":true,"resource":"skill.body","action":"get","data":{{"content":"be careful"}}}}"#
         );
@@ -40,6 +44,10 @@ fn main() {
         && joined.contains("body")
         && (joined.contains("set") || joined.contains("clear"))
     {
+        if joined.contains("set") && joined.contains("bad") {
+            eprintln!("bad skill body");
+            std::process::exit(2);
+        }
         println!(r#"{{"ok":true,"resource":"skill.body","action":"set","data":{{"ok":true}}}}"#);
         return;
     }
