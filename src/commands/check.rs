@@ -17,7 +17,7 @@ use crate::project_paths::{resolve_agent_identity, AgentPathError};
 use crate::provider::openai_compat::OpenAiCompatClient;
 use crate::sandbox::SandboxRunner;
 use crate::settings::{load_settings, SettingsError};
-use crate::skills::dsl::SkillsCatalog;
+use crate::skills::package::catalog_from_settings;
 use crate::tool_api::ToolExecutor;
 use tokio_util::sync::CancellationToken;
 
@@ -190,12 +190,17 @@ pub async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     check_logging(&cfg, &mut items);
     check_settings(&settings_dir, &mut items);
 
-    let skills_allowed = match load_settings(&settings_dir) {
-        Ok(settings) => match SkillsCatalog::parse(&settings.skills_source) {
-            Ok(catalog) => catalog.allowed_qualified_tools(),
-            Err(_) => Default::default(),
-        },
-        Err(_) => Default::default(),
+    let (skills_allowed, grant_profile_skills) = match load_settings(&settings_dir) {
+        Ok(settings) => {
+            match catalog_from_settings(&settings.skills_source, &settings.skill_packages) {
+                Ok(catalog) => (
+                    catalog.allowed_qualified_tools(),
+                    !settings.skill_packages.is_empty(),
+                ),
+                Err(_) => (Default::default(), false),
+            }
+        }
+        Err(_) => (Default::default(), false),
     };
     let discovered: Vec<String> = inventory
         .mcp_connected
@@ -203,7 +208,10 @@ pub async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
         .flat_map(|s| s.tools.iter().cloned())
         .collect();
     let mcp_parsed = parse_tool_list(discovered.iter().map(String::as_str)).unwrap_or_default();
-    let effective = EffectiveToolPolicy::compile(&access, &skills_allowed, mcp_parsed.clone());
+    let mut effective = EffectiveToolPolicy::compile(&access, &skills_allowed, mcp_parsed.clone());
+    if grant_profile_skills {
+        effective.grant_profile_skills();
+    }
     inventory.tools_available = effective.advertised();
     inventory.mcp_gated = mcp_parsed
         .iter()
@@ -509,29 +517,32 @@ fn check_logging(cfg: &AppConfig, items: &mut Vec<CheckItem>) {
 
 fn check_settings(settings_dir: &Path, items: &mut Vec<CheckItem>) {
     match load_settings(settings_dir) {
-        Ok(settings) => match SkillsCatalog::parse(&settings.skills_source) {
-            Ok(catalog) => {
-                let rules = if settings.rules.trim().is_empty() {
-                    "rules.md absent/empty"
-                } else {
-                    "rules.md present"
-                };
-                items.push(CheckItem {
+        Ok(settings) => {
+            match catalog_from_settings(&settings.skills_source, &settings.skill_packages) {
+                Ok(catalog) => {
+                    let rules = if settings.rules.trim().is_empty() {
+                        "rules.md absent/empty"
+                    } else {
+                        "rules.md present"
+                    };
+                    items.push(CheckItem {
+                        name: "settings".to_string(),
+                        status: CheckStatus::Ok,
+                        detail: format!(
+                            "`{}`; skills ok ({} allowed tool(s), {} skill folder(s)); {rules}",
+                            settings_dir.display(),
+                            catalog.allowed_qualified_tools().len(),
+                            settings.skill_packages.len()
+                        ),
+                    });
+                }
+                Err(err) => items.push(CheckItem {
                     name: "settings".to_string(),
-                    status: CheckStatus::Ok,
-                    detail: format!(
-                        "`{}`; skills ok ({} allowed tool(s)); {rules}",
-                        settings_dir.display(),
-                        catalog.allowed_qualified_tools().len()
-                    ),
-                });
+                    status: CheckStatus::Fail,
+                    detail: format!("skills.dsl parse error: {err}"),
+                }),
             }
-            Err(err) => items.push(CheckItem {
-                name: "settings".to_string(),
-                status: CheckStatus::Fail,
-                detail: format!("skills.dsl parse error: {err}"),
-            }),
-        },
+        }
         Err(err) => items.push(CheckItem {
             name: "settings".to_string(),
             status: CheckStatus::Fail,
@@ -543,6 +554,7 @@ fn check_settings(settings_dir: &Path, items: &mut Vec<CheckItem>) {
                     format!("failed to write `{path}`: {source}")
                 }
                 SettingsError::EmptyFile(path) => format!("`{path}` is empty"),
+                SettingsError::InvalidSkillPackage(message) => message,
             },
         }),
     }
@@ -726,5 +738,76 @@ access:
             .iter()
             .any(|i| { i.name == "provider.api_key" && i.status == CheckStatus::Fail }));
         let _ = AGENT_CONFIG_FILE;
+    }
+
+    #[test]
+    fn check_grants_profile_tools_when_a_skill_folder_exists() {
+        let dir = tempdir().expect("tempdir");
+        scaffold_agent(dir.path(), "demo");
+        let paths = resolve_agent_identity(dir.path(), "demo", None).unwrap();
+        let _ = fs::remove_file(paths.settings_dir.join("rules.md"));
+        fs::create_dir_all(paths.settings_dir.join("skills").join("workspace")).expect("skill");
+        fs::write(
+            paths
+                .settings_dir
+                .join("skills")
+                .join("workspace")
+                .join("skill.md"),
+            "# Workspace\n",
+        )
+        .expect("body");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Ok);
+        assert!(
+            settings.detail.contains("1 skill folder"),
+            "{}",
+            settings.detail
+        );
+        assert!(
+            settings.detail.contains("rules.md absent"),
+            "{}",
+            settings.detail
+        );
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "profile.read_skill"));
+    }
+
+    #[test]
+    fn check_reports_invalid_skill_package_and_unreadable_dsl() {
+        let dir = tempdir().expect("tempdir");
+        scaffold_agent(dir.path(), "demo");
+        let paths = resolve_agent_identity(dir.path(), "demo", None).unwrap();
+        fs::create_dir_all(paths.settings_dir.join("skills").join("workspace")).expect("skill");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Fail);
+        assert!(settings.detail.contains("skill.md"), "{}", settings.detail);
+
+        fs::write(paths.settings_dir.join("skills.dsl"), "not a skill\n").expect("dsl");
+        fs::remove_dir_all(paths.settings_dir.join("skills")).expect("rm skills");
+        let report = run(&check_args(dir.path(), "demo")).expect("check");
+        let settings = report
+            .items
+            .iter()
+            .find(|item| item.name == "settings")
+            .expect("settings");
+        assert_eq!(settings.status, CheckStatus::Fail);
+        assert!(
+            settings.detail.contains("parse") || settings.detail.contains("skill"),
+            "{}",
+            settings.detail
+        );
     }
 }

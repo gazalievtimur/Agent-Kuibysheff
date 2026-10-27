@@ -14,6 +14,7 @@ use crate::config::{
 use crate::project_paths::{kuibysheff_root, resolve_agent_identity, AGENT_CONFIG_FILE};
 use crate::settings::{load_settings, MASTER_PROMPT_FILE, RULES_FILE, SKILLS_FILE};
 use crate::skills::dsl::SkillsCatalog;
+use crate::skills::package::{self, SKILL_BODY_FILE, SKILL_PACKAGES_DIR};
 
 use super::common::{copy_contents, dir_non_empty, reject_symlink, CommonError};
 use super::{emit_ok, ConfigCmdError};
@@ -236,6 +237,150 @@ fn stage_directory(
         write_staged_config_from_payload(&config_src, &dest, access_imported)?;
         imported.push(AGENT_CONFIG_FILE.to_string());
     }
+
+    let dsl = fs::read_to_string(source.join(SKILLS_FILE)).map_err(|source_err| {
+        ConfigCmdError::from(CommonError::ReadFile {
+            path: source.join(SKILLS_FILE).display().to_string(),
+            source: source_err,
+        })
+    })?;
+    let catalog = SkillsCatalog::parse(&dsl)?;
+    stage_skill_packages(source, stage_root, &catalog, imported)?;
+    Ok(())
+}
+
+fn stage_skill_packages(
+    source: &Path,
+    stage_root: &Path,
+    catalog: &SkillsCatalog,
+    imported: &mut Vec<String>,
+) -> Result<(), ConfigCmdError> {
+    let skills_root = source.join(SKILL_PACKAGES_DIR);
+    match fs::symlink_metadata(&skills_root) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source_err) => {
+            return Err(ConfigCmdError::from(CommonError::ReadFile {
+                path: skills_root.display().to_string(),
+                source: source_err,
+            }));
+        }
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err(ConfigCmdError::message(format!(
+                "`{}` must be a directory of skill folders",
+                skills_root.display()
+            )));
+        }
+        Ok(_) => {}
+    }
+
+    let entries = fs::read_dir(&skills_root).map_err(|source_err| {
+        ConfigCmdError::from(CommonError::ReadFile {
+            path: skills_root.display().to_string(),
+            source: source_err,
+        })
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source_err| {
+            ConfigCmdError::from(CommonError::ReadFile {
+                path: skills_root.display().to_string(),
+                source: source_err,
+            })
+        })?;
+        let path = entry.path();
+        reject_symlink(&path).map_err(ConfigCmdError::from)?;
+        if !path.is_dir() {
+            return Err(ConfigCmdError::message(format!(
+                "`{}` must be a skill directory",
+                path.display()
+            )));
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            return Err(ConfigCmdError::message(format!(
+                "skill directory `{}` is not valid UTF-8",
+                path.display()
+            )));
+        };
+        package::validate_skill_dir_name(&name).map_err(ConfigCmdError::message)?;
+        if !catalog.skills.iter().any(|skill| skill.name == name) {
+            return Err(ConfigCmdError::message(format!(
+                "skill directory `{name}` is not declared in skills.dsl"
+            )));
+        }
+        let body = path.join(SKILL_BODY_FILE);
+        if !body.is_file() {
+            return Err(ConfigCmdError::message(format!(
+                "skill `{name}` is missing {SKILL_BODY_FILE}"
+            )));
+        }
+        let text = fs::read_to_string(&body).map_err(|source_err| {
+            ConfigCmdError::from(CommonError::ReadFile {
+                path: body.display().to_string(),
+                source: source_err,
+            })
+        })?;
+        if text.trim().is_empty() {
+            return Err(ConfigCmdError::message(format!(
+                "skill `{name}` {SKILL_BODY_FILE} must not be empty"
+            )));
+        }
+        let dest = stage_root.join(SKILL_PACKAGES_DIR).join(&name);
+        stage_tree(
+            &path,
+            &dest,
+            &format!("{SKILL_PACKAGES_DIR}/{name}"),
+            imported,
+        )?;
+    }
+    Ok(())
+}
+
+fn stage_tree(
+    src_dir: &Path,
+    dest_dir: &Path,
+    prefix: &str,
+    imported: &mut Vec<String>,
+) -> Result<(), ConfigCmdError> {
+    fs::create_dir_all(dest_dir).map_err(|source_err| {
+        ConfigCmdError::from(CommonError::WriteFile {
+            path: dest_dir.display().to_string(),
+            source: source_err,
+        })
+    })?;
+    let entries = fs::read_dir(src_dir).map_err(|source_err| {
+        ConfigCmdError::from(CommonError::ReadFile {
+            path: src_dir.display().to_string(),
+            source: source_err,
+        })
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source_err| {
+            ConfigCmdError::from(CommonError::ReadFile {
+                path: src_dir.display().to_string(),
+                source: source_err,
+            })
+        })?;
+        let path = entry.path();
+        reject_symlink(&path).map_err(ConfigCmdError::from)?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            return Err(ConfigCmdError::message(format!(
+                "skill file `{}` is not valid UTF-8",
+                path.display()
+            )));
+        };
+        let relative = format!("{prefix}/{name}");
+        if path.is_dir() {
+            stage_tree(&path, &dest_dir.join(name), &relative, imported)?;
+        } else if path.is_file() {
+            copy_contents(&path, &dest_dir.join(name)).map_err(ConfigCmdError::from)?;
+            imported.push(relative);
+        } else {
+            return Err(ConfigCmdError::message(format!(
+                "skill entry `{}` is not a file",
+                path.display()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -290,7 +435,10 @@ fn validate_staging(stage_root: &Path, profile_config: &Path) -> Result<(), Conf
             ));
         }
         let settings = load_settings(stage_root)?;
-        SkillsCatalog::parse(&settings.skills_source)?;
+        crate::skills::package::catalog_from_settings(
+            &settings.skills_source,
+            &settings.skill_packages,
+        )?;
     }
     Ok(())
 }
@@ -308,7 +456,10 @@ fn validate_installed_profile(
         .any(|name| name == MASTER_PROMPT_FILE || name == SKILLS_FILE)
     {
         let settings = load_settings(profile_dir)?;
-        SkillsCatalog::parse(&settings.skills_source)?;
+        crate::skills::package::catalog_from_settings(
+            &settings.skills_source,
+            &settings.skill_packages,
+        )?;
     }
     Ok(())
 }
@@ -318,12 +469,40 @@ fn install_staging(
     profile_dir: &Path,
     imported: &[String],
 ) -> Result<(), ConfigCmdError> {
+    for dir_name in skill_dirs_in_import(imported) {
+        package::validate_skill_dir_name(&dir_name).map_err(ConfigCmdError::message)?;
+        let dest = profile_dir.join(SKILL_PACKAGES_DIR).join(&dir_name);
+        if dest.exists() {
+            fs::remove_dir_all(&dest).map_err(|source_err| {
+                ConfigCmdError::from(CommonError::WriteFile {
+                    path: dest.display().to_string(),
+                    source: source_err,
+                })
+            })?;
+        }
+    }
     for name in imported {
         let src = stage_root.join(name);
         let dest = profile_dir.join(name);
         copy_contents(&src, &dest)?;
     }
     Ok(())
+}
+
+fn skill_dirs_in_import(imported: &[String]) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for name in imported {
+        let Some(rest) = name.strip_prefix(&format!("{SKILL_PACKAGES_DIR}/")) else {
+            continue;
+        };
+        let Some((dir, _)) = rest.split_once('/') else {
+            continue;
+        };
+        if !dir.is_empty() && !dirs.iter().any(|existing| existing == dir) {
+            dirs.push(dir.to_string());
+        }
+    }
+    dirs
 }
 
 #[cfg(test)]
@@ -394,6 +573,40 @@ mod tests {
         assert_eq!(settings.master_prompt, "imported master prompt");
         assert!(settings.skills_source.contains("imported"));
         let _ = load_config(&paths.config).expect("config loads");
+    }
+
+    #[test]
+    fn import_copies_skill_folder_with_script() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-skill-folder";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let profile = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let cfg_body = fs::read_to_string(profile.config).expect("read cfg");
+        write_settings_bundle(bundle.path(), Some(&cfg_body));
+        let skill = bundle.path().join("skills").join("workspace");
+        fs::create_dir_all(skill.join("scripts")).expect("skill dir");
+        fs::write(skill.join("skill.md"), "# Workspace\n").expect("body");
+        fs::write(skill.join("scripts").join("example.py"), "print(1)\n").expect("script");
+
+        let args = config_args(root.path(), agent_id, bundle.path().to_path_buf(), true);
+        run_import(&args).expect("import");
+
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let settings = load_settings(&paths.settings_dir).expect("settings");
+        let package = settings.skill_packages.get("workspace").expect("package");
+        assert!(package.body.contains("Workspace"));
+        assert!(package
+            .files
+            .iter()
+            .any(|file| file.relative == "scripts/example.py"));
     }
 
     #[test]
@@ -539,5 +752,116 @@ access:
         );
         // Bootstrap may exist; it must still load.
         let _ = load_config(&paths.config).expect("bootstrap remains valid");
+    }
+
+    #[test]
+    fn import_rejects_a_skills_path_that_is_not_a_skill_tree() {
+        let root = tempfile::tempdir().expect("temp root");
+        let bundle = tempfile::tempdir().expect("bundle");
+        write_settings_bundle(bundle.path(), None);
+        fs::write(bundle.path().join("skills"), "not a directory").expect("file");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-skills-file",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("skills file");
+        assert!(err.to_string().contains("directory"), "{err}");
+
+        fs::remove_file(bundle.path().join("skills")).expect("rm");
+        let loose = bundle.path().join("skills");
+        fs::create_dir_all(&loose).expect("skills");
+        fs::write(loose.join("notes.txt"), "nope").expect("loose");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-loose",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("loose");
+        assert!(err.to_string().contains("skill directory"), "{err}");
+
+        fs::remove_file(loose.join("notes.txt")).expect("rm loose");
+        let extra = loose.join("extra");
+        fs::create_dir_all(&extra).expect("extra");
+        fs::write(extra.join("skill.md"), "# Extra\n").expect("body");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-undeclared",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("undeclared");
+        assert!(err.to_string().contains("not declared"), "{err}");
+
+        fs::remove_dir_all(&extra).expect("rm extra");
+        let workspace = loose.join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-missing-body",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("missing body");
+        assert!(err.to_string().contains("skill.md"), "{err}");
+
+        fs::write(workspace.join("skill.md"), " \n").expect("blank");
+        let err = run_import(&config_args(
+            root.path(),
+            "import-blank-body",
+            bundle.path().to_path_buf(),
+            false,
+        ))
+        .expect_err("blank");
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn import_replaces_an_existing_skill_directory() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-replace-skill";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let bundle = tempfile::tempdir().expect("bundle");
+        let profile = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let cfg_body = fs::read_to_string(&profile.config).expect("cfg");
+        write_settings_bundle(bundle.path(), Some(&cfg_body));
+        let skill = bundle.path().join("skills").join("workspace");
+        fs::create_dir_all(skill.join("scripts")).expect("skill");
+        fs::write(skill.join("skill.md"), "# Workspace\n").expect("body");
+        fs::write(skill.join("scripts").join("example.py"), "print(1)\n").expect("script");
+        fs::write(skill.join("notes.md"), "leftover\n").expect("note");
+        run_import(&config_args(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+        ))
+        .expect("first");
+
+        fs::remove_file(skill.join("notes.md")).expect("drop note from bundle");
+        run_import(&config_args(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+        ))
+        .expect("second");
+        let installed = profile
+            .settings_dir
+            .join("skills")
+            .join("workspace")
+            .join("notes.md");
+        assert!(
+            !installed.exists(),
+            "leftover companion must not survive replace"
+        );
     }
 }

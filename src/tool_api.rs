@@ -39,6 +39,25 @@ pub enum HomeFsError {
     UnknownTool { tool: String },
 }
 
+/// Errors from the `profile.*` skill-package tools.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ProfileSkillError {
+    #[error("invalid arguments: {error}")]
+    InvalidArguments { error: String },
+    #[error("{error}")]
+    Denied { error: String },
+    #[error("operation `{operation}` failed for `{path}`: {source}")]
+    Io {
+        operation: String,
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("unknown tool `{tool}`")]
+    UnknownTool { tool: String },
+}
+
 /// Errors from the `local_tools.*` built-in repository research tools.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -90,6 +109,8 @@ pub enum ToolError {
     HomeFs(#[from] HomeFsError),
     #[error("local tools error: {0}")]
     LocalTools(#[from] LocalToolsError),
+    #[error("profile skill error: {0}")]
+    ProfileSkill(#[from] ProfileSkillError),
     #[error("policy error: {0}")]
     Policy(#[from] PolicyError),
 }

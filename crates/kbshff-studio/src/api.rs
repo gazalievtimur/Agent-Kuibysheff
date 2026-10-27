@@ -266,6 +266,60 @@ async fn get_skills(
     }
 }
 
+async fn get_skill_body(
+    State(state): State<StudioState>,
+    AxumPath((agent_id, name)): AxumPath<(String, String)>,
+) -> Response {
+    let kbshff = client(&state);
+    let mut args = kbshff.config_prefix(&agent_id);
+    args.push("skill".to_string());
+    args.push("body".to_string());
+    args.push("get".to_string());
+    args.push(name);
+    match kbshff.exec_json(&args, None).await {
+        Ok(value) => {
+            let data = envelope_data(value);
+            let content = data.get("content").and_then(Value::as_str).unwrap_or("");
+            Json(json!({ "content": content })).into_response()
+        }
+        Err(message) => err(StatusCode::BAD_REQUEST, message),
+    }
+}
+
+async fn put_skill_body(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath((agent_id, name)): AxumPath<(String, String)>,
+    Json(body): Json<TextUpdate>,
+) -> Response {
+    if !studio_header_ok(&headers) {
+        return reject_missing_studio_header();
+    }
+    let kbshff = client(&state);
+    let mut args = kbshff.config_prefix(&agent_id);
+    args.push("skill".to_string());
+    args.push("body".to_string());
+    if body.content.trim().is_empty() {
+        args.push("clear".to_string());
+        args.push(name);
+        match kbshff.exec_json(&args, None).await {
+            Ok(_) => Json(json!({ "ok": true })).into_response(),
+            Err(message) => err(StatusCode::BAD_REQUEST, message),
+        }
+    } else {
+        args.push("set".to_string());
+        args.push(name);
+        args.push("--stdin".to_string());
+        match kbshff
+            .exec_json(&args, Some(body.content.into_bytes()))
+            .await
+        {
+            Ok(_) => Json(json!({ "ok": true })).into_response(),
+            Err(message) => err(StatusCode::BAD_REQUEST, message),
+        }
+    }
+}
+
 async fn put_skills(
     State(state): State<StudioState>,
     headers: HeaderMap,
@@ -613,6 +667,10 @@ pub fn router(state: StudioState) -> axum::Router {
         .route("/api/agents/{id}/prompt", get(get_prompt).put(put_prompt))
         .route("/api/agents/{id}/rules", get(get_rules).put(put_rules))
         .route("/api/agents/{id}/skills", get(get_skills).put(put_skills))
+        .route(
+            "/api/agents/{id}/skills/{name}/body",
+            get(get_skill_body).put(put_skill_body),
+        )
         .route("/api/agents/{id}/secret", post(put_secret))
         .route("/api/agents/{id}/check", post(run_check))
         .route("/api/agents/{id}/mcp/discover", post(mcp_discover))

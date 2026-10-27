@@ -8,10 +8,9 @@ use tokio_util::sync::CancellationToken;
 use crate::access::known_builtins;
 use crate::cli::{ConfigArgs, ToolsCmd};
 use crate::mcp::stdio_client::{McpIsolationContext, McpRegistry};
-use crate::skills::dsl::SkillsCatalog;
 use crate::tool_api::ToolExecutor;
 
-use super::common::load_profile;
+use super::common::{load_profile, parse_skills};
 use super::{emit_ok, ConfigCmdError};
 
 #[derive(Debug, Serialize)]
@@ -30,7 +29,7 @@ pub fn run(args: &ConfigArgs, cmd: &ToolsCmd) -> Result<(), ConfigCmdError> {
     match cmd {
         ToolsCmd::Effective { connect } => {
             let profile = load_profile(&args.identity)?;
-            let catalog = SkillsCatalog::parse(&profile.settings.skills_source)?;
+            let catalog = parse_skills(&profile.settings)?;
             let skill_tools: BTreeSet<String> = catalog.allowed_tool_set().into_iter().collect();
 
             let access_builtins: BTreeSet<String> = profile
@@ -80,8 +79,16 @@ pub fn run(args: &ConfigArgs, cmd: &ToolsCmd) -> Result<(), ConfigCmdError> {
 
             let mut effective = effective_builtins.clone();
             effective.extend(effective_mcp);
+            if !profile.settings.skill_packages.is_empty() {
+                effective.push("profile.list_skill".to_string());
+                effective.push("profile.read_skill".to_string());
+                effective_builtins.push("profile.list_skill".to_string());
+                effective_builtins.push("profile.read_skill".to_string());
+            }
             effective.sort();
             effective.dedup();
+            effective_builtins.sort();
+            effective_builtins.dedup();
 
             let data = EffectiveTools {
                 effective,
@@ -118,4 +125,37 @@ fn connect_discovered(
         registry.shutdown().await;
         Ok(tools)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{AgentIdentityArgs, ConfigArgs, ConfigCommand, ConfigFormat, InitArgs};
+    use crate::commands::init;
+    use crate::project_paths::resolve_agent_identity;
+    use crate::skills::package::write_body;
+
+    #[test]
+    fn effective_tools_include_profile_readers_when_a_skill_folder_exists() {
+        let root = tempfile::tempdir().expect("temp");
+        let agent_id = "tools-demo";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        write_body(&paths.settings_dir, "workspace", "# Steps\n").expect("body");
+        let args = ConfigArgs {
+            identity: AgentIdentityArgs {
+                project_root: root.path().to_path_buf(),
+                agent: agent_id.to_string(),
+            },
+            format: ConfigFormat::Json,
+            command: ConfigCommand::Show,
+        };
+        run(&args, &ToolsCmd::Effective { connect: false }).expect("effective");
+    }
 }

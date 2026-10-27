@@ -120,3 +120,91 @@ async fn second_run_conflicts_and_cancel_stops_the_child() {
     }
     assert_eq!(status, "cancelled");
 }
+
+#[tokio::test]
+async fn skill_body_round_trip_uses_profile_command() {
+    let app = app();
+    let got = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/skills/research/body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(got.status(), StatusCode::OK);
+    let got_json = body_json(got).await;
+    assert_eq!(got_json["content"], "be careful");
+
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/skills/research/body")
+                .header("content-type", "application/json")
+                .header("x-kbshff-studio", "1")
+                .body(Body::from(r#"{"content":"follow the skill"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+
+    let missing_header = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/skills/research/body")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"follow the skill"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_header.status(), StatusCode::FORBIDDEN);
+
+    let cleared = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/skills/research/body")
+                .header("content-type", "application/json")
+                .header("x-kbshff-studio", "1")
+                .body(Body::from(r#"{"content":"  "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/skills/missing/body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+
+    let rejected = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/skills/bad/body")
+                .header("content-type", "application/json")
+                .header("x-kbshff-studio", "1")
+                .body(Body::from(r#"{"content":"nope"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+}

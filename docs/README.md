@@ -24,6 +24,7 @@ User-facing docs for `agent_Kuibysheff`.
 
 | Document | Description |
 | --- | --- |
+| [../README.md](../README.md#agent-profile) | Agent profile: prompts, `skills.dsl`, and `skills/<name>/` |
 | [../prompt-examples.md](../prompt-examples.md) | Ready-to-use `--prompt` templates |
 | [../test-agents/README.md](../test-agents/README.md) | Specialized agent profiles |
 | [../extensions/vscode/README.md](../extensions/vscode/README.md) | VS Code extension |

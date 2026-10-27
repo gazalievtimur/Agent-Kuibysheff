@@ -28,7 +28,7 @@ pub use check::CheckArgs;
 pub use config::{
     AccessCmd, BillingCmd, BuiltinsCmd, ConfigArgs, ConfigCommand, ConfigFormat, DocumentCmd,
     EventMcpCmd, ImportArgs, LimitsCmd, McpCmd, PromptCmd, ProviderCmd, RulesCmd, SecretCmd,
-    SkillCmd, SkillToolsCmd, ToolsCmd,
+    SkillBodyCmd, SkillCmd, SkillFileCmd, SkillToolsCmd, ToolsCmd,
 };
 pub use init::InitArgs;
 pub use mcp::{McpProbeArgs, McpProbeCommand};

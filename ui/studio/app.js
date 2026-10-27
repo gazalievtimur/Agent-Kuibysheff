@@ -14,6 +14,7 @@
     runEvents: { items: [], view: "pretty" },
     currentRunId: null,
     eventSource: null,
+    skillBodyName: "",
   };
 
   const $ = (id) => document.getElementById(id);
@@ -108,6 +109,40 @@
     $("cfg-prompt").value = prompt.content || "";
     $("cfg-rules").value = rules.content || "";
     $("cfg-skills").value = JSON.stringify(skills.skills || [], null, 2);
+    await fillSkillPicker(skills.skills || []);
+  }
+
+  async function fillSkillPicker(skills) {
+    const select = $("cfg-skill-name");
+    const previous = state.skillBodyName || select.value;
+    select.innerHTML = "";
+    const names = skills.map((skill) => skill && skill.name).filter(Boolean);
+    if (names.length === 0) {
+      $("cfg-skill-body").value = "";
+      state.skillBodyName = "";
+      return;
+    }
+    names.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+    select.value = names.includes(previous) ? previous : names[0];
+    await loadSkillBody(select.value);
+  }
+
+  async function loadSkillBody(name) {
+    if (!name) {
+      $("cfg-skill-body").value = "";
+      state.skillBodyName = "";
+      return;
+    }
+    const body = await api(
+      `/api/agents/${encodeURIComponent(state.agentId)}/skills/${encodeURIComponent(name)}/body`,
+    );
+    $("cfg-skill-body").value = body.content || "";
+    state.skillBodyName = name;
   }
 
   function fillConfigForm(payload) {
@@ -422,6 +457,17 @@
       mutate: true,
       body: JSON.stringify({ skills }),
     });
+    const skillName = $("cfg-skill-name").value;
+    if (skillName && skills.some((skill) => skill && skill.name === skillName)) {
+      await api(
+        `/api/agents/${encodeURIComponent(id)}/skills/${encodeURIComponent(skillName)}/body`,
+        {
+          method: "PUT",
+          mutate: true,
+          body: JSON.stringify({ content: $("cfg-skill-body").value }),
+        },
+      );
+    }
     await loadAll();
   }
 
@@ -1250,6 +1296,11 @@
       });
       renderMcpList();
     });
+    $("cfg-skill-name").addEventListener("change", () =>
+      loadSkillBody($("cfg-skill-name").value).catch((err) =>
+        setStatus($("save-status"), err.message || String(err), true),
+      ),
+    );
     $("btn-save").addEventListener("click", async () => {
       try {
         await saveAll();

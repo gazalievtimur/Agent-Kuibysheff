@@ -30,6 +30,27 @@ fn main() {
         );
         return;
     }
+    if joined.contains("skill") && joined.contains("body") && joined.contains("get") {
+        if joined.contains("missing") {
+            eprintln!("missing skill body");
+            std::process::exit(2);
+        }
+        println!(
+            r#"{{"ok":true,"resource":"skill.body","action":"get","data":{{"content":"be careful"}}}}"#
+        );
+        return;
+    }
+    if joined.contains("skill")
+        && joined.contains("body")
+        && (joined.contains("set") || joined.contains("clear"))
+    {
+        if joined.contains("set") && joined.contains("bad") {
+            eprintln!("bad skill body");
+            std::process::exit(2);
+        }
+        println!(r#"{{"ok":true,"resource":"skill.body","action":"set","data":{{"ok":true}}}}"#);
+        return;
+    }
     if joined.contains("check") {
         println!(
             r#"{{"config_path":"c","items":[{{"name":"config","status":"ok","detail":"ok"}}],"inventory":{{"builtins_allowed":[],"mcp_connected":[],"mcp_failed":[],"mcp_gated":[],"tools_available":[]}}}}"#

@@ -126,6 +126,16 @@
               <textarea id="cfg-skills" rows="12" spellcheck="false"></textarea>
               <p class="hint">JSON array of <code>{name, policy, allowed_tools}</code>. Names/policies cannot contain <code>"</code>.</p>
             </article>
+
+            <article class="panel wide">
+              <h2>Skill instructions</h2>
+              <label class="field">
+                Skill
+                <select id="cfg-skill-name"></select>
+              </label>
+              <textarea id="cfg-skill-body" rows="12" spellcheck="false"></textarea>
+              <p class="hint">Edits <code>skills/&lt;name&gt;/skill.md</code>. Companion scripts are added with <code>config skill file</code> or directory import.</p>
+            </article>
           </div>
           <div class="footer-actions">
             <button type="button" id="btn-save" class="btn primary">Save</button>
