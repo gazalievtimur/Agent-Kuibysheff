@@ -471,7 +471,7 @@ fn install_staging(
 ) -> Result<(), ConfigCmdError> {
     for dir_name in skill_dirs_in_import(imported) {
         package::validate_skill_dir_name(&dir_name).map_err(ConfigCmdError::message)?;
-        let dest = profile_dir.join(SKILL_PACKAGES_DIR).join(&dir_name);
+        let dest = package::effective_skill_packages_root(profile_dir).join(&dir_name);
         if dest.exists() {
             fs::remove_dir_all(&dest).map_err(|source_err| {
                 ConfigCmdError::from(CommonError::WriteFile {
@@ -483,10 +483,18 @@ fn install_staging(
     }
     for name in imported {
         let src = stage_root.join(name);
-        let dest = profile_dir.join(name);
+        let dest = install_dest(profile_dir, name);
         copy_contents(&src, &dest)?;
     }
     Ok(())
+}
+
+fn install_dest(profile_dir: &Path, relative: &str) -> PathBuf {
+    let prefix = format!("{SKILL_PACKAGES_DIR}/");
+    if let Some(rest) = relative.strip_prefix(&prefix) {
+        return package::effective_skill_packages_root(profile_dir).join(rest);
+    }
+    profile_dir.join(relative)
 }
 
 fn skill_dirs_in_import(imported: &[String]) -> Vec<String> {
@@ -854,11 +862,10 @@ access:
             true,
         ))
         .expect("second");
-        let installed = profile
-            .settings_dir
-            .join("skills")
-            .join("workspace")
-            .join("notes.md");
+        let installed =
+            crate::skills::package::effective_skill_packages_root(&profile.settings_dir)
+                .join("workspace")
+                .join("notes.md");
         assert!(
             !installed.exists(),
             "leftover companion must not survive replace"

@@ -1,4 +1,10 @@
-//! Skill packages on disk: `skills/<name>/skill.md` plus companion files.
+//! Skill packages on disk: `<root>/<name>/skill.md` plus companion files.
+//!
+//! For a Kuibysheff profile (`protected/agents/{id}`), packages live under
+//! `.kuibysheff/runtime/skills/{id}` so a sandbox can read scripts without a
+//! `protected` path. When that directory is absent, load still uses
+//! `settings_dir/skills`. Other settings dirs (tests, import staging) always
+//! use `settings_dir/skills`.
 //!
 //! The directory name is the skill name from `skills.dsl`. Companion scripts stay
 //! inside that directory. Callers never pass a raw filesystem path into `protected/`.
@@ -8,6 +14,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use crate::project_paths::runtime_skills_dir_from_settings_dir;
 use crate::settings::SettingsError;
 use crate::skills::dsl::{SkillsCatalog, SkillsError};
 
@@ -30,10 +37,50 @@ pub struct SkillPackage {
     pub files: Vec<SkillFileEntry>,
 }
 
-/// Loads every skill folder under `settings_dir/skills`.
+/// Directory that receives new skill packages.
 ///
-/// A missing `skills/` directory is an empty catalog. A directory without a
-/// non-empty `skill.md`, a symlink, or a path that escapes the skill folder fails.
+/// Kuibysheff profiles always resolve to `.kuibysheff/runtime/skills/{id}`, even
+/// when that directory does not exist yet. Every other `settings_dir` resolves
+/// to `settings_dir/skills`.
+#[must_use]
+pub fn effective_skill_packages_root(settings_dir: &Path) -> PathBuf {
+    runtime_skills_dir_from_settings_dir(settings_dir)
+        .unwrap_or_else(|| settings_dir.join(SKILL_PACKAGES_DIR))
+}
+
+/// Root used when reading packages.
+///
+/// A real runtime directory wins over `settings_dir/skills`. A missing runtime
+/// directory falls back. A symlink or non-directory at the runtime path is rejected.
+fn packages_root_for_load(settings_dir: &Path) -> Result<PathBuf, SettingsError> {
+    let legacy = settings_dir.join(SKILL_PACKAGES_DIR);
+    let Some(preferred) = runtime_skills_dir_from_settings_dir(settings_dir) else {
+        return Ok(legacy);
+    };
+    match fs::symlink_metadata(&preferred) {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(legacy),
+        Err(source) => Err(SettingsError::ReadFile {
+            path: preferred.display().to_string(),
+            source,
+        }),
+        Ok(meta) if meta.file_type().is_symlink() => Err(invalid(format!(
+            "`{}` must not be a symlink",
+            preferred.display()
+        ))),
+        Ok(meta) if !meta.is_dir() => Err(invalid(format!(
+            "`{}` must be a directory of skill folders",
+            preferred.display()
+        ))),
+        Ok(_) => Ok(preferred),
+    }
+}
+
+/// Loads every skill folder under the effective packages root.
+///
+/// A missing root is an empty catalog. A directory without a non-empty
+/// `skill.md`, a symlink, or a path that escapes the skill folder fails.
+/// When both `.kuibysheff/runtime/skills/{id}` and `protected/.../skills` exist,
+/// the runtime tree wins.
 ///
 /// # Errors
 ///
@@ -42,7 +89,7 @@ pub struct SkillPackage {
 pub fn load_skill_packages(
     settings_dir: &Path,
 ) -> Result<BTreeMap<String, SkillPackage>, SettingsError> {
-    let root = settings_dir.join(SKILL_PACKAGES_DIR);
+    let root = packages_root_for_load(settings_dir)?;
     match fs::symlink_metadata(&root) {
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(source) => {
@@ -227,7 +274,7 @@ pub fn write_body(settings_dir: &Path, name: &str, content: &str) -> Result<(), 
             "skill `{name}` skill.md must not be empty"
         )));
     }
-    let dir = skill_dir(settings_dir, name);
+    let dir = skill_dir_for_write(settings_dir, name);
     fs::create_dir_all(&dir).map_err(|source| SettingsError::WriteFile {
         path: dir.display().to_string(),
         source,
@@ -246,11 +293,30 @@ pub fn write_body(settings_dir: &Path, name: &str, content: &str) -> Result<(), 
 /// Returns [`SettingsError`] when companion files remain or deletion fails.
 pub fn clear_body(settings_dir: &Path, name: &str) -> Result<(), SettingsError> {
     validate_skill_dir_name(name).map_err(invalid)?;
-    let dir = skill_dir(settings_dir, name);
-    if !dir.exists() {
-        return Ok(());
+    let dir = skill_dir_for_write(settings_dir, name);
+    let target = if dir.exists() {
+        dir
+    } else {
+        let loaded = skill_dir_for_load(settings_dir, name)?;
+        if !loaded.exists() {
+            return Ok(());
+        }
+        loaded
+    };
+    clear_body_dir(name, &target)?;
+    let legacy = settings_dir.join(SKILL_PACKAGES_DIR).join(name);
+    if legacy != target && legacy.exists() {
+        // Drop a shadowed protected copy so it does not reappear after runtime is cleared.
+        fs::remove_dir_all(&legacy).map_err(|source| SettingsError::WriteFile {
+            path: legacy.display().to_string(),
+            source,
+        })?;
     }
-    let package = load_one(&dir, name)?;
+    Ok(())
+}
+
+fn clear_body_dir(name: &str, dir: &Path) -> Result<(), SettingsError> {
+    let package = load_one(dir, name)?;
     let companions = package
         .files
         .iter()
@@ -262,7 +328,7 @@ pub fn clear_body(settings_dir: &Path, name: &str) -> Result<(), SettingsError> 
     }
     // Companion files are gone. Empty directories (for example `scripts/`) may remain,
     // so remove the skill folder rather than only `skill.md` plus the top directory.
-    fs::remove_dir_all(&dir).map_err(|source| SettingsError::WriteFile {
+    fs::remove_dir_all(dir).map_err(|source| SettingsError::WriteFile {
         path: dir.display().to_string(),
         source,
     })?;
@@ -278,8 +344,17 @@ pub fn remove_package_dir(settings_dir: &Path, name: &str) -> Result<(), Setting
     if validate_skill_dir_name(name).is_err() {
         return Ok(());
     }
-    let dir = skill_dir(settings_dir, name);
-    match fs::symlink_metadata(&dir) {
+    let dir = skill_dir_for_write(settings_dir, name);
+    remove_skill_dir(&dir)?;
+    let legacy = settings_dir.join(SKILL_PACKAGES_DIR).join(name);
+    if legacy != dir {
+        remove_skill_dir(&legacy)?;
+    }
+    Ok(())
+}
+
+fn remove_skill_dir(dir: &Path) -> Result<(), SettingsError> {
+    match fs::symlink_metadata(dir) {
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(SettingsError::WriteFile {
             path: dir.display().to_string(),
@@ -289,7 +364,7 @@ pub fn remove_package_dir(settings_dir: &Path, name: &str) -> Result<(), Setting
             "refusing to remove symlink skill directory `{}`",
             dir.display()
         ))),
-        Ok(_) => fs::remove_dir_all(&dir).map_err(|source| SettingsError::WriteFile {
+        Ok(_) => fs::remove_dir_all(dir).map_err(|source| SettingsError::WriteFile {
             path: dir.display().to_string(),
             source,
         }),
@@ -305,7 +380,7 @@ pub fn list_package_files(settings_dir: &Path, name: &str) -> Result<Vec<String>
     if validate_skill_dir_name(name).is_err() {
         return Ok(Vec::new());
     }
-    let dir = skill_dir(settings_dir, name);
+    let dir = skill_dir_for_load(settings_dir, name)?;
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -355,7 +430,7 @@ pub fn write_package_file(
     }
     validate_skill_dir_name(name).map_err(invalid)?;
     validate_relative_skill_path(relative).map_err(invalid)?;
-    let dir = skill_dir(settings_dir, name);
+    let dir = skill_dir_for_write(settings_dir, name);
     if !dir.join(SKILL_BODY_FILE).is_file() {
         return Err(invalid(format!(
             "skill `{name}` has no skill.md; set the body before adding files"
@@ -404,7 +479,7 @@ pub fn read_body(settings_dir: &Path, name: &str) -> Result<Option<String>, Sett
     if validate_skill_dir_name(name).is_err() {
         return Ok(None);
     }
-    let dir = skill_dir(settings_dir, name);
+    let dir = skill_dir_for_load(settings_dir, name)?;
     if !dir.exists() {
         return Ok(None);
     }
@@ -419,7 +494,7 @@ fn require_file(
 ) -> Result<SkillFileEntry, SettingsError> {
     validate_skill_dir_name(name).map_err(invalid)?;
     validate_relative_skill_path(relative).map_err(invalid)?;
-    let dir = skill_dir(settings_dir, name);
+    let dir = skill_dir_for_load(settings_dir, name)?;
     if !dir.exists() {
         return Err(invalid(format!("skill `{name}` has no folder")));
     }
@@ -608,8 +683,12 @@ fn ensure_parent_inside(skill_root: &Path, dest: &Path) -> Result<(), SettingsEr
     Ok(())
 }
 
-fn skill_dir(settings_dir: &Path, name: &str) -> PathBuf {
-    settings_dir.join(SKILL_PACKAGES_DIR).join(name)
+fn skill_dir_for_load(settings_dir: &Path, name: &str) -> Result<PathBuf, SettingsError> {
+    Ok(packages_root_for_load(settings_dir)?.join(name))
+}
+
+fn skill_dir_for_write(settings_dir: &Path, name: &str) -> PathBuf {
+    effective_skill_packages_root(settings_dir).join(name)
 }
 
 fn reject_existing_symlink(path: &Path) -> Result<(), SettingsError> {
@@ -707,6 +786,12 @@ fn is_windows_reserved(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn write_package(root: &Path, name: &str, body: &str) {
+        let skill = root.join(name);
+        fs::create_dir_all(&skill).expect("dirs");
+        fs::write(skill.join(SKILL_BODY_FILE), body).expect("body");
+    }
+
     fn write_skill(dir: &Path, name: &str, body: &str, script: Option<&str>) {
         let skill = dir.join(SKILL_PACKAGES_DIR).join(name);
         fs::create_dir_all(skill.join("scripts")).expect("dirs");
@@ -739,6 +824,95 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let packages = load_skill_packages(dir.path()).expect("packages");
         assert!(packages.is_empty());
+    }
+
+    fn profile_settings(root: &Path, agent_id: &str) -> PathBuf {
+        let settings = crate::project_paths::agent_profile_dir(root, agent_id).expect("profile");
+        fs::create_dir_all(&settings).expect("profile dir");
+        settings
+    }
+
+    #[test]
+    fn loads_runtime_packages_when_protected_skills_are_absent() {
+        let project = tempfile::tempdir().expect("temp");
+        let settings = profile_settings(project.path(), "demo");
+        let runtime = crate::project_paths::agent_runtime_skills_dir(project.path(), "demo")
+            .expect("runtime");
+        write_package(&runtime, "demo", "# Demo\n");
+
+        let packages = load_skill_packages(&settings).expect("packages");
+        let package = packages.get("demo").expect("demo");
+        assert_eq!(package.body, "# Demo\n");
+        let runtime_canon = runtime.canonicalize().expect("canon");
+        assert!(package.root.starts_with(&runtime_canon));
+        assert!(!settings.join(SKILL_PACKAGES_DIR).exists());
+    }
+
+    #[test]
+    fn runtime_tree_wins_when_both_package_roots_exist() {
+        let project = tempfile::tempdir().expect("temp");
+        let settings = profile_settings(project.path(), "demo");
+        write_skill(&settings, "shared", "legacy\n", None);
+        write_skill(&settings, "legacy-only", "legacy only\n", None);
+        let runtime = crate::project_paths::agent_runtime_skills_dir(project.path(), "demo")
+            .expect("runtime");
+        write_package(&runtime, "shared", "runtime\n");
+        write_package(&runtime, "runtime-only", "runtime only\n");
+
+        let packages = load_skill_packages(&settings).expect("packages");
+        assert_eq!(packages.get("shared").expect("shared").body, "runtime\n");
+        assert!(packages.contains_key("runtime-only"));
+        assert!(!packages.contains_key("legacy-only"));
+    }
+
+    #[test]
+    fn rejects_symlink_runtime_skills_root_when_the_os_allows_links() {
+        let project = tempfile::tempdir().expect("temp");
+        let settings = profile_settings(project.path(), "demo");
+        let runtime = crate::project_paths::agent_runtime_skills_dir(project.path(), "demo")
+            .expect("runtime");
+        let real = project.path().join("real-skills");
+        fs::create_dir_all(&real).expect("real");
+        if let Some(parent) = runtime.parent() {
+            fs::create_dir_all(parent).expect("runtime parent");
+        }
+        if !create_symlink_dir(&real, &runtime) {
+            return;
+        }
+        let err = load_skill_packages(&settings).expect_err("symlink root");
+        assert!(err.to_string().contains("symlink"), "{err}");
+    }
+
+    #[test]
+    fn write_on_a_profile_creates_the_runtime_tree() {
+        let project = tempfile::tempdir().expect("temp");
+        let settings = profile_settings(project.path(), "demo");
+        write_body(&settings, "research", "# Research\n").expect("body");
+        let runtime = crate::project_paths::agent_runtime_skills_dir(project.path(), "demo")
+            .expect("runtime");
+        assert!(runtime.join("research").join(SKILL_BODY_FILE).is_file());
+        assert!(!settings.join(SKILL_PACKAGES_DIR).join("research").exists());
+        let packages = load_skill_packages(&settings).expect("packages");
+        assert_eq!(
+            packages.get("research").expect("research").body,
+            "# Research\n"
+        );
+    }
+
+    fn create_symlink_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (target, link);
+            false
+        }
     }
 
     #[test]

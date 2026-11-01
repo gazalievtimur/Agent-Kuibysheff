@@ -646,7 +646,8 @@ mod tests {
         .expect_err("last skill");
         assert!(last.to_string().contains("last skill"), "{last}");
 
-        let extra = paths.settings_dir.join("skills").join("extra");
+        let extra = crate::skills::package::effective_skill_packages_root(&paths.settings_dir)
+            .join("extra");
         fs::create_dir_all(&extra).expect("extra");
         fs::write(extra.join("skill.md"), "extra\n").expect("extra body");
         let undeclared = run(&args, &SkillCmd::List).expect_err("undeclared");
