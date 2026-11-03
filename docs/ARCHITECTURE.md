@@ -12,22 +12,25 @@
 
 ## Workspace layout
 
-The repository is a Cargo workspace with three crates:
+The repository is a Cargo workspace with four crates:
 
 | Crate | Path | Role |
 |-------|------|------|
 | `agent_Kuibysheff` | repository root | Main library and `kbshff` CLI binary. Forbids `unsafe_code` at the lint level. |
+| `kbshff-studio` | `crates/kbshff-studio` | Browser studio. Spawns `kbshff` and does not link the agent library. |
 | `sandbox-linux` | `crates/sandbox-linux` | Linux namespace sandbox with `libc` FFI. Contains all Linux-specific `unsafe`. |
 | `sandbox-windows` | `crates/sandbox-windows` | Windows AppContainer sandbox with `windows-sys` FFI. Contains all Windows-specific `unsafe`. |
 
 ```mermaid
 flowchart TD
     subgraph workspace [Cargo workspace]
+        STUDIO[kbshff-studio]
         AGENT[agent_Kuibysheff]
         LX[sandbox-linux]
         WX[sandbox-windows]
     end
 
+    STUDIO -->|subprocess| AGENT
     AGENT -->|always| LX
     AGENT -->|cfg(windows)| WX
 ```
@@ -85,18 +88,19 @@ flowchart TD
 - `src/main.rs` — thin binary entry: calls `sandbox_linux::try_run_helper()` before Tokio, then `app::run()`.
 - `src/app.rs` — CLI composition root (crate-facing, not a stable library facade). Loads dotenv, parses subcommands, and for `run` / `acp` / `a2a` starts Tokio and wires all layers. Management commands (`init`, `check`, …) print human text and exit codes; only `run` emits `RunOutput` JSON. `acp` speaks ACP JSON-RPC on stdio; `a2a` serves A2A 1.0 over HTTP.
 - `src/cli/` — `clap` subcommands (`pub(crate)`): `run` / `acp` / `a2a` (`--project-root`,
-  `--agent`, optional `--home`), `init`, `check`, and `config` (CRUD + import).
+  `--agent`, optional `--home`), `init`, `check`, `config` (CRUD + import), `agent`,
+  `mcp`, and `ui` (executes `kbshff-studio` when that binary is installed).
 - `src/commands/` — management command implementations (`pub(crate)`: `init` scaffold, `check` resource probes). Templates for `init` live under `src/templates/agent_init/` and are embedded via `include_str!`.
 - `src/acp/` — Agent Client Protocol stdio server (`session/new`, `session/prompt`, `session/cancel`, streaming `session/update`). Maps `AgentEngine` events onto ACP schema; does not implement AHP.
 - `src/a2a/` — Agent-to-Agent (A2A) 1.0 HTTP server via official `a2a-lf` / `a2a-server-lf` SDK (`AgentExecutor` → `run_agent_prompt`, Agent Card from profile, JSON-RPC + REST, optional Bearer).
 - `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
-- `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, and optional `rules.md`.
+- `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, optional `rules.md`, and optional `skills/<name>/` packages.
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
 
 ### Agent core
 
 - `src/agent/loop/` — `AgentEngine` (`engine`) runs the iterative LLM loop: sends messages to the provider, prices every physical attempt, parses the model's JSON directive (`directive`), dispatches tool calls, collects results, enforces iteration/token/cost/duration limits, prunes message history using `provider.history` (`history`), emits optional `AgentEvent` progress (`events`), and returns `RunOutput`.
-- `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming (no-op for CLI `run`).
+- `src/agent/events.rs` — `AgentEvent` / `AgentEventTx` progress sink used by ACP streaming. CLI `run` leaves it no-op unless `--progress stderr` is set, in which case events are NDJSON lines on stderr. Stdout stays one `RunOutput`.
 - `src/limits.rs` — `LimitsConfig` and `RunMetrics` track iterations, tokens, optional exact monetary budget, and elapsed time.
 - `src/billing/` — exact decimal money, normalized billable meters, per-attempt ledger, resolver chain, versioned local catalog, and optional host-owned MCP calculator.
 - `src/output.rs` — `RunOutput` schema: `run_id`, `result`, token/per-request cost `usage`, `stop_reason`, `logs`.
@@ -138,7 +142,9 @@ are not implemented.
 - `src/access/config.rs` — raw YAML/JSON access DTOs (`AccessPolicyConfig` and nested types); no dependency on `crate::config`.
 - `src/access/mod.rs` — validates/resolves DTOs into `ResolvedAccessPolicy` (`TryFrom<AccessResolveInput>`), plus `EffectiveToolPolicy`, `QualifiedTool`, `ProgramAlias`, strict vs explicit `access.mode: legacy`.
 - `src/access/paths.rs` — path grant logic: `RelativeGrant`, `PathGrantScope`, `HomeFsPolicy`, `WorkspaceFsPolicy`, `InputFilesPolicy`.
-- `src/skills/dsl.rs` — parses `skills.dsl` and builds the skills allowlist and prompt fragment.
+- `src/skills/dsl.rs` — parses `skills.dsl` and builds the skills allowlist and prompt catalog.
+- `src/skills/package.rs` — indexes `skills/<name>/skill.md` and companion files. Symlinks and paths that leave the skill folder are rejected.
+- `src/tools/profile_skills.rs` — `profile.list_skill` and `profile.read_skill` read that index. Scripts are not run from `protected/`.
 
 ### MCP and provider
 
@@ -270,17 +276,21 @@ The runtime uses a layered policy:
 4. `EffectiveToolPolicy::compile` builds the final allowlist:
 
    ```text
-   KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file}
+   KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file, profile.list_skill, profile.read_skill}
 
    effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
    effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
    effective_tools    = effective_builtins ∪ effective_mcp
+                        ∪ {profile.list_skill, profile.read_skill}  # only when a skill folder exists
    ```
 
    - Built-ins require both the config allowlist and the skills allowlist.
    - MCP tools require a skills allowlist entry; discovery alone is not enough.
+   - `profile.list_skill` and `profile.read_skill` are added when at least one
+     `skills/<name>/` folder is present. They read only that folder's index.
    - Skill `policy` strings and `rules.md` are prompt-only guidance; they are not
-     enforced by `EffectiveToolPolicy`.
+     enforced by `EffectiveToolPolicy`. Full instructions stay in `skill.md` and
+     are fetched by the model through `profile.read_skill`.
 
 5. `PolicyToolExecutor` gates every call and advertises only `effective_tools` to the model.
 
@@ -295,7 +305,7 @@ P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-archi
 1. `main` calls `sandbox_linux::try_run_helper()` before Tokio.
 2. `run()` loads config, applies CLI overrides, validates, initializes tracing and loggers.
 3. Settings, skills, input files, `HomeFs`, `LocalTools`, and MCP connections are initialized.
-4. The system prompt is assembled from `master_prompt.md`, optional `rules.md`, the skills fragment, and hardcoded runtime rules.
+4. The system prompt is assembled from `master_prompt.md`, optional `rules.md`, the skills catalog (`policy`, `instructions=stored|none`, file count), and hardcoded runtime rules. Skill bodies are not inlined.
 5. `AgentEngine::run` starts the loop.
 6. On exit, `RunOutput` is serialized to pretty JSON and printed to stdout; the
    process exits non-zero when `stop_reason` is `error`.

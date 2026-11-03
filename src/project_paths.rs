@@ -5,6 +5,7 @@
 //! ```text
 //! {project-root}/.kuibysheff/
 //!   protected/agents/{agent-id}/   # settings — agent binary only
+//!   runtime/skills/{agent-id}/     # skill packages readable by the sandbox
 //!   homes/{agent-id}/
 //!   mcp-runtime/{agent-id}/{server}/
 //! ```
@@ -25,6 +26,12 @@ pub const HOMES_DIR: &str = "homes";
 
 /// MCP child cwd/scratch: `mcp-runtime/{id}/{server}/`.
 pub const MCP_RUNTIME_DIR: &str = "mcp-runtime";
+
+/// Skill packages readable outside the protected store: `runtime/skills/{id}/`.
+pub const RUNTIME_DIR: &str = "runtime";
+
+/// `{runtime}/skills/{agent-id}/`.
+pub const RUNTIME_SKILLS_DIR: &str = "skills";
 
 /// Runtime config filename inside an agent profile.
 pub const AGENT_CONFIG_FILE: &str = "agent-config.yaml";
@@ -89,6 +96,54 @@ pub fn kuibysheff_root(project_root: &Path) -> PathBuf {
 #[must_use]
 pub fn protected_root(project_root: &Path) -> PathBuf {
     kuibysheff_root(project_root).join(PROTECTED_DIR)
+}
+
+/// `{project_root}/.kuibysheff/runtime`.
+#[must_use]
+pub fn runtime_root(project_root: &Path) -> PathBuf {
+    kuibysheff_root(project_root).join(RUNTIME_DIR)
+}
+
+/// `{project_root}/.kuibysheff/runtime/skills/{agent_id}`.
+///
+/// # Errors
+///
+/// Returns [`AgentPathError::InvalidAgentId`] when `agent_id` is invalid.
+pub fn agent_runtime_skills_dir(
+    project_root: &Path,
+    agent_id: &str,
+) -> Result<PathBuf, AgentPathError> {
+    validate_agent_id(agent_id)?;
+    Ok(runtime_root(project_root)
+        .join(RUNTIME_SKILLS_DIR)
+        .join(agent_id))
+}
+
+/// If `settings_dir` is `{kuibysheff}/protected/agents/{id}`, return
+/// `{kuibysheff}/runtime/skills/{id}`.
+///
+/// The check is lexical (no canonicalize). Any other shape returns `None` so
+/// tests, import staging, and `init` scratch dirs keep `settings_dir/skills`.
+#[must_use]
+pub fn runtime_skills_dir_from_settings_dir(settings_dir: &Path) -> Option<PathBuf> {
+    let agent_id = settings_dir.file_name()?.to_str()?;
+    if validate_agent_id(agent_id).is_err() {
+        return None;
+    }
+    let agents = settings_dir.parent()?;
+    if agents.file_name()?.to_str()? != AGENTS_DIR {
+        return None;
+    }
+    let protected = agents.parent()?;
+    if protected.file_name()?.to_str()? != PROTECTED_DIR {
+        return None;
+    }
+    let kuibysheff = protected.parent()?;
+    if kuibysheff.file_name()?.to_str()? != KUIBYSHEFF_DIR {
+        return None;
+    }
+    let project_root = kuibysheff.parent()?;
+    agent_runtime_skills_dir(project_root, agent_id).ok()
 }
 
 /// `{project_root}/.kuibysheff/protected/agents`.
@@ -381,6 +436,37 @@ mod tests {
                 .join(MCP_RUNTIME_DIR)
                 .join("demo")
                 .join("docs")
+        );
+        assert_eq!(
+            agent_runtime_skills_dir(root, "demo").expect("runtime skills"),
+            root.join(KUIBYSHEFF_DIR)
+                .join(RUNTIME_DIR)
+                .join(RUNTIME_SKILLS_DIR)
+                .join("demo")
+        );
+    }
+
+    #[test]
+    fn runtime_skills_dir_follows_profile_shape_only() {
+        let root = Path::new("proj");
+        let profile = agent_profile_dir(root, "demo").expect("id");
+        assert_eq!(
+            runtime_skills_dir_from_settings_dir(&profile),
+            Some(agent_runtime_skills_dir(root, "demo").expect("runtime"))
+        );
+        assert_eq!(
+            runtime_skills_dir_from_settings_dir(Path::new("anywhere/skills")),
+            None
+        );
+        assert_eq!(
+            runtime_skills_dir_from_settings_dir(
+                &root.join(KUIBYSHEFF_DIR).join("homes").join("demo")
+            ),
+            None
+        );
+        assert_eq!(
+            runtime_skills_dir_from_settings_dir(&protected_agents_root(root).join("-bad")),
+            None
         );
     }
 

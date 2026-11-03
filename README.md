@@ -16,6 +16,8 @@ Minimal and reliable CLI agent worker in Rust.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
   Windows AppContainer) with no network.
+- Keeps skill instructions in the agent profile next to the master prompt.
+  The model sees a catalog, then reads `skill.md` and companion files on demand.
 - Produces a final JSON result with per-request token/cost accounting and optional
   AI/MCP logs.
 
@@ -38,6 +40,7 @@ Or build from source (Rust MSRV **1.88**):
 git clone https://github.com/gazalievtimur/Agent-Kuibysheff.git
 cd Agent-Kuibysheff
 cargo build --release --bin kbshff
+cargo build --release --bin kbshff-studio
 ```
 
 Breaking changes and migration notes (including required `access` in **0.2.0**):
@@ -115,10 +118,21 @@ Scaffold, probe, or manage settings (no storage path flags):
 
 ```text
 kbshff init <agent-id> --project-root <DIR> [--force] [-i|--interactive]
-kbshff check --project-root <DIR> --agent <ID>
+kbshff check --project-root <DIR> --agent <ID> [--format json]
 kbshff config --project-root <DIR> --agent <ID> import --from <PATH> [--force]
 kbshff config --project-root <DIR> --agent <ID> show
+kbshff agent list --project-root <DIR> [--format json]
+kbshff mcp discover --project-root <DIR> --agent <ID>
+kbshff ui --project-root <DIR> [--bind 127.0.0.1:8790] [--open]
+kbshff-studio [--project-root <DIR>] [--bind 127.0.0.1:8790] [--no-open]
 ```
+
+`kbshff-studio` with no flags serves the current directory and opens the browser
+at `http://127.0.0.1:8790/`. `kbshff ui` only launches that binary (next to `kbshff`,
+on `PATH`, or `KBSHFF_STUDIO`). The studio edits profiles by calling the CLI.
+Orchestrator `run` still prints one `RunOutput` JSON on stdout. `--progress stderr`
+adds NDJSON events on stderr and does not change that stdout document.
+Handoff for GUI work: [docs/UI.md](docs/UI.md).
 
 ACP stdio server (VS Code, messengers, mail bridges):
 
@@ -182,13 +196,61 @@ Local banks (security / Scale-FS / A2A): [local/README.md](local/README.md).
   [docs/EVENT_MCP.md](docs/EVENT_MCP.md)
 - Logging sinks and chat history: [docs/LOGGING.md](docs/LOGGING.md)
 - `RunOutput` JSON and exit codes: [docs/OUTPUT.md](docs/OUTPUT.md)
-- Skills DSL `allowed_tools` intersect with access policy:
-  [CONTRACT.md](CONTRACT.md#access-policy-fail-closed)
 
 Model context-window pruning lives under `provider.history` (defaults
 `max_tail_messages: 30`, `max_chars: 200000`) and is independent of
 `limits.max_tokens`. Optional `provider.effort` sets reasoning effort for
 compatible models (`reasoning_effort` in the Chat Completions request).
+
+## Agent profile
+
+Each agent lives under `.kuibysheff/protected/agents/<id>/`. `init` creates the
+required files. Skill folders are optional and are added later.
+
+```text
+.kuibysheff/protected/agents/<id>/
+  agent-config.yaml
+  master_prompt.md
+  rules.md                 # optional
+  skills.dsl               # name, short policy, allowed tools
+  skills/<name>/
+    skill.md               # full instructions; required if the folder exists
+    scripts/example.py     # companion files (optional)
+  .env                     # secrets; not part of the prompt
+```
+
+`skills.dsl` is the tool allowlist. A built-in is available only when both
+`access.tools.builtins` and some skill's `allowed_tools` list it. An MCP tool
+is available only when a skill lists it. The `policy` string is a one-line
+summary for the model and for the A2A Agent Card. It cannot hold a long
+procedure: the DSL string cannot contain `"`.
+
+`skills/<name>/` is that procedure. `<name>` must match a skill in `skills.dsl`
+and be one path segment of letters, digits, spaces, `_`, or `-`. The system
+prompt lists each skill with `instructions=stored` or `instructions=none` and a
+file count. It does not inline `skill.md`. When at least one folder exists, the
+run grants `profile.list_skill` and `profile.read_skill` without adding them to
+`allowed_tools`. Those tools accept a skill name and, for a read, an optional
+relative path that was indexed at startup. They do not read `master_prompt.md`,
+`rules.md`, config, or `.env`.
+
+Companion scripts stay in the profile. They are not executed there. The model
+reads the script text, writes a copy under home with `home.write`, and runs it
+with `home.run` only when that tool is already allowed.
+
+```powershell
+kbshff config --project-root . --agent demo skill body set workspace --text "# Steps"
+kbshff config --project-root . --agent demo skill file put workspace scripts/example.py --file .\example.py
+kbshff config --project-root . --agent demo skill list
+```
+
+`skill body get|set|clear` edits `skill.md`. `skill file list|get|put|remove`
+edits companion files. `config import --from <dir>` copies `skills/<name>/`
+when the directory contains `skill.md` and `<name>` is declared in that
+bundle's `skills.dsl`. The studio Configure tab edits `skill.md` for the
+selected skill; companion files stay on the CLI or import path.
+Allowlist formula: [CONTRACT.md](CONTRACT.md#access-policy-fail-closed).
+Studio handoff: [docs/UI.md](docs/UI.md).
 
 ## Documentation
 

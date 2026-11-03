@@ -441,6 +441,18 @@ impl EffectiveToolPolicy {
         Self { tools }
     }
 
+    /// Grants `profile.list_skill` and `profile.read_skill` when the profile has a skill folder.
+    ///
+    /// These tools read only the indexed skill package. They are not part of the
+    /// access ∩ skills intersection, so a skill does not have to allowlist itself.
+    pub fn grant_profile_skills(&mut self) {
+        for name in ["profile.list_skill", "profile.read_skill"] {
+            if let Ok(tool) = QualifiedTool::parse(name) {
+                self.tools.insert(tool);
+            }
+        }
+    }
+
     #[must_use]
     pub fn allows(&self, tool: &QualifiedTool) -> bool {
         self.tools.contains(tool)
@@ -1122,8 +1134,24 @@ mod tests {
     fn known_builtins_minus_legacy_is_only_home_run() {
         let known: std::collections::HashSet<_> = known_builtins().collect();
         let legacy: std::collections::HashSet<_> = legacy_builtins().collect();
-        let diff: Vec<_> = known.difference(&legacy).copied().collect();
-        assert_eq!(diff, vec!["home.run"]);
+        let mut diff: Vec<_> = known.difference(&legacy).copied().collect();
+        diff.sort_unstable();
+        assert_eq!(
+            diff,
+            vec!["home.run", "profile.list_skill", "profile.read_skill"]
+        );
+    }
+
+    #[test]
+    fn grant_profile_skills_adds_readers_without_an_allowlist_entry() {
+        let access = ResolvedAccessPolicy::legacy();
+        let skills = BTreeSet::from([QualifiedTool::parse("home.read").unwrap()]);
+        let mut effective = EffectiveToolPolicy::compile(&access, &skills, []);
+        assert!(!effective.allows(&QualifiedTool::parse("profile.read_skill").unwrap()));
+        effective.grant_profile_skills();
+        assert!(effective.allows(&QualifiedTool::parse("profile.read_skill").unwrap()));
+        assert!(effective.allows(&QualifiedTool::parse("profile.list_skill").unwrap()));
+        assert!(effective.allows(&QualifiedTool::parse("home.read").unwrap()));
     }
 
     #[test]

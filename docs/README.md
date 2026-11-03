@@ -14,6 +14,7 @@ User-facing docs for `agent_Kuibysheff`.
 | [OUTPUT.md](OUTPUT.md) | `RunOutput` JSON and exit codes |
 | [RELEASING.md](RELEASING.md) | Prebuilt binaries and release tags |
 | [INSTALL.md](INSTALL.md) | Install / upgrade / uninstall |
+| [UI.md](UI.md) | Browser studio (`kbshff-studio`) — handoff for GUI work |
 | [../CHANGELOG.md](../CHANGELOG.md) | Version history and migrations |
 | [../SECURITY.md](../SECURITY.md) | Vulnerability reporting |
 | [../SUPPORT.md](../SUPPORT.md) | Support policy |
@@ -23,6 +24,7 @@ User-facing docs for `agent_Kuibysheff`.
 
 | Document | Description |
 | --- | --- |
+| [../README.md](../README.md#agent-profile) | Agent profile: prompts, `skills.dsl`, and `skills/<name>/` |
 | [../prompt-examples.md](../prompt-examples.md) | Ready-to-use `--prompt` templates |
 | [../test-agents/README.md](../test-agents/README.md) | Specialized agent profiles |
 | [../extensions/vscode/README.md](../extensions/vscode/README.md) | VS Code extension |

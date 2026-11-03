@@ -1,8 +1,8 @@
 # Test agents
 
 Каталог **шаблонов** профилей для `agent_Kuibysheff`. Каждый агент — отдельная
-папка с `master_prompt.md` / `skills.dsl` / `rules.md` и примером
-`agent-config*.yaml`.
+папка с `master_prompt.md` / `skills.dsl` / `rules.md`, необязательными
+папками `skills/<name>/` и примером `agent-config*.yaml`.
 
 В runtime эти папки **не** передаются как `--settings-dir`. Их импортируют в
 protected store:
@@ -29,11 +29,17 @@ cargo run --bin kbshff -- init my-agent --project-root . --force
 ```text
 test-agents/<agent-id>/
   master_prompt.md          роль и протокол ответа
-  skills.dsl                разрешённые инструменты
+  skills.dsl                имя, короткая policy, разрешённые инструменты
+  skills/<name>/skill.md    необязательные полные инструкции скила
+  skills/<name>/...         сопутствующие файлы (скрипты, заметки)
   rules.md                  правила workspace и deliverables
   agent-config.example.yaml пример provider + MCP + limits
   prompt.example.md         шаблон --prompt для тестов
 ```
+
+Имя папки скила совпадает с именем в `skills.dsl`. Импорт копирует такую папку
+только вместе с непустым `skill.md`. В промпт попадает каталог; текст и файлы
+агент читает инструментами `profile.read_skill` и `profile.list_skill`.
 
 ## Запуск (Jira / Confluence research)
 

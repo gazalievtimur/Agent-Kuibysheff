@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Skill instructions can live in the agent profile as `skills/<name>/skill.md`
+  plus companion files. The system prompt keeps a catalog (`policy`,
+  `instructions=stored|none`, file count). The model reads the folder with
+  `profile.read_skill` and `profile.list_skill`. Manage the files with
+  `config skill body`, `config skill file`, directory import, or the studio
+  Configure tab (`skill.md` only).
+
 ## [0.2.2] - 2026-10-07
 
 ### Fixed

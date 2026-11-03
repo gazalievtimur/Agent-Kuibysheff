@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::task;
 
 use crate::access::paths::{display_relative, is_within_root, relative_components};
@@ -30,6 +31,9 @@ pub struct HomeFs {
 
 impl HomeFs {
     /// Creates a sandboxed filesystem rooted at `root` with the given path/run policy.
+    ///
+    /// Also creates grant directories under `root` (`in`/`out` for legacy policy; each non-root
+    /// grant under strict `read` ∪ `write`).
     ///
     /// When `policy.programs` is non-empty, `sandbox` must successfully [`SandboxRunner::probe`];
     /// production runners without a native backend fail closed at construction.
@@ -60,6 +64,7 @@ impl HomeFs {
                 error: "home is not a directory".to_string(),
             });
         }
+        ensure_grant_dirs(&root, &policy).await?;
         if !policy.programs.is_empty() {
             let probe_sandbox = Arc::clone(&sandbox);
             tokio::task::spawn_blocking(move || probe_sandbox.probe())
@@ -93,7 +98,8 @@ impl HomeFs {
             }
             "write" => {
                 let args: WriteArgs = decode_args(tool, arguments)?;
-                self.write(Path::new(&args.path), &args.content).await
+                self.write(Path::new(&args.path), &args.content, args.mode)
+                    .await
             }
             "run" => {
                 let args: RunArgs = decode_args(tool, arguments)?;
@@ -189,7 +195,12 @@ impl HomeFs {
         }))
     }
 
-    async fn write(&self, relative: &Path, content: &str) -> Result<Value, HomeFsError> {
+    async fn write(
+        &self,
+        relative: &Path,
+        content: &str,
+        mode: WriteMode,
+    ) -> Result<Value, HomeFsError> {
         self.policy
             .write
             .allows_relative(relative, PathOperation::Write)
@@ -217,12 +228,28 @@ impl HomeFs {
             }
         }
 
-        fs::write(&destination, content)
-            .await
-            .map_err(|error| home_io("write", &destination, error))?;
+        match mode {
+            WriteMode::Create => {
+                fs::write(&destination, content)
+                    .await
+                    .map_err(|error| home_io("write", &destination, error))?;
+            }
+            WriteMode::Append => {
+                let mut file = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&destination)
+                    .await
+                    .map_err(|error| home_io("open", &destination, error))?;
+                file.write_all(content.as_bytes())
+                    .await
+                    .map_err(|error| home_io("write", &destination, error))?;
+            }
+        }
         Ok(json!({
             "path": display_relative(relative),
-            "bytes_written": content.len()
+            "bytes_written": content.len(),
+            "mode": mode.as_str(),
         }))
     }
 
@@ -423,10 +450,29 @@ struct ReadArgs {
     max_chars: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum WriteMode {
+    #[default]
+    Create,
+    Append,
+}
+
+impl WriteMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Append => "append",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct WriteArgs {
     path: String,
     content: String,
+    #[serde(default)]
+    mode: WriteMode,
 }
 
 #[derive(Deserialize)]
@@ -482,6 +528,34 @@ fn home_io(operation: &str, path: &Path, error: std::io::Error) -> HomeFsError {
         path: path.display().to_string(),
         source: error,
     }
+}
+
+/// Creates directories for home path grants so empty homes have a usable layout.
+///
+/// Strict policy: every non-root grant under `read` ∪ `write`. Legacy: only `in` and `out`.
+async fn ensure_grant_dirs(root: &Path, policy: &HomeFsPolicy) -> Result<(), HomeFsError> {
+    use std::collections::BTreeSet;
+
+    let dirs: Vec<PathBuf> = if policy.read.is_legacy() || policy.write.is_legacy() {
+        vec![PathBuf::from("in"), PathBuf::from("out")]
+    } else {
+        let mut seen = BTreeSet::new();
+        for grant in policy.read.grants().iter().chain(policy.write.grants()) {
+            if grant.components().is_empty() {
+                continue;
+            }
+            seen.insert(grant.as_path());
+        }
+        seen.into_iter().collect()
+    };
+
+    for rel in dirs {
+        let path = root.join(&rel);
+        fs::create_dir_all(&path)
+            .await
+            .map_err(|error| home_io("create_dir_all", &path, error))?;
+    }
+    Ok(())
 }
 
 fn map_spawn_blocking_join_error(path: &str, error: tokio::task::JoinError) -> HomeFsError {
@@ -561,6 +635,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creates_strict_grant_dirs_on_new() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        HomeFs::new(
+            dir.path(),
+            strict_home(&["in", "out"], &["out"]),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
+        assert!(dir.path().join("in").is_dir());
+        assert!(dir.path().join("out").is_dir());
+    }
+
+    #[tokio::test]
+    async fn creates_in_out_for_legacy_policy() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
+        assert!(dir.path().join("in").is_dir());
+        assert!(dir.path().join("out").is_dir());
+    }
+
+    #[tokio::test]
     async fn writes_reads_and_lists_inside_home() {
         let dir = tempfile::tempdir().expect("temp dir");
         let home = HomeFs::new(
@@ -591,6 +695,39 @@ mod tests {
             .await
             .expect("list");
         assert_eq!(list["entries"][0]["name"], "main.rs");
+    }
+
+    #[tokio::test]
+    async fn append_mode_extends_an_existing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let home = HomeFs::new(
+            dir.path(),
+            legacy_home(),
+            unavailable_sandbox(),
+            RunCancel::new(),
+        )
+        .await
+        .expect("home");
+
+        home.call(
+            "write",
+            json!({"path": "out/a.bsl", "content": "Процедура Тест()\n", "mode": "create"}),
+        )
+        .await
+        .expect("create");
+        let appended = home
+            .call(
+                "write",
+                json!({"path": "out/a.bsl", "content": "КонецПроцедуры\n", "mode": "append"}),
+            )
+            .await
+            .expect("append");
+        assert_eq!(appended["mode"], "append");
+        let read = home
+            .call("read", json!({"path": "out/a.bsl"}))
+            .await
+            .expect("read");
+        assert_eq!(read["content"], "Процедура Тест()\nКонецПроцедуры\n");
     }
 
     #[tokio::test]

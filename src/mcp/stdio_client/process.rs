@@ -207,6 +207,22 @@ fn stdio_arg_is_path_like(arg: &str) -> bool {
     path.is_absolute() || arg.contains('/') || arg.contains('\\')
 }
 
+/// Split `alias=dir` style args (e.g. code-index `--path cf=C:\repo`).
+///
+/// Left side must be a bare alias (no path separators). Right side must be
+/// path-like. Plain `KEY=value` env-style tokens without path chars are ignored.
+#[must_use]
+fn split_alias_path_arg(arg: &str) -> Option<(&str, &str)> {
+    let (alias, path) = arg.split_once('=')?;
+    if alias.is_empty() || alias.contains('/') || alias.contains('\\') {
+        return None;
+    }
+    if !stdio_arg_is_path_like(path) {
+        return None;
+    }
+    Some((alias, path))
+}
+
 /// Resolve stdio `command` to an [`OsString`] (no lossy UTF-8 conversion).
 #[must_use]
 fn resolve_stdio_command(command: &str, child_cwd: Option<&Path>) -> OsString {
@@ -219,8 +235,19 @@ fn resolve_stdio_command(command: &str, child_cwd: Option<&Path>) -> OsString {
 }
 
 /// Resolve one stdio arg to an [`OsString`] (no lossy UTF-8 conversion).
+///
+/// Preserves `alias=path` forms used by code-index multi-repo `--path`: only the
+/// path side is resolved, so `cf=C:\repo` is not joined as a relative token under
+/// `mcp-runtime/...` (which would rewrite the alias to that runtime path).
 #[must_use]
 fn resolve_stdio_arg(arg: &str, child_cwd: Option<&Path>) -> OsString {
+    if let Some((alias, path)) = split_alias_path_arg(arg) {
+        let resolved = resolve_against_base(path, child_cwd);
+        let mut out = OsString::from(alias);
+        out.push("=");
+        out.push(resolved.as_os_str());
+        return out;
+    }
     if stdio_arg_is_path_like(arg) {
         resolve_against_base(arg, child_cwd).into_os_string()
     } else {
@@ -661,6 +688,39 @@ mod tests {
             Some(PathBuf::from("configs"))
         );
         assert_eq!(resolve_child_cwd(&cfg, None), None);
+    }
+
+    #[test]
+    fn resolve_stdio_arg_preserves_alias_absolute_path() {
+        #[cfg(windows)]
+        let absolute = r"C:\ЛВИ\УТ";
+        #[cfg(not(windows))]
+        let absolute = "/data/ut";
+        let arg = format!("cf={absolute}");
+        let base = Path::new("mcp-runtime/agent/code-index");
+        assert_eq!(
+            resolve_stdio_arg(&arg, Some(base)),
+            OsString::from(format!("cf={absolute}"))
+        );
+    }
+
+    #[test]
+    fn resolve_stdio_arg_resolves_alias_relative_path() {
+        let base = Path::new("mcp-runtime/agent/code-index");
+        assert_eq!(resolve_stdio_arg("cf=../src", Some(base)), {
+            let mut out = OsString::from("cf=");
+            out.push(base.join("../src").as_os_str());
+            out
+        });
+    }
+
+    #[test]
+    fn resolve_stdio_arg_leaves_non_path_key_value() {
+        let base = Path::new("mcp-runtime/agent/code-index");
+        assert_eq!(
+            resolve_stdio_arg("MODE=readonly", Some(base)),
+            OsString::from("MODE=readonly")
+        );
     }
 
     #[test]

@@ -45,6 +45,30 @@ pub fn validate_env_var_name(name: &str) -> Result<(), DotenvFileError> {
     Ok(())
 }
 
+/// Returns true when `key` has a non-empty value in `path` (without exposing it).
+///
+/// Missing file or missing key yields `false`. I/O errors other than not-found are ignored
+/// and treated as unset (operator UI should not fail closed on a corrupt `.env` read).
+#[must_use]
+pub fn env_var_is_set_in_file(path: &Path, key: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if name.trim() == key && !value.trim().is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Create or update `KEY=value` in `path`, preserving other lines and comments.
 ///
 /// # Errors
@@ -141,5 +165,15 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("# comment\n"));
         assert!(text.contains("FOO=2"));
+    }
+
+    #[test]
+    fn detects_set_env_var_without_exposing_value() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".env");
+        assert!(!env_var_is_set_in_file(&path, "OPENAI_API_KEY"));
+        upsert_env_var(&path, "OPENAI_API_KEY", "secret").unwrap();
+        assert!(env_var_is_set_in_file(&path, "OPENAI_API_KEY"));
+        assert!(!env_var_is_set_in_file(&path, "OTHER"));
     }
 }

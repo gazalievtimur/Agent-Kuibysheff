@@ -6,6 +6,7 @@
 pub(crate) mod error;
 pub mod fs_home;
 pub mod local_tools;
+pub(crate) mod profile_skills;
 pub(crate) mod read_window;
 pub mod registry;
 
@@ -23,11 +24,13 @@ use crate::tool_api::ToolExecutor;
 
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
+use self::profile_skills::SkillLibrary;
 use self::registry::known_builtin_names;
 
 pub struct CompositeToolExecutor {
     home: HomeFs,
     local_tools: LocalTools,
+    skills: SkillLibrary,
     external: Arc<dyn ToolExecutor>,
 }
 
@@ -37,8 +40,16 @@ impl CompositeToolExecutor {
         Self {
             home,
             local_tools,
+            skills: SkillLibrary::default(),
             external,
         }
+    }
+
+    /// Attaches the skill-folder snapshot used by `profile.list_skill` and `profile.read_skill`.
+    #[must_use]
+    pub fn with_skill_library(mut self, skills: SkillLibrary) -> Self {
+        self.skills = skills;
+        self
     }
 }
 
@@ -58,6 +69,11 @@ impl ToolExecutor for CompositeToolExecutor {
                 .map_err(ToolError::from),
             Some(BuiltinHandlerId::LocalTools) => self
                 .local_tools
+                .call(tool, arguments)
+                .await
+                .map_err(ToolError::from),
+            Some(BuiltinHandlerId::Profile) => self
+                .skills
                 .call(tool, arguments)
                 .await
                 .map_err(ToolError::from),

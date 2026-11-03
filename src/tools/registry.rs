@@ -8,6 +8,7 @@
 pub enum BuiltinHandlerId {
     Home,
     LocalTools,
+    Profile,
 }
 
 /// How the tool is described in the runtime prompt fragment.
@@ -19,6 +20,8 @@ pub enum BuiltinPrompt {
     HomeRun,
     /// `home.read` — windowed home file read with next_offset pagination.
     HomeRead,
+    /// `home.write` — short `content` or a raw body after the JSON object.
+    HomeWrite,
     /// `local_tools.read_file` — example mentions the workspace root.
     WorkspaceReadFile,
 }
@@ -76,12 +79,12 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "home.write",
         server: "home",
         tool: "write",
-        description: "Write a file under the agent home directory.",
-        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}"#,
+        description: "Write a file under the agent home directory. Short text goes in content. BSL, XML, and any text with quotes or longer than a few hundred characters uses body \"raw\" plus a <<<FILE block after the JSON object. mode is create (default) or append.",
+        schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"body":{"type":"string","enum":["raw"]},"mode":{"type":"string","enum":["create","append"]}},"required":["path"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
         handler: BuiltinHandlerId::Home,
-        prompt: BuiltinPrompt::StaticArgs(r#"{"path":"relative/path","content":"..."}"#),
+        prompt: BuiltinPrompt::HomeWrite,
     },
     ToolDescriptor {
         name: "home.run",
@@ -115,6 +118,30 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         requires_programs: false,
         handler: BuiltinHandlerId::LocalTools,
         prompt: BuiltinPrompt::WorkspaceReadFile,
+    },
+    ToolDescriptor {
+        name: "profile.list_skill",
+        server: "profile",
+        tool: "list_skill",
+        description: "List files in one skill folder from the agent profile. Paths are relative to that folder.",
+        schema_json: r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Profile,
+        prompt: BuiltinPrompt::StaticArgs(r#"{"name":"research"}"#),
+    },
+    ToolDescriptor {
+        name: "profile.read_skill",
+        server: "profile",
+        tool: "read_skill",
+        description: "Read a UTF-8 character window from skill.md or a companion file in one skill folder. Omit path to read skill.md. Use offset/next_offset for large files.",
+        schema_json: r#"{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_chars":{"type":"integer","minimum":1}},"required":["name"],"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Profile,
+        prompt: BuiltinPrompt::StaticArgs(
+            r#"{"name":"research","path":"scripts/example.py","offset":0,"max_chars":50000}"#,
+        ),
     },
 ];
 
@@ -194,14 +221,19 @@ mod tests {
         let known: HashSet<_> = known_builtin_names().collect();
         let legacy: HashSet<_> = legacy_builtin_names().collect();
         assert!(legacy.is_subset(&known));
-        let diff: Vec<_> = known.difference(&legacy).copied().collect();
-        assert_eq!(diff, vec!["home.run"]);
+        let mut diff: Vec<_> = known.difference(&legacy).copied().collect();
+        diff.sort_unstable();
+        assert_eq!(
+            diff,
+            vec!["home.run", "profile.list_skill", "profile.read_skill"]
+        );
     }
 
     #[test]
     fn reserved_servers_match_descriptor_servers() {
         assert!(is_builtin_server("home"));
         assert!(is_builtin_server("local_tools"));
+        assert!(is_builtin_server("profile"));
         assert!(!is_builtin_server("docs"));
     }
 
@@ -217,6 +249,8 @@ mod tests {
                 "home.run",
                 "local_tools.search_docs",
                 "local_tools.read_file",
+                "profile.list_skill",
+                "profile.read_skill",
             ]
         );
         for name in &names {

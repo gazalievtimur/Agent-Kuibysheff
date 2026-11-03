@@ -154,7 +154,12 @@ Final turn:
   task is trivial and the model is reliable.
 - Do not assume attached `--files` are writable; they are read-only context.
 
+Long procedures belong in the agent profile (`skills/<name>/skill.md`), not in
+the task prompt. The task prompt should name the goal. The profile catalog
+tells the model which skill to read.
+
 See also:
-- [CONTRACT.md](../CONTRACT.md)
-- [settings/master_prompt.md](../settings/master_prompt.md)
-- [settings/rules.md](../settings/rules.md)
+- [README.md](README.md#agent-profile)
+- [CONTRACT.md](CONTRACT.md)
+- [settings/master_prompt.md](settings/master_prompt.md)
+- [settings/rules.md](settings/rules.md)

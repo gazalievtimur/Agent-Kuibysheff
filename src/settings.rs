@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+
+use crate::skills::package::{self, SkillPackage};
 
 pub const MASTER_PROMPT_FILE: &str = "master_prompt.md";
 pub const SKILLS_FILE: &str = "skills.dsl";
@@ -13,6 +16,8 @@ pub struct AgentSettings {
     pub master_prompt: String,
     pub skills_source: String,
     pub rules: String,
+    /// Skill folders indexed from `skills/<name>/`. Empty when that directory is absent.
+    pub skill_packages: BTreeMap<String, SkillPackage>,
 }
 
 #[derive(Debug, Error)]
@@ -32,6 +37,8 @@ pub enum SettingsError {
     },
     #[error("settings file `{0}` must not be empty")]
     EmptyFile(String),
+    #[error("invalid skill package: {0}")]
+    InvalidSkillPackage(String),
 }
 
 /// Loads required and optional agent settings from a directory.
@@ -57,10 +64,13 @@ pub fn load_settings(settings_dir: &Path) -> Result<AgentSettings, SettingsError
         }
     };
 
+    let skill_packages = package::load_skill_packages(settings_dir)?;
+
     Ok(AgentSettings {
         master_prompt,
         skills_source,
         rules,
+        skill_packages,
     })
 }
 

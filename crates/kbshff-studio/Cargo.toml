@@ -1,0 +1,47 @@
+[package]
+name = "kbshff-studio"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+publish = false
+description = "Browser studio that configures and test-runs kbshff agents through the CLI."
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "query"] }
+clap = { version = "4", features = ["derive"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "sync", "net", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[bin]]
+name = "kbshff-studio"
+path = "src/main.rs"
+
+[[bin]]
+name = "kbshff_stub"
+path = "src/bin/kbshff_stub.rs"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }

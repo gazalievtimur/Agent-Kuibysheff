@@ -10,7 +10,7 @@ use a2a_server::StaticAgentCard;
 use anyhow::{Context, Result};
 
 use crate::settings::load_settings;
-use crate::skills::dsl::SkillsCatalog;
+use crate::skills::package::catalog_from_settings;
 
 const BEARER_SCHEME_NAME: &str = "bearer";
 
@@ -56,7 +56,7 @@ pub fn build_agent_card(opts: &CardOptions) -> Result<AgentCard> {
             opts.settings_dir.display()
         )
     })?;
-    let skills = SkillsCatalog::parse(&settings.skills_source)
+    let skills = catalog_from_settings(&settings.skills_source, &settings.skill_packages)
         .with_context(|| "parse skills.dsl for A2A Agent Card")?;
 
     let base = opts.public_url.trim_end_matches('/');

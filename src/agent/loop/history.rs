@@ -11,44 +11,53 @@ pub(crate) fn push_message(
     history: &ProviderHistoryConfig,
 ) {
     full_history.push(message.clone());
-    prune_message_history(full_history, history);
+    prune_message_history(full_history, history, HISTORY_PREFIX_LEN);
     messages.push(message);
 }
 
-/// Keeps the system prompt and initial user message, dropping oldest middle turns
-/// by message count and by total character budget from `history`.
+/// Keeps `protected_prefix` leading messages (system, goal, and any pinned slot),
+/// dropping oldest middle turns by message count and by total character budget.
 pub(crate) fn prune_message_history(
     messages: &mut Vec<ChatMessage>,
     history: &ProviderHistoryConfig,
+    protected_prefix: usize,
 ) {
-    prune_by_message_count(messages, history);
-    prune_by_char_budget(messages, history);
+    prune_by_message_count(messages, history, protected_prefix);
+    prune_by_char_budget(messages, history, protected_prefix);
 }
 
-fn prune_by_message_count(messages: &mut Vec<ChatMessage>, history: &ProviderHistoryConfig) {
+fn prune_by_message_count(
+    messages: &mut Vec<ChatMessage>,
+    history: &ProviderHistoryConfig,
+    protected_prefix: usize,
+) {
     let max_tail = history.max_tail_messages;
-    let max_total = HISTORY_PREFIX_LEN.saturating_add(max_tail);
+    let max_total = protected_prefix.saturating_add(max_tail);
     if messages.len() <= max_total {
         return;
     }
     let tail_start = messages.len() - max_tail;
-    if tail_start <= HISTORY_PREFIX_LEN {
+    if tail_start <= protected_prefix {
         return;
     }
-    messages.drain(HISTORY_PREFIX_LEN..tail_start);
+    messages.drain(protected_prefix..tail_start);
 }
 
-fn prune_by_char_budget(messages: &mut Vec<ChatMessage>, history: &ProviderHistoryConfig) {
-    while messages.len() > HISTORY_PREFIX_LEN && history_char_len(messages) > history.max_chars {
-        if messages.len() == HISTORY_PREFIX_LEN + 1 {
-            let prefix_chars = history_char_len(&messages[..HISTORY_PREFIX_LEN]);
+fn prune_by_char_budget(
+    messages: &mut Vec<ChatMessage>,
+    history: &ProviderHistoryConfig,
+    protected_prefix: usize,
+) {
+    while messages.len() > protected_prefix && history_char_len(messages) > history.max_chars {
+        if messages.len() == protected_prefix + 1 {
+            let prefix_chars = history_char_len(&messages[..protected_prefix]);
             let budget_for_tail = history.max_chars.saturating_sub(prefix_chars);
             if budget_for_tail == 0 {
-                messages.remove(HISTORY_PREFIX_LEN);
+                messages.remove(protected_prefix);
                 continue;
             }
 
-            let tail_idx = HISTORY_PREFIX_LEN;
+            let tail_idx = protected_prefix;
             let tail = messages[tail_idx].content.as_ref();
             let truncated_tail = truncate_for_budget(tail, budget_for_tail);
             if truncated_tail.chars().count() < tail.chars().count() {
@@ -57,7 +66,7 @@ fn prune_by_char_budget(messages: &mut Vec<ChatMessage>, history: &ProviderHisto
             }
         }
         // Drop the oldest non-prefix turn; prefer retaining recent context.
-        messages.remove(HISTORY_PREFIX_LEN);
+        messages.remove(protected_prefix);
     }
 }
 
@@ -118,7 +127,7 @@ mod tests {
                 ChatMessage::new(ChatRole::User, format!("user-{i}")),
                 &history,
             );
-            prune_message_history(&mut messages, &history);
+            prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
         }
 
         assert_eq!(full_history.len(), messages.len());
@@ -180,7 +189,7 @@ mod tests {
             messages.push(ChatMessage::new(ChatRole::User, format!("user-{i}")));
         }
 
-        prune_message_history(&mut messages, &history);
+        prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
 
         assert_eq!(messages[0].content.as_ref(), "system");
         assert_eq!(messages[1].content.as_ref(), "goal");
@@ -199,7 +208,7 @@ mod tests {
         messages.push(ChatMessage::new(ChatRole::User, "b".repeat(80_000)));
         messages.push(ChatMessage::new(ChatRole::Assistant, "c".repeat(80_000)));
 
-        prune_message_history(&mut messages, &history);
+        prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
 
         assert_eq!(messages[0].content.as_ref(), "system");
         assert_eq!(messages[1].content.as_ref(), "goal");
@@ -225,7 +234,7 @@ mod tests {
             ChatMessage::new(ChatRole::Assistant, "ok"),
         ];
 
-        prune_message_history(&mut messages, &history);
+        prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
 
         assert!(history_char_len(&messages) <= history.max_chars);
         assert_eq!(messages[0].content.as_ref(), "system");
@@ -245,7 +254,7 @@ mod tests {
             ChatMessage::new(ChatRole::User, "t".repeat(300_000)),
         ];
 
-        prune_message_history(&mut messages, &history);
+        prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
 
         assert_eq!(messages.len(), HISTORY_PREFIX_LEN + 1);
         assert!(history_char_len(&messages) <= history.max_chars);
@@ -273,7 +282,7 @@ mod tests {
         }
 
         let before_len = messages.len();
-        prune_message_history(&mut messages, &history);
+        prune_message_history(&mut messages, &history, HISTORY_PREFIX_LEN);
 
         assert_eq!(messages.len(), before_len);
         assert!(messages

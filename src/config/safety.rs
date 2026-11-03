@@ -90,6 +90,7 @@ mod tests {
             },
             logging: LoggingConfig::default(),
             access: Some(AccessPolicyConfig::default()),
+            context: crate::config::ContextConfig::default(),
         }
     }
 
