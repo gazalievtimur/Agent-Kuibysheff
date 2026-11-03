@@ -208,3 +208,318 @@ async fn skill_body_round_trip_uses_profile_command() {
         .unwrap();
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn operator_routes_cover_writes_assets_and_missing_runs() {
+    let app = app();
+
+    let index = app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(index.status(), StatusCode::OK);
+
+    let css = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/studio.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(css.status(), StatusCode::OK);
+
+    let missing_asset = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/assets/missing.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_asset.status(), StatusCode::NOT_FOUND);
+
+    let created = post_json(
+        app.clone(),
+        "/api/agents",
+        true,
+        r#"{"id":"demo","force":true}"#,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    assert_eq!(body_json(created).await["agent"], "demo");
+
+    let forbidden = post_json(app.clone(), "/api/agents", false, r#"{"id":"demo"}"#).await;
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let failed = post_json(app.clone(), "/api/agents", true, r#"{"id":"bad"}"#).await;
+    assert_eq!(failed.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(failed).await["error"], "init failed");
+
+    let stdout_fail = post_json(app.clone(), "/api/agents", true, r#"{"id":"bad-stdout"}"#).await;
+    assert_eq!(stdout_fail.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(stdout_fail).await["error"], "plain failure");
+
+    let empty_fail = post_json(app.clone(), "/api/agents", true, r#"{"id":"bad-empty"}"#).await;
+    assert_eq!(empty_fail.status(), StatusCode::BAD_REQUEST);
+
+    let imported = post_json(
+        app.clone(),
+        "/api/agents/import",
+        true,
+        r#"{"id":"demo","from":"profile","force":true}"#,
+    )
+    .await;
+    assert_eq!(imported.status(), StatusCode::OK);
+
+    let config = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/config")
+                .header("content-type", "application/json")
+                .header("x-kbshff-studio", "1")
+                .body(Body::from(r#"{"config":{}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(config.status(), StatusCode::OK);
+
+    let prompt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/prompt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), StatusCode::OK);
+    assert_eq!(body_json(prompt).await["content"], "sys");
+
+    let prompt_put = post_text(
+        app.clone(),
+        "PUT",
+        "/api/agents/demo/prompt",
+        r#"{"content":"p"}"#,
+    )
+    .await;
+    assert_eq!(prompt_put.status(), StatusCode::OK);
+
+    let rules = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/rules")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rules.status(), StatusCode::OK);
+    assert_eq!(body_json(rules).await["content"], "be brief");
+
+    let rules_put = post_text(
+        app.clone(),
+        "PUT",
+        "/api/agents/demo/rules",
+        r#"{"content":"r"}"#,
+    )
+    .await;
+    assert_eq!(rules_put.status(), StatusCode::OK);
+
+    let skills = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/skills")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(skills.status(), StatusCode::OK);
+
+    let skills_put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/agents/demo/skills")
+                .header("content-type", "application/json")
+                .header("x-kbshff-studio", "1")
+                .body(Body::from(r#"{"skills":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(skills_put.status(), StatusCode::OK);
+
+    let secret = post_json(
+        app.clone(),
+        "/api/agents/demo/secret",
+        true,
+        r#"{"key":"TOKEN","value":"x"}"#,
+    )
+    .await;
+    assert_eq!(secret.status(), StatusCode::OK);
+
+    let check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/demo/check")
+                .header("x-kbshff-studio", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(check.status(), StatusCode::OK);
+
+    let discover = post_json(
+        app.clone(),
+        "/api/agents/demo/mcp/discover",
+        true,
+        r#"{"server":"local"}"#,
+    )
+    .await;
+    assert_eq!(discover.status(), StatusCode::OK);
+
+    let called = post_json(
+        app.clone(),
+        "/api/agents/demo/mcp/call",
+        true,
+        r#"{"server":"local","tool":"ping","arguments":{}}"#,
+    )
+    .await;
+    assert_eq!(called.status(), StatusCode::OK);
+
+    let missing_tool = post_json(
+        app.clone(),
+        "/api/agents/demo/mcp/call",
+        true,
+        r#"{"server":" ","tool":" ","arguments":null}"#,
+    )
+    .await;
+    assert_eq!(missing_tool.status(), StatusCode::BAD_REQUEST);
+
+    let out = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/out")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.status(), StatusCode::OK);
+
+    let out_file = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/out/report")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out_file.status(), StatusCode::OK);
+
+    let missing_run = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/runs/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_run.status(), StatusCode::NOT_FOUND);
+
+    let missing_events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/runs/missing/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_events.status(), StatusCode::NOT_FOUND);
+
+    let missing_cancel = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs/missing/cancel")
+                .header("x-kbshff-studio", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_cancel.status(), StatusCode::NOT_FOUND);
+
+    let missing_logs = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/runs/missing/logs?which=stdout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_logs.status(), StatusCode::NOT_FOUND);
+}
+
+async fn post_json(
+    app: axum::Router,
+    uri: &str,
+    studio: bool,
+    body: &str,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json");
+    if studio {
+        builder = builder.header("x-kbshff-studio", "1");
+    }
+    app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn post_text(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: &str,
+) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("x-kbshff-studio", "1")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
