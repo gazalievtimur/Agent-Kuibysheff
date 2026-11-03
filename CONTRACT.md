@@ -142,8 +142,11 @@ kbshff config … skill file list|get|put|remove …
 
 `init` creates the protected profile under
 `.kuibysheff/protected/agents/<id>/` (`master_prompt.md`, `skills.dsl`,
-`rules.md`, `agent-config.yaml`). Optional skill instructions live in
-`skills/<name>/skill.md` with companion files beside that file. With
+`rules.md`, `agent-config.yaml`). Optional skill instruction packages live
+under `.kuibysheff/runtime/skills/<id>/<name>/` (`skill.md` plus companion
+files). If that runtime directory is missing, load falls back to
+`protected/agents/<id>/skills`. When both trees exist, the runtime tree wins.
+A symlink or non-directory at the runtime path fails load. With
 `--interactive`, the CLI prompts for
 `provider` and `limits`.
 
@@ -165,9 +168,13 @@ minimal policy before validation.
 Settings under `.kuibysheff/protected/` are readable/writable only by the
 `agent_Kuibysheff` process (load + `config` CRUD). Tool paths (`home.*`,
 `local_tools.*`, `--files`) hard-deny that tree. `profile.list_skill` and
-`profile.read_skill` are the exception: they read only files indexed under
-`skills/<name>/` at startup, not `master_prompt.md`, `rules.md`, config, or
-`.env`. `home.run` sandbox specs must not grant the protected tree. Stdio MCP children use `mcp-runtime/{agent}/{server}/` with a
+`profile.read_skill` are the exception: they read only files indexed from the
+effective skill-package root at startup (prefer
+`.kuibysheff/runtime/skills/<id>/`, else `protected/agents/<id>/skills`), not
+`master_prompt.md`, `rules.md`, config, or `.env`. `home.run` sandbox specs
+must not grant the protected tree; companion scripts belong under
+`runtime/skills/` so a sandboxed run can read them without that grant. Stdio
+MCP children use `mcp-runtime/{agent}/{server}/` with a
 cleared environment and require a working OS sandbox probe unless
 `KUIBYSHEFF_ALLOW_UNSANDBOXED_MCP=1` (dev/emergency only; also required for the
 nested Docker Desktop Linux SWE-bench runner, which lacks `clone3` —
@@ -357,8 +364,10 @@ effective_tools    = effective_builtins ∪ effective_mcp
   it.
 - `rules.md` and the `policy` string inside a `skills.dsl` block are prompt-only
   guidance for the model. They are not enforced by the runtime policy engine.
-- When `skills/<name>/skill.md` exists, the system prompt lists that skill as
-  `instructions=stored` plus a file count. `profile.list_skill` and
+- When a skill package exists for a name in `skills.dsl` (under
+  `.kuibysheff/runtime/skills/<id>/<name>/`, or the legacy
+  `protected/agents/<id>/skills/<name>/` fallback), the system prompt lists that
+  skill as `instructions=stored` plus a file count. `profile.list_skill` and
   `profile.read_skill` are granted automatically and can read only files indexed
   in that folder. They do not accept a filesystem path, and scripts in the folder
   are not executed in place.

@@ -143,8 +143,14 @@ are not implemented.
 - `src/access/mod.rs` — validates/resolves DTOs into `ResolvedAccessPolicy` (`TryFrom<AccessResolveInput>`), plus `EffectiveToolPolicy`, `QualifiedTool`, `ProgramAlias`, strict vs explicit `access.mode: legacy`.
 - `src/access/paths.rs` — path grant logic: `RelativeGrant`, `PathGrantScope`, `HomeFsPolicy`, `WorkspaceFsPolicy`, `InputFilesPolicy`.
 - `src/skills/dsl.rs` — parses `skills.dsl` and builds the skills allowlist and prompt catalog.
-- `src/skills/package.rs` — indexes `skills/<name>/skill.md` and companion files. Symlinks and paths that leave the skill folder are rejected.
-- `src/tools/profile_skills.rs` — `profile.list_skill` and `profile.read_skill` read that index. Scripts are not run from `protected/`.
+- `src/skills/package.rs` — indexes skill packages. For a Kuibysheff profile the
+  preferred root is `.kuibysheff/runtime/skills/{id}/`; missing runtime falls
+  back to `protected/agents/{id}/skills`; when both exist, runtime wins. A
+  symlink or non-directory at the runtime path fails load. Symlinks and paths
+  that leave a skill folder are rejected.
+- `src/tools/profile_skills.rs` — `profile.list_skill` and `profile.read_skill`
+  read that index. Scripts are not executed from the package tree; sandboxed
+  `home.run` can read `runtime/skills/` without a `protected/` grant.
 
 ### MCP and provider
 
@@ -287,7 +293,8 @@ The runtime uses a layered policy:
    - Built-ins require both the config allowlist and the skills allowlist.
    - MCP tools require a skills allowlist entry; discovery alone is not enough.
    - `profile.list_skill` and `profile.read_skill` are added when at least one
-     `skills/<name>/` folder is present. They read only that folder's index.
+     skill package folder is present under the effective packages root. They
+     read only that folder's index.
    - Skill `policy` strings and `rules.md` are prompt-only guidance; they are not
      enforced by `EffectiveToolPolicy`. Full instructions stay in `skill.md` and
      are fetched by the model through `profile.read_skill`.
