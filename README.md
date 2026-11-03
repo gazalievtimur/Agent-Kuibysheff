@@ -205,18 +205,21 @@ compatible models (`reasoning_effort` in the Chat Completions request).
 ## Agent profile
 
 Each agent lives under `.kuibysheff/protected/agents/<id>/`. `init` creates the
-required files. Skill folders are optional and are added later.
+required files. Skill instruction packages are optional and live outside the
+protected store so a sandbox can read them without a `protected/` grant.
 
 ```text
-.kuibysheff/protected/agents/<id>/
-  agent-config.yaml
-  master_prompt.md
-  rules.md                 # optional
-  skills.dsl               # name, short policy, allowed tools
-  skills/<name>/
-    skill.md               # full instructions; required if the folder exists
-    scripts/example.py     # companion files (optional)
-  .env                     # secrets; not part of the prompt
+.kuibysheff/
+  protected/agents/<id>/
+    agent-config.yaml
+    master_prompt.md
+    rules.md                 # optional
+    skills.dsl               # name, short policy, allowed tools
+    .env                     # secrets; not part of the prompt
+  runtime/skills/<id>/
+    <name>/
+      skill.md               # full instructions; required if the folder exists
+      scripts/example.py     # companion files (optional)
 ```
 
 `skills.dsl` is the tool allowlist. A built-in is available only when both
@@ -225,18 +228,24 @@ is available only when a skill lists it. The `policy` string is a one-line
 summary for the model and for the A2A Agent Card. It cannot hold a long
 procedure: the DSL string cannot contain `"`.
 
-`skills/<name>/` is that procedure. `<name>` must match a skill in `skills.dsl`
-and be one path segment of letters, digits, spaces, `_`, or `-`. The system
-prompt lists each skill with `instructions=stored` or `instructions=none` and a
-file count. It does not inline `skill.md`. When at least one folder exists, the
-run grants `profile.list_skill` and `profile.read_skill` without adding them to
-`allowed_tools`. Those tools accept a skill name and, for a read, an optional
-relative path that was indexed at startup. They do not read `master_prompt.md`,
-`rules.md`, config, or `.env`.
+Skill packages for a Kuibysheff profile are written under
+`.kuibysheff/runtime/skills/<id>/<name>/`. `<name>` must match a skill in
+`skills.dsl` and be one path segment of letters, digits, spaces, `_`, or `-`.
+If the runtime directory is missing, load falls back to
+`protected/agents/<id>/skills`. When both trees exist, the runtime tree wins.
+A symlink or non-directory at the runtime path fails load. That layout lets
+`home.run` read companion scripts without granting the protected store.
 
-Companion scripts stay in the profile. They are not executed there. The model
-reads the script text, writes a copy under home with `home.write`, and runs it
-with `home.run` only when that tool is already allowed.
+The system prompt lists each skill with `instructions=stored` or
+`instructions=none` and a file count. It does not inline `skill.md`. When at
+least one folder exists, the run grants `profile.list_skill` and
+`profile.read_skill` without adding them to `allowed_tools`. Those tools accept
+a skill name and, for a read, an optional relative path that was indexed at
+startup. They do not read `master_prompt.md`, `rules.md`, config, or `.env`.
+
+Companion scripts are not executed from the package tree. The model reads the
+script text, writes a copy under home with `home.write`, and runs it with
+`home.run` only when that tool is already allowed.
 
 ```powershell
 kbshff config --project-root . --agent demo skill body set workspace --text "# Steps"

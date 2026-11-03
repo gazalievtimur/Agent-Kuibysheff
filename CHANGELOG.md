@@ -7,14 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-03
+
 ### Added
 
-- Skill instructions can live in the agent profile as `skills/<name>/skill.md`
-  plus companion files. The system prompt keeps a catalog (`policy`,
-  `instructions=stored|none`, file count). The model reads the folder with
-  `profile.read_skill` and `profile.list_skill`. Manage the files with
-  `config skill body`, `config skill file`, directory import, or the studio
-  Configure tab (`skill.md` only).
+- Browser operator studio (`kbshff-studio` / `kbshff ui`): local HTTP console
+  that drives `kbshff` as a subprocess for profile edit, check, MCP probe, and
+  a single live run with SSE progress and cancel.
+- Raw `home.write`, pinned context, progress/cancel events, and operator CLI
+  paths that back the studio without changing the worker contract.
+- Skill instruction packages: `skill.md` plus companion files. The system
+  prompt keeps a catalog (`policy`, `instructions=stored|none`, file count).
+  The model reads the folder with `profile.read_skill` and `profile.list_skill`.
+  Manage the files with `config skill body`, `config skill file`, directory
+  import, or the studio Configure tab (`skill.md` only).
+- Skill packages for a Kuibysheff profile load from
+  `.kuibysheff/runtime/skills/{agent}/` so sandboxed `home.run` can read
+  companion scripts without a `protected/` grant. Missing runtime falls back
+  to `protected/agents/{agent}/skills`; when both exist, runtime wins.
+
+### Changed
+
+- Migrate `agent-client-protocol` to 3.x with the `stdio` feature for
+  `Stdio::new()`.
+- Dependency bumps: `tokio` 1.54, `js-yaml` 5.5, `actions/setup-python` 7.1,
+  `Swatinem/rust-cache` 2.9.3, and related pins.
+
+### Fixed
+
+- Bump `pulldown-cmark` to 0.13.6 for
+  [RUSTSEC-2026-0414](https://rustsec.org/advisories/RUSTSEC-2026-0414).
+- Bump `rustls` / `webpki` advisories that blocked Dependabot CI after 0.2.2.
 
 ## [0.2.2] - 2026-10-07
 
