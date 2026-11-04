@@ -25,6 +25,7 @@ pub fn build_runtime_rules(
     ];
 
     let mut builtins = Vec::new();
+    let mut home_run_allowed = false;
     for descriptor in BUILTINS {
         if !effective.allows_server_tool(descriptor.server, descriptor.tool) {
             continue;
@@ -33,6 +34,9 @@ pub fn build_runtime_rules(
             continue;
         }
         if let Some(line) = prompt_line_for(descriptor, access, workspace) {
+            if descriptor.server == "home" && descriptor.tool == "run" {
+                home_run_allowed = true;
+            }
             builtins.push(line);
         }
     }
@@ -40,6 +44,10 @@ pub fn build_runtime_rules(
     if !builtins.is_empty() {
         lines.push("Available built-in tools:".to_string());
         lines.extend(builtins);
+    }
+
+    if home_run_allowed {
+        append_home_run_sandbox_contract(&mut lines, access);
     }
 
     let mcp_tools: Vec<String> = effective
@@ -63,6 +71,38 @@ pub fn build_runtime_rules(
     lines.push("- Return strict JSON and never use markdown.".to_string());
 
     lines.join("\n")
+}
+
+/// Injects the shared `home.run` sandbox contract for every entry point.
+fn append_home_run_sandbox_contract(lines: &mut Vec<String>, access: &ResolvedAccessPolicy) {
+    lines.push("home.run sandbox contract:".to_string());
+    lines.push(
+        "- home.run has no network; only the listed program aliases may be used.".to_string(),
+    );
+    for (alias, program) in access.programs() {
+        let executable = program.executable.as_path().display();
+        if program.runtime_read_roots.is_empty() {
+            lines.push(format!("- program `{alias}` executable `{executable}`"));
+        } else {
+            let roots: Vec<String> = program
+                .runtime_read_roots
+                .iter()
+                .map(|root| root.as_path().display().to_string())
+                .collect();
+            lines.push(format!(
+                "- program `{alias}` executable `{executable}`; runtime_read_roots: {}",
+                roots.join(", ")
+            ));
+        }
+    }
+    lines.push(
+        "- Filesystem access is limited to home grants plus that program's runtime_read_roots; paths outside those roots are unreachable."
+            .to_string(),
+    );
+    lines.push(
+        "- On tool error containing `sandbox failure` or `sandbox unavailable`: do not retry the same call; prefer an MCP tool for the same job if available, else stop and record."
+            .to_string(),
+    );
 }
 
 fn prompt_line_for(
@@ -100,10 +140,18 @@ fn prompt_line_for(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
 
+    use tempfile::tempdir;
+
     use super::*;
-    use crate::access::QualifiedTool;
+    use crate::access::config::{
+        AccessPolicyConfig, FilesystemPolicyConfig, HomeFsPolicyConfig, ProgramPolicyConfig,
+        RunPolicyConfig, ToolsPolicyConfig,
+    };
+    use crate::access::{AccessResolveInput, QualifiedTool, ResolvedAccessPolicy};
     use crate::tools::registry;
 
     fn home_read_policy() -> EffectiveToolPolicy {
@@ -134,6 +182,67 @@ mod tests {
         EffectiveToolPolicy::compile(&access, &skills, mcp)
     }
 
+    fn home_run_access_and_policy() -> (ResolvedAccessPolicy, EffectiveToolPolicy) {
+        let dir = tempdir().expect("tempdir");
+        let runtime = dir.path().join("runtime");
+        fs::create_dir_all(&runtime).expect("runtime");
+        let exe_path = dir.path().join("python-stub");
+        {
+            let mut file = fs::File::create(&exe_path).expect("create exe");
+            writeln!(file, "stub").expect("write");
+        }
+
+        let access_cfg = AccessPolicyConfig {
+            tools: ToolsPolicyConfig {
+                builtins: vec![
+                    "home.list".to_string(),
+                    "home.read".to_string(),
+                    "home.write".to_string(),
+                    "home.run".to_string(),
+                ],
+            },
+            filesystem: FilesystemPolicyConfig {
+                home: HomeFsPolicyConfig {
+                    read: vec!["in".to_string(), "out".to_string()],
+                    write: vec!["out".to_string()],
+                },
+                workspace: None,
+                input_roots: Vec::new(),
+            },
+            run: RunPolicyConfig {
+                programs: vec![ProgramPolicyConfig {
+                    name: "python".to_string(),
+                    executable: PathBuf::from("python-stub"),
+                    runtime_read_roots: vec![PathBuf::from("runtime")],
+                    inherit_env: Vec::new(),
+                    allow_children: false,
+                }],
+                max_args: 32,
+                max_arg_chars: 4096,
+                max_output_chars: 200_000,
+                max_timeout_ms: 120_000,
+            },
+            ..AccessPolicyConfig::default()
+        };
+
+        let access = ResolvedAccessPolicy::try_from(AccessResolveInput {
+            access: Some(&access_cfg),
+            config_dir: dir.path(),
+        })
+        .expect("resolve");
+        // Keep temp paths alive while CanonicalRoot strings are displayed.
+        let _kept = dir.keep();
+
+        let skills = BTreeSet::from([
+            QualifiedTool::parse("home.list").unwrap(),
+            QualifiedTool::parse("home.read").unwrap(),
+            QualifiedTool::parse("home.write").unwrap(),
+            QualifiedTool::parse("home.run").unwrap(),
+        ]);
+        let effective = EffectiveToolPolicy::compile(&access, &skills, []);
+        (access, effective)
+    }
+
     #[test]
     fn runtime_rules_mention_only_allowed_tools() {
         let rules = build_runtime_rules(
@@ -152,6 +261,10 @@ mod tests {
         assert!(!rules.contains("- home.run"));
         assert!(!rules.contains("local_tools.search_docs"));
         assert!(!rules.contains("local_tools.read_file"));
+        assert!(
+            !rules.contains("home.run sandbox contract"),
+            "sandbox contract only when home.run is advertised: {rules}"
+        );
     }
 
     #[test]
@@ -187,6 +300,38 @@ mod tests {
         assert!(rules.contains("Available MCP tools:"));
         assert!(rules.contains("- docs.search"));
         assert!(rules.contains("home.read"));
+    }
+
+    #[test]
+    fn runtime_rules_include_home_run_sandbox_contract() {
+        let (access, effective) = home_run_access_and_policy();
+        let rules = build_runtime_rules(
+            &effective,
+            &access,
+            PathBuf::from("/home").as_path(),
+            PathBuf::from("/workspace").as_path(),
+        );
+
+        assert!(
+            rules.contains("- home.run"),
+            "home.run must be advertised: {rules}"
+        );
+        assert!(
+            rules.contains("no network"),
+            "sandbox contract must state no network: {rules}"
+        );
+        assert!(
+            rules.contains("sandbox failure"),
+            "sandbox contract must teach no-retry on sandbox failure: {rules}"
+        );
+        assert!(
+            rules.contains("program `python`"),
+            "sandbox contract must list program aliases: {rules}"
+        );
+        assert!(
+            rules.contains("runtime_read_roots"),
+            "sandbox contract must mention runtime_read_roots: {rules}"
+        );
     }
 
     #[test]

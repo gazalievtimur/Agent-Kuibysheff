@@ -550,6 +550,17 @@ Payloads never run via a plain process spawn. The CLI uses a platform backend:
 | Linux | unprivileged user/mount/pid/ipc/net namespaces, pivot_root, caps drop, seccomp denylist | No host network; filesystem limited to explicit binds; process tree killed on timeout (`pidfd`) |
 | Windows | AppContainer (empty capabilities) + Job Object | No network capabilities / loopback exemption; ACL grants only for configured paths; job kill on timeout |
 
+The same worker (and the same system prompt) is used for CLI `run`, ACP, A2A,
+and the studio UI. When `home.run` is in the effective allowlist,
+`build_runtime_rules` injects a **sandbox contract** from
+`access.run.programs`: no network; only listed program aliases with their
+executables / `runtime_read_roots`; paths outside home grants plus those roots
+are unreachable; on `sandbox failure` / `sandbox unavailable` the model must
+not retry the same call (prefer an MCP tool for the same job, else stop).
+Profile `master_prompt` / `rules` / skills add workflow-only constraints (for
+example routing git commit/push through an MCP server). They must not duplicate
+the generic sandbox lecture — one contract for all entry points.
+
 Prerequisites:
 
 - Linux: user namespaces enabled; on Ubuntu,
