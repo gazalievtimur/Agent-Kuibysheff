@@ -7,7 +7,7 @@ By default the agent writes detailed logs under `~/.agent-kuibysheff/logs`:
 | `agent.trace.log` | Technical `tracing` output (also mirrored to stderr) |
 | `ai_usage.jsonl` | Structured AI completion, provider-attempt, token, and cost events (when `enable_ai_log: true`) |
 | `mcp_usage.jsonl` | Structured MCP tool events (when `enable_mcp_log: true`) |
-| `chat_history.json` | Chat transcript pruned to the same `provider.history` budgets as the model window (when `enable_chat_history: true` or `--save-chat-history`) |
+| `chat_history.json` | Full unpruned chat transcript (when `enable_chat_history: true` or `--save-chat-history`). Used by `--continue-from` / Studio **Продолжить** to resume a run |
 
 Override the base directory with any of:
 
@@ -33,6 +33,19 @@ Enable full chat history from the CLI:
 ```powershell
 cargo run --bin kbshff -- run ... --save-chat-history
 ```
+
+Resume from a previously saved transcript (prompt optional):
+
+```powershell
+cargo run --bin kbshff -- run `
+  --project-root . `
+  --agent demo `
+  --continue-from .kuibysheff/homes/demo/logs/chat_history.json `
+  --save-chat-history
+```
+
+The path must stay under `--project-root` and outside `.kuibysheff/protected/`.
+Studio Test run writes the same file under `{home}/logs/` via `AGENT_LOG_DIR`.
 
 Example:
 

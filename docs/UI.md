@@ -89,7 +89,7 @@ Sidebar: agent list, Refresh, New agent, Import.
 | **Configure** | Provider, limits, logging, **MCP form cards** (not raw JSON), access, billing, event-mcp, prompt / rules / skills JSON, and the selected skill's `skill.md`. Save writes profile files. |
 | **MCP** | Discover tools from **saved** config; pick server/tool; JSON args (stubbed from `inputSchema`); Call; Pretty/Raw/Copy result. |
 | **Check** | Same probes as `kbshff check`; inventory (tools, MCP connected/failed/gated). |
-| **Test run** | One active run per studio process: prompt, files, home, limits; SSE events; `RunOutput`; log tails; `homes/<id>/out/` preview. |
+| **Test run** | One active run per studio process: prompt, files, home, limits; **Start run** / **Продолжить**; SSE events; `RunOutput`; log tails; `homes/<id>/out/` preview. |
 
 MCP card **Test** jumps to the MCP tab and discovers that server.
 
@@ -142,7 +142,7 @@ Mutating routes need `X-Kbshff-Studio: 1`. Errors: `{ "error": "..." }` with app
 | POST | `/api/agents/:id/check` | Check report + inventory |
 | POST | `/api/agents/:id/mcp/discover` | Body optional `{ "server": "name" }` → `{ servers: [{ name, tools, error? }] }` tools include `name`, `description?`, `input_schema` |
 | POST | `/api/agents/:id/mcp/call` | `{ server, tool, arguments }` → `{ server, tool, result }` |
-| POST | `/api/agents/:id/runs` | Start single run |
+| POST | `/api/agents/:id/runs` | Start or continue a single run (`continue_from_chat`) |
 | GET | `/api/runs/:id` | Run status / output |
 | GET | `/api/runs/:id/events` | SSE |
 | POST | `/api/runs/:id/cancel` | Cancel |
@@ -173,6 +173,9 @@ Under `--project-root`:
 Studio never invents a second config format — same files as CLI. Test run sets
 `AGENT_LOG_DIR` to `{home}/logs` (default `homes/<agent>/logs`, or the Home field)
 so AI/MCP/trace files land next to the task, not under `~/.agent-kuibysheff/logs`.
+**Продолжить** calls `kbshff run --continue-from {home}/logs/chat_history.json`
+(and always `--save-chat-history`). Prompt may be empty; a missing transcript
+returns HTTP 400. This is a new child process, not reconnecting a live run.
 
 ---
 

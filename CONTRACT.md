@@ -21,7 +21,8 @@ under `workflows/1c-dev/` (gitignored; restore from git history for testing).
 kbshff run \
   --project-root <DIR> \
   --agent <ID> \
-  --prompt <TEXT> \
+  [--prompt <TEXT>] \
+  [--continue-from <CHAT_HISTORY_JSON>] \
   [--home <REL_UNDER_KUIBYSHEFF>] \
   [--files <PATH>...] \
   [--run-id ID] \
@@ -35,7 +36,10 @@ kbshff run \
 - `--agent` selects the protected profile
   `{project-root}/.kuibysheff/protected/agents/<id>/` (settings + `agent-config.yaml`).
 - Operators do **not** pass storage paths for config/settings; the agent owns the layout.
-- `--prompt` is the task for one run.
+- `--prompt` is the task for one run. It may be omitted when `--continue-from`
+  points at a saved `chat_history.json` (schema_version 2). Resume replaces the
+  leading system message with the current profile prompt and, if `--prompt` is
+  also set, appends a new user turn. Limits apply to the continuation only.
 - `--files` are UTF-8 files embedded into the model context as read-only
   inputs. They are not copied into home. Each file is truncated to 50,000
   characters in the context. Under strict `access`, each file must fall

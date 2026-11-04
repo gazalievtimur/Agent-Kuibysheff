@@ -171,7 +171,8 @@ are not implemented.
 - `src/logging/mod.rs` — initializes `tracing` (idempotent for the same log directory in a long-lived ACP process), creates `Loggers` (AI/MCP/system/chat sinks).
 - `src/logging/sink.rs` — async JSONL file sink with a background writer task.
 - `src/logging/paths.rs` — resolves the log base directory.
-- `src/logging/chat_history.rs` — persists the chat transcript (pruned to `provider.history` budgets) to JSON.
+- `src/logging/chat_history.rs` — persists/loads the full chat transcript JSON
+  (`--save-chat-history` / `--continue-from`).
 
 ### Sandbox
 

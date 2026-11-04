@@ -35,10 +35,12 @@ use crate::config::{
 };
 use crate::context::build_input_files_context;
 use crate::event_mcp::EventMcpDispatcher;
-use crate::logging::{init_tracing, resolve_base_dir, Loggers, SharedEventSink};
+use crate::logging::{init_tracing, load_chat_history, resolve_base_dir, Loggers, SharedEventSink};
 use crate::mcp::stdio_client::McpRegistry;
 use crate::output::{RunOutput, StopReason};
-use crate::project_paths::{resolve_agent_identity, resolve_config_path_for_dotenv};
+use crate::project_paths::{
+    is_protected_path, path_is_within, resolve_agent_identity, resolve_config_path_for_dotenv,
+};
 use crate::prompt::build_runtime_rules;
 use crate::provider::openai_compat::{OpenAiCompatClient, ProviderAccountingOptions};
 use crate::sandbox::SandboxRunner;
@@ -66,6 +68,7 @@ pub struct AgentPromptArgs {
     pub max_duration_sec: Option<u64>,
     pub max_cost: Option<Money>,
     pub save_chat_history: bool,
+    pub continue_from: Option<PathBuf>,
     pub cancel: RunCancel,
     pub events: AgentEventTx,
 }
@@ -93,6 +96,7 @@ impl TryFrom<RunArgs> for AgentPromptArgs {
             max_duration_sec: cli.max_duration_sec,
             max_cost: cli.max_cost,
             save_chat_history: cli.save_chat_history,
+            continue_from: cli.continue_from,
             cancel: RunCancel::new(),
             events: AgentEventTx::noop(),
         })
@@ -565,7 +569,12 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
     apply_prompt_overrides(&mut cfg, &args);
     validate(&cfg).context("validating config")?;
     ConfigSafetyValidator::check(&cfg).context("config safety validation")?;
-    if args.prompt.trim().is_empty() {
+    let resume_messages = if let Some(path) = &args.continue_from {
+        Some(load_resume_messages(path, args.project_root.as_deref()).await?)
+    } else {
+        None
+    };
+    if args.prompt.trim().is_empty() && resume_messages.is_none() {
         bail!("prompt must not be empty");
     }
     let run_id = args.run_id.clone().unwrap_or_else(generate_run_id);
@@ -761,6 +770,31 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
             events: args.events,
             home: args.home.clone(),
             pinned_files: cfg.context.pinned_files.clone(),
+            resume_messages,
         })
         .await)
+}
+
+async fn load_resume_messages(
+    path: &Path,
+    project_root: Option<&Path>,
+) -> Result<Vec<crate::provider::ChatMessage>> {
+    let canonical = tokio::fs::canonicalize(path)
+        .await
+        .with_context(|| format!("reading --continue-from `{}`", path.display()))?;
+    let Some(root) = project_root else {
+        bail!("--continue-from requires --project-root");
+    };
+    let root = tokio::fs::canonicalize(root)
+        .await
+        .with_context(|| format!("resolving --project-root `{}`", root.display()))?;
+    if !path_is_within(&root, &canonical) {
+        bail!("--continue-from must be inside --project-root");
+    }
+    if is_protected_path(&root, &canonical) {
+        bail!("--continue-from must not be inside the protected agent store");
+    }
+    load_chat_history(&canonical)
+        .await
+        .with_context(|| format!("loading chat history `{}`", canonical.display()))
 }
