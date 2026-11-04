@@ -155,13 +155,15 @@ html, body {
 
 .panel.wide { grid-column: 1 / -1; }
 
-.mcp-list {
+.mcp-list,
+.program-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 
-.mcp-card {
+.mcp-card,
+.program-card {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-elevated);
@@ -171,14 +173,23 @@ html, body {
   gap: 0.7rem;
 }
 
-.mcp-card > header {
+.mcp-card > header,
+.program-card > header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.mcp-card > header strong {
+.mcp-card > header strong,
+.program-card > header strong {
   margin-right: auto;
+}
+
+.subhead {
+  margin: 0.85rem 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
 }
 
 .mcp-schema {
@@ -191,16 +202,19 @@ html, body {
   font-size: 0.85rem;
 }
 
-.mcp-grid {
+.mcp-grid,
+.program-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
-.mcp-span { grid-column: 1 / -1; }
+.mcp-span,
+.program-span { grid-column: 1 / -1; }
 
 @media (max-width: 960px) {
-  .mcp-grid { grid-template-columns: 1fr; }
+  .mcp-grid,
+  .program-grid { grid-template-columns: 1fr; }
 }
 
 .panel h2 {

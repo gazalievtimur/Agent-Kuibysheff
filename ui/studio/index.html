@@ -87,9 +87,12 @@
               <label>Home write paths (one per line)
                 <textarea id="cfg-home-write" rows="3"></textarea>
               </label>
-              <label>Run programs (one per line)
-                <textarea id="cfg-run-programs" rows="3"></textarea>
-              </label>
+              <h3 class="subhead">Run programs</h3>
+              <div id="run-programs-list" class="program-list"></div>
+              <div class="footer-actions">
+                <button type="button" id="btn-add-program" class="btn">Add program</button>
+              </div>
+              <p class="hint">Each program is an alias for <code>home.run</code> (name + executable path). Runtime read roots and inherit env: one value per line.</p>
             </article>
 
             <article class="panel wide">
