@@ -8,6 +8,7 @@
     agentId: null,
     rawConfig: null,
     mcpServers: [],
+    runPrograms: [],
     mcpProbe: { servers: [], preferredServer: null },
     mcpResult: { raw: null, view: "pretty" },
     runOutput: { raw: null, view: "pretty" },
@@ -182,7 +183,8 @@
     $("cfg-home-write").value = joinLines(
       (access.filesystem && access.filesystem.home && access.filesystem.home.write) || []
     );
-    $("cfg-run-programs").value = joinLines((access.run && access.run.programs) || []);
+    state.runPrograms = normalizeProgramList((access.run && access.run.programs) || []);
+    renderProgramList();
     state.mcpServers = normalizeMcpList(c.mcp || []);
     renderMcpList();
     $("cfg-billing").value = JSON.stringify(c.billing || {}, null, 2);
@@ -215,6 +217,89 @@
       out[key] = value === SET_TOKEN ? { set: true } : value;
     }
     return out;
+  }
+
+  function normalizeProgramList(list) {
+    return (list || [])
+      .filter((p) => p && typeof p === "object" && !Array.isArray(p))
+      .map((p) => ({
+        name: p.name || "",
+        executable: p.executable || "",
+        runtime_read_roots: Array.isArray(p.runtime_read_roots)
+          ? p.runtime_read_roots.map(String)
+          : [],
+        inherit_env: Array.isArray(p.inherit_env) ? p.inherit_env.map(String) : [],
+        allow_children: !!p.allow_children,
+      }));
+  }
+
+  function collectProgramsFromDom() {
+    const cards = Array.from(document.querySelectorAll("#run-programs-list .program-card"));
+    state.runPrograms = cards.map((card) => ({
+      name: card.querySelector("[data-pf='name']").value.trim(),
+      executable: card.querySelector("[data-pf='executable']").value.trim(),
+      runtime_read_roots: lines(card.querySelector("[data-pf='runtime_read_roots']").value),
+      inherit_env: lines(card.querySelector("[data-pf='inherit_env']").value),
+      allow_children: !!card.querySelector("[data-pf='allow_children']")?.checked,
+    }));
+  }
+
+  function programToWire(program) {
+    const wire = {
+      name: program.name,
+      executable: program.executable,
+      allow_children: !!program.allow_children,
+    };
+    if (program.runtime_read_roots && program.runtime_read_roots.length) {
+      wire.runtime_read_roots = program.runtime_read_roots;
+    }
+    if (program.inherit_env && program.inherit_env.length) {
+      wire.inherit_env = program.inherit_env;
+    }
+    return wire;
+  }
+
+  function renderProgramList() {
+    const box = $("run-programs-list");
+    box.innerHTML = "";
+    if (!state.runPrograms.length) {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "No run programs yet.";
+      box.appendChild(empty);
+    }
+    state.runPrograms.forEach((p, idx) => {
+      const card = document.createElement("div");
+      card.className = "program-card";
+      card.innerHTML = `
+        <header>
+          <strong>Program #${idx + 1}</strong>
+          <button type="button" class="btn ghost btn-remove-program" data-idx="${idx}">Remove</button>
+        </header>
+        <div class="program-grid">
+          <label>Name <input data-pf="name" type="text" value="${escapeAttr(p.name)}" placeholder="python" /></label>
+          <label>Executable <input data-pf="executable" type="text" value="${escapeAttr(p.executable)}" placeholder="/usr/bin/python3" /></label>
+          <label class="program-span">Runtime read roots (one per line)
+            <textarea data-pf="runtime_read_roots" rows="2">${escapeHtml((p.runtime_read_roots || []).join("\n"))}</textarea>
+          </label>
+          <label class="program-span">Inherit env (one per line)
+            <textarea data-pf="inherit_env" rows="2">${escapeHtml((p.inherit_env || []).join("\n"))}</textarea>
+          </label>
+          <label class="row">
+            <input data-pf="allow_children" type="checkbox"${p.allow_children ? " checked" : ""} />
+            Allow children
+          </label>
+        </div>`;
+      box.appendChild(card);
+    });
+
+    box.querySelectorAll(".btn-remove-program").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        collectProgramsFromDom();
+        state.runPrograms.splice(Number(btn.dataset.idx), 1);
+        renderProgramList();
+      });
+    });
   }
 
   function normalizeMcpList(list) {
@@ -412,7 +497,8 @@
     base.access.filesystem.home.read = lines($("cfg-home-read").value);
     base.access.filesystem.home.write = lines($("cfg-home-write").value);
     base.access.run = base.access.run || {};
-    base.access.run.programs = lines($("cfg-run-programs").value);
+    collectProgramsFromDom();
+    base.access.run.programs = state.runPrograms.map(programToWire);
     collectMcpFromDom();
     base.mcp = state.mcpServers.map(mcpToWire);
     base.billing = JSON.parse($("cfg-billing").value || "{}");
@@ -1295,6 +1381,17 @@
         auth: null,
       });
       renderMcpList();
+    });
+    $("btn-add-program").addEventListener("click", () => {
+      collectProgramsFromDom();
+      state.runPrograms.push({
+        name: "",
+        executable: "",
+        runtime_read_roots: [],
+        inherit_env: [],
+        allow_children: false,
+      });
+      renderProgramList();
     });
     $("cfg-skill-name").addEventListener("change", () =>
       loadSkillBody($("cfg-skill-name").value).catch((err) =>
