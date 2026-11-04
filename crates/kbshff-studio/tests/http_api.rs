@@ -487,6 +487,79 @@ async fn operator_routes_cover_writes_assets_and_missing_runs() {
     assert_eq!(missing_logs.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn empty_prompt_without_continue_is_rejected() {
+    let app = app();
+    let response = post_json(app, "/api/agents/demo/runs", true, r#"{"prompt":""}"#).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("prompt must not be empty"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn continue_without_chat_history_is_rejected() {
+    let app = app();
+    let response = post_json(
+        app,
+        "/api/agents/demo/runs",
+        true,
+        r#"{"continue_from_chat":true}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("chat history not found"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn continue_with_chat_history_is_accepted() {
+    let dir = std::env::temp_dir().join(format!("kbshff-studio-continue-{}", std::process::id()));
+    let logs = dir
+        .join(".kuibysheff")
+        .join("homes")
+        .join("demo")
+        .join("logs");
+    std::fs::create_dir_all(&logs).expect("logs");
+    std::fs::write(logs.join("chat_history.json"), "{}").expect("chat");
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_kbshff_stub"));
+    let app = kbshff_studio::api_test_router(dir.clone(), bin);
+    let response = post_json(
+        app.clone(),
+        "/api/agents/demo/runs",
+        true,
+        r#"{"continue_from_chat":true}"#,
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let json = body_json(response).await;
+    let run_id = json["run_id"].as_str().expect("run id");
+    let cancel = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/runs/{run_id}/cancel"))
+                .header("x-kbshff-studio", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+}
+
 async fn post_json(
     app: axum::Router,
     uri: &str,

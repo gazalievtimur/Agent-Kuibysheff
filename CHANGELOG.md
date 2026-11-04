@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Added
+
+- Resume interrupted worker runs from a saved chat transcript:
+  `kbshff run --continue-from <chat_history.json>`. The engine seeds the model
+  loop from that file, replaces the leading system message with the current
+  profile prompt, and optionally appends a new user turn when `--prompt` is
+  also set. Limits apply only to the continuation.
+- Studio Test run **Продолжить** button next to **Start run**. It posts
+  `continue_from_chat: true` on `POST /api/agents/:id/runs`, which spawns
+  `kbshff run --continue-from {home}/logs/chat_history.json` and always
+  enables `--save-chat-history`. A missing transcript returns HTTP 400.
+
+### Changed
+
+- Document resume semantics in `CONTRACT.md`, `docs/UI.md`, and
+  `docs/LOGGING.md` (chat history is the full unpruned transcript used for
+  resume, not the pruned model window).
+
 ## [0.3.0] - 2026-11-03
 
 ### Added

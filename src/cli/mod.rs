@@ -88,8 +88,17 @@ pub struct RunArgs {
     #[command(flatten)]
     pub identity: AgentIdentityArgs,
 
-    #[arg(long, value_name = "TEXT")]
+    #[arg(
+        long,
+        value_name = "TEXT",
+        default_value = "",
+        required_unless_present = "continue_from"
+    )]
     pub prompt: String,
+
+    /// Resume from a saved chat transcript (`chat_history.json`).
+    #[arg(long, value_name = "PATH")]
+    pub continue_from: Option<PathBuf>,
 
     /// Optional orchestrator-supplied run identifier for invoice reconciliation.
     #[arg(long, value_name = "ID")]
@@ -231,6 +240,31 @@ mod tests {
         assert_eq!(
             args.files,
             vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]
+        );
+        assert!(args.continue_from.is_none());
+    }
+
+    #[test]
+    fn parses_run_continue_from_without_prompt() {
+        let cli = Cli::try_parse_from([
+            "agent",
+            "run",
+            "--project-root",
+            "/proj",
+            "--agent",
+            "demo",
+            "--continue-from",
+            "/proj/.kuibysheff/homes/demo/logs/chat_history.json",
+        ])
+        .expect("parse continue-from");
+
+        let Some(Commands::Run(args)) = cli.command else {
+            panic!("expected Run");
+        };
+        assert!(args.prompt.is_empty());
+        assert_eq!(
+            args.continue_from.as_deref(),
+            Some(PathBuf::from("/proj/.kuibysheff/homes/demo/logs/chat_history.json").as_path())
         );
     }
 

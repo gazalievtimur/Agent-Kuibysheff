@@ -126,6 +126,7 @@ fn request(prompt: &str, limits: LimitsConfig) -> AgentRunRequest {
         events: agent_Kuibysheff::agent::AgentEventTx::noop(),
         home: std::path::PathBuf::new(),
         pinned_files: Vec::new(),
+        resume_messages: None,
     }
 }
 
@@ -707,8 +708,79 @@ async fn run_saves_full_chat_history_when_enabled() {
         .await;
 
     let chat_log = output.logs.chat_log.expect("chat log path");
-    let contents = std::fs::read_to_string(chat_log).expect("chat history file");
+    let contents = std::fs::read_to_string(&chat_log).expect("chat history file");
     assert!(contents.contains("\"role\": \"system\""));
     assert!(contents.contains("\"role\": \"assistant\""));
     assert!(contents.contains("saved"));
+}
+
+#[tokio::test]
+async fn run_can_continue_from_saved_chat_history() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let loggers = Loggers::from_config(&LoggingConfig {
+        enable_ai_log: false,
+        enable_mcp_log: false,
+        enable_chat_history: true,
+        output_dir: Some(dir.path().to_path_buf()),
+        sink: LogSinkConfig::default(),
+        ..Default::default()
+    })
+    .await
+    .expect("loggers");
+
+    let first = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![ModelResponse {
+            content: r#"{"done":false,"thought":"mid","tool_calls":[],"result":null}"#.to_string(),
+            usage: TokenUsage {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+                total_tokens: 3,
+            },
+        }])),
+    };
+    let first_output = AgentEngine::new(Arc::new(first), Arc::new(FakeTools), loggers)
+        .run(request(
+            "save chat",
+            LimitsConfig {
+                max_iterations: 1,
+                max_tokens: 100,
+                max_duration_sec: 60,
+                max_cost: None,
+            },
+        ))
+        .await;
+    assert_eq!(first_output.stop_reason, StopReason::LimitReached);
+    let chat_log = first_output.logs.chat_log.expect("chat log path");
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&chat_log).expect("read history"))
+            .expect("json");
+    let messages: Vec<ChatMessage> =
+        serde_json::from_value(record["messages"].clone()).expect("messages");
+
+    let second = FakeModel {
+        responses: Mutex::new(VecDeque::from(vec![ModelResponse {
+            content: r#"{"done":true,"thought":"ok","tool_calls":[],"result":"continued"}"#
+                .to_string(),
+            usage: TokenUsage {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+                total_tokens: 3,
+            },
+        }])),
+    };
+    let mut resume = request(
+        "",
+        LimitsConfig {
+            max_iterations: 3,
+            max_tokens: 100,
+            max_duration_sec: 60,
+            max_cost: None,
+        },
+    );
+    resume.resume_messages = Some(messages);
+    let continued = AgentEngine::new(Arc::new(second), Arc::new(FakeTools), Loggers::default())
+        .run(resume)
+        .await;
+    assert_eq!(continued.stop_reason, StopReason::GoalReached);
+    assert_eq!(continued.result, "continued");
 }

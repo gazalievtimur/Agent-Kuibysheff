@@ -28,7 +28,7 @@ use crate::provider::ChatMessage;
 pub use paths::{default_log_dir, resolve_base_dir};
 pub use sink::{EventSink, SharedEventSink, SinkDestination};
 
-pub(crate) use chat_history::{write_chat_history, ChatHistoryRecord};
+pub(crate) use chat_history::{load_chat_history, write_chat_history, ChatHistoryRecord};
 
 use redact::{AuditRedactionPolicy, RedactingEventSink};
 use sink::{create_event_sink, TrackingEventSink};
@@ -53,6 +53,14 @@ pub enum LoggingError {
         #[source]
         source: std::io::Error,
     },
+    #[error("failed to read log file `{path}`: {source}")]
+    ReadFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("chat history `{path}` is invalid: {reason}")]
+    InvalidChatHistory { path: String, reason: String },
     #[error("failed to encode log record: {0}")]
     Encode(#[from] serde_json::Error),
     #[error("log writer channel closed")]

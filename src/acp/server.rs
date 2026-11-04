@@ -236,6 +236,7 @@ async fn handle_prompt(
         max_duration_sec: runtime.args.max_duration_sec,
         max_cost: runtime.args.max_cost.clone(),
         save_chat_history: runtime.args.save_chat_history,
+        continue_from: None,
         cancel: cancel.clone(),
         events,
     };

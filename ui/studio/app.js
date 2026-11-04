@@ -1,5 +1,6 @@
 (() => {
   const STUDIO_HEADER = { "X-Kbshff-Studio": "1" };
+  const TEST_RUN_DRAFTS_KEY = "kbshff-studio:test-run-drafts";
 
   const SET_TOKEN = "<set>";
 
@@ -16,6 +17,7 @@
     currentRunId: null,
     eventSource: null,
     skillBodyName: "",
+    testRunDrafts: {},
   };
 
   const $ = (id) => document.getElementById(id);
@@ -71,7 +73,80 @@
     });
   }
 
+  function emptyTestRunDraft() {
+    return {
+      prompt: "",
+      files: "",
+      home: "",
+      max_iterations: "",
+      max_tokens: "",
+      max_duration_sec: "",
+      max_cost: "",
+      save_chat_history: false,
+    };
+  }
+
+  function readTestRunForm() {
+    return {
+      prompt: $("run-prompt").value,
+      files: $("run-files").value,
+      home: $("run-home").value,
+      max_iterations: $("run-max-iter").value,
+      max_tokens: $("run-max-tokens").value,
+      max_duration_sec: $("run-max-duration").value,
+      max_cost: $("run-max-cost").value,
+      save_chat_history: !!$("run-save-chat").checked,
+    };
+  }
+
+  function writeTestRunForm(draft) {
+    const d = draft && typeof draft === "object" ? draft : emptyTestRunDraft();
+    $("run-prompt").value = d.prompt || "";
+    $("run-files").value = d.files || "";
+    $("run-home").value = d.home || "";
+    $("run-max-iter").value = d.max_iterations || "";
+    $("run-max-tokens").value = d.max_tokens || "";
+    $("run-max-duration").value = d.max_duration_sec || "";
+    $("run-max-cost").value = d.max_cost || "";
+    $("run-save-chat").checked = !!d.save_chat_history;
+  }
+
+  function loadDraftsMap() {
+    try {
+      const raw = localStorage.getItem(TEST_RUN_DRAFTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      state.testRunDrafts =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      state.testRunDrafts = {};
+    }
+  }
+
+  function persistDraft(agentId, draft) {
+    if (!agentId) return;
+    state.testRunDrafts[agentId] = draft || emptyTestRunDraft();
+    try {
+      localStorage.setItem(TEST_RUN_DRAFTS_KEY, JSON.stringify(state.testRunDrafts));
+    } catch {
+      // Ignore quota / private-mode failures; in-memory map still works for the session.
+    }
+  }
+
+  function saveCurrentTestRunDraft() {
+    if (!state.agentId) return;
+    persistDraft(state.agentId, readTestRunForm());
+  }
+
+  function restoreTestRunDraft(agentId) {
+    const draft =
+      (agentId && state.testRunDrafts[agentId]) || emptyTestRunDraft();
+    writeTestRunForm(draft);
+  }
+
   async function selectAgent(id) {
+    if (state.agentId) {
+      saveCurrentTestRunDraft();
+    }
     state.agentId = id;
     state.mcpProbe = { servers: [], preferredServer: null };
     state.mcpResult = { raw: null, view: "pretty" };
@@ -86,9 +161,11 @@
     clearMcpResultView();
     clearRunOutputView();
     renderRunEvents();
+    restoreTestRunDraft(id);
     $("btn-mcp-call").disabled = true;
     setStatus($("mcp-discover-status"), "");
     setStatus($("mcp-call-status"), "");
+    setStatus($("run-status"), "");
     $("empty-state").classList.add("hidden");
     $("workspace").classList.remove("hidden");
     $("agent-title").textContent = id;
@@ -1210,7 +1287,15 @@
     }
   }
 
-  async function startRun() {
+  function setRunBusy(busy) {
+    $("btn-run").disabled = busy;
+    $("btn-continue").disabled = busy;
+    $("btn-cancel").disabled = !busy;
+  }
+
+  async function startRun(options = {}) {
+    const continueFromChat = Boolean(options.continueFromChat);
+    saveCurrentTestRunDraft();
     closeEvents();
     state.runEvents.items = [];
     renderRunEvents();
@@ -1225,14 +1310,21 @@
       max_duration_sec: numOrNull($("run-max-duration").value),
       max_cost: $("run-max-cost").value.trim() || null,
       save_chat_history: $("run-save-chat").checked,
+      continue_from_chat: continueFromChat,
     };
-    const res = await api(`/api/agents/${encodeURIComponent(state.agentId)}/runs`, {
-      method: "POST",
-      mutate: true,
-      body: JSON.stringify(body),
-    });
+    setRunBusy(true);
+    let res;
+    try {
+      res = await api(`/api/agents/${encodeURIComponent(state.agentId)}/runs`, {
+        method: "POST",
+        mutate: true,
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      setRunBusy(false);
+      throw err;
+    }
     state.currentRunId = res.run_id;
-    $("btn-cancel").disabled = false;
     setStatus($("run-status"), `Running ${res.run_id}`, true);
     const es = new EventSource(`/api/runs/${encodeURIComponent(res.run_id)}/events`);
     state.eventSource = es;
@@ -1243,7 +1335,6 @@
         if (data.type === "done") {
           es.close();
           state.eventSource = null;
-          $("btn-cancel").disabled = true;
           pollResult(res.run_id);
         }
       } catch (err) {
@@ -1280,7 +1371,7 @@
         renderRunOutput();
       }
       if (status.status !== "running") {
-        $("btn-cancel").disabled = true;
+        setRunBusy(false);
         await refreshOut();
       }
     } catch (err) {
@@ -1456,6 +1547,13 @@
         setStatus($("run-status"), e.message, false);
       }
     });
+    $("btn-continue").addEventListener("click", async () => {
+      try {
+        await startRun({ continueFromChat: true });
+      } catch (e) {
+        setStatus($("run-status"), e.message, false);
+      }
+    });
     $("btn-cancel").addEventListener("click", () =>
       cancelRun().catch((e) => setStatus($("run-status"), e.message, false))
     );
@@ -1468,6 +1566,8 @@
     });
   }
 
+  loadDraftsMap();
+  window.addEventListener("pagehide", () => saveCurrentTestRunDraft());
   bind();
   refreshAgents().catch((e) => {
     $("empty-state").textContent = `Failed to load agents: ${e.message}`;

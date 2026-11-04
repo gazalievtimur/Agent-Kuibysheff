@@ -62,6 +62,7 @@ pub enum JobStatus {
 /// Body of `POST /api/agents/:id/runs`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct StartRunRequest {
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub files: Vec<PathBuf>,
@@ -72,6 +73,8 @@ pub struct StartRunRequest {
     pub max_cost: Option<String>,
     #[serde(default)]
     pub save_chat_history: bool,
+    #[serde(default)]
+    pub continue_from_chat: bool,
 }
 
 /// Why a run did not start.
@@ -105,7 +108,23 @@ impl JobManager {
         agent_id: String,
         req: StartRunRequest,
     ) -> Result<Arc<JobHandle>, StartJobError> {
-        if req.prompt.trim().is_empty() {
+        let log_dir = studio_run_log_dir(&kbshff.project_root, &agent_id, req.home.as_deref())
+            .map_err(StartJobError::Invalid)?;
+        let continue_from = if req.continue_from_chat {
+            let chat = log_dir.join("chat_history.json");
+            match tokio::fs::try_exists(&chat).await {
+                Ok(true) => Some(chat),
+                _ => {
+                    return Err(StartJobError::Invalid(format!(
+                        "chat history not found at `{}`; enable Save chat history and complete a run first",
+                        chat.display()
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+        if req.prompt.trim().is_empty() && continue_from.is_none() {
             return Err(StartJobError::Invalid(
                 "prompt must not be empty".to_string(),
             ));
@@ -133,9 +152,7 @@ impl JobManager {
             events_tx,
         });
         let (cancel_tx, cancel_rx) = oneshot::channel();
-        let args = run_args(kbshff, &agent_id, &run_id, &req);
-        let log_dir = studio_run_log_dir(&kbshff.project_root, &agent_id, req.home.as_deref())
-            .map_err(StartJobError::Invalid)?;
+        let args = run_args(kbshff, &agent_id, &run_id, &req, continue_from.as_deref());
         let child = spawn_run(&kbshff.bin, &args, &log_dir)
             .await
             .map_err(StartJobError::Invalid)?;
@@ -309,20 +326,28 @@ fn studio_run_log_dir(
     Ok(home_root.join("logs"))
 }
 
-fn run_args(kbshff: &Kbshff, agent: &str, run_id: &str, req: &StartRunRequest) -> Vec<String> {
+fn run_args(
+    kbshff: &Kbshff,
+    agent: &str,
+    run_id: &str,
+    req: &StartRunRequest,
+    continue_from: Option<&std::path::Path>,
+) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
         "--project-root".to_string(),
         kbshff.project_root.display().to_string(),
         "--agent".to_string(),
         agent.to_string(),
-        "--prompt".to_string(),
-        req.prompt.clone(),
         "--run-id".to_string(),
         run_id.to_string(),
         "--progress".to_string(),
         "stderr".to_string(),
     ];
+    if !req.prompt.trim().is_empty() {
+        args.push("--prompt".to_string());
+        args.push(req.prompt.clone());
+    }
     if let Some(home) = &req.home {
         args.push("--home".to_string());
         args.push(home.display().to_string());
@@ -349,7 +374,11 @@ fn run_args(kbshff: &Kbshff, agent: &str, run_id: &str, req: &StartRunRequest) -
             args.push(value.clone());
         }
     }
-    if req.save_chat_history {
+    if let Some(path) = continue_from {
+        args.push("--continue-from".to_string());
+        args.push(path.display().to_string());
+        args.push("--save-chat-history".to_string());
+    } else if req.save_chat_history {
         args.push("--save-chat-history".to_string());
     }
     args
@@ -514,5 +543,53 @@ mod tests {
         let manager = JobManager::new();
         let err = manager.cancel("missing").await.unwrap_err();
         assert!(matches!(err, CancelJobError::NotFound));
+    }
+
+    fn sample_kbshff() -> Kbshff {
+        Kbshff {
+            bin: PathBuf::from("kbshff"),
+            project_root: PathBuf::from("proj"),
+        }
+    }
+
+    fn sample_req() -> StartRunRequest {
+        StartRunRequest {
+            prompt: "hello".to_string(),
+            files: Vec::new(),
+            home: None,
+            max_iterations: None,
+            max_tokens: None,
+            max_duration_sec: None,
+            max_cost: None,
+            save_chat_history: false,
+            continue_from_chat: false,
+        }
+    }
+
+    #[test]
+    fn run_args_include_prompt_for_fresh_start() {
+        let args = run_args(&sample_kbshff(), "demo", "run-1", &sample_req(), None);
+        assert!(args.contains(&"--prompt".to_string()));
+        assert!(args.contains(&"hello".to_string()));
+        assert!(!args.contains(&"--continue-from".to_string()));
+    }
+
+    #[test]
+    fn continue_args_omit_empty_prompt_and_force_save_history() {
+        let mut req = sample_req();
+        req.prompt.clear();
+        let chat = PathBuf::from("proj/.kuibysheff/homes/demo/logs/chat_history.json");
+        let args = run_args(
+            &sample_kbshff(),
+            "demo",
+            "run-2",
+            &req,
+            Some(chat.as_path()),
+        );
+        assert!(!args.contains(&"--prompt".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--continue-from" && pair[1] == chat.display().to_string() }));
+        assert!(args.contains(&"--save-chat-history".to_string()));
     }
 }

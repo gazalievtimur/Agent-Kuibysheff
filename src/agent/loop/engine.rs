@@ -62,6 +62,8 @@ pub struct AgentRunRequest {
     pub home: PathBuf,
     /// Relative home paths kept in a history slot that pruning does not drop.
     pub pinned_files: Vec<String>,
+    /// Saved transcript to resume; when set, replaces the fresh system+goal seed.
+    pub resume_messages: Option<Vec<ChatMessage>>,
 }
 
 pub struct AgentEngine {
@@ -145,14 +147,17 @@ impl AgentEngine {
             events,
             home,
             pinned_files,
+            resume_messages,
         } = request;
 
         let available_tools = self.tools.available_tools();
-        let user_message = build_user_message(&prompt, &input_files_context, &available_tools);
-        let mut messages = vec![
-            ChatMessage::new(ChatRole::System, system_prompt),
-            ChatMessage::new(ChatRole::User, user_message),
-        ];
+        let mut messages = initial_messages(
+            &prompt,
+            system_prompt,
+            &input_files_context,
+            &available_tools,
+            resume_messages,
+        );
         let mut full_history = messages.clone();
         let mut metrics = RunMetrics::new();
         let mut cost_tracker =
@@ -1033,6 +1038,40 @@ fn is_safe_relative(path: &str) -> bool {
         .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn initial_messages(
+    prompt: &str,
+    system_prompt: String,
+    input_files_context: &str,
+    available_tools: &[String],
+    resume_messages: Option<Vec<ChatMessage>>,
+) -> Vec<ChatMessage> {
+    if let Some(mut messages) = resume_messages.filter(|messages| !messages.is_empty()) {
+        apply_current_system_prompt(&mut messages, system_prompt);
+        if !prompt.trim().is_empty() {
+            messages.push(ChatMessage::new(
+                ChatRole::User,
+                build_user_message(prompt, input_files_context, available_tools),
+            ));
+        }
+        return messages;
+    }
+    let user_message = build_user_message(prompt, input_files_context, available_tools);
+    vec![
+        ChatMessage::new(ChatRole::System, system_prompt),
+        ChatMessage::new(ChatRole::User, user_message),
+    ]
+}
+
+fn apply_current_system_prompt(messages: &mut Vec<ChatMessage>, system_prompt: String) {
+    if let Some(first) = messages.first_mut() {
+        if first.role == ChatRole::System {
+            first.content = system_prompt.into();
+            return;
+        }
+    }
+    messages.insert(0, ChatMessage::new(ChatRole::System, system_prompt));
+}
+
 fn build_user_message(
     prompt: &str,
     input_files_context: &str,
@@ -1357,6 +1396,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1401,6 +1441,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1444,6 +1485,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1499,6 +1541,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1561,6 +1604,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1612,6 +1656,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1666,6 +1711,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1708,6 +1754,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::from_sender(tx),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1786,6 +1833,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1822,6 +1870,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1890,6 +1939,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1937,6 +1987,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: std::path::PathBuf::new(),
                 pinned_files: Vec::new(),
+                resume_messages: None,
             })
             .await;
 
@@ -1975,6 +2026,7 @@ mod tests {
                 events: crate::agent::AgentEventTx::noop(),
                 home: dir.path().to_path_buf(),
                 pinned_files: vec!["out/coder_memory.md".to_string()],
+                resume_messages: None,
             })
             .await;
 
@@ -1986,5 +2038,46 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(first.contains("inputs_read: yes"));
+    }
+
+    #[tokio::test]
+    async fn resume_messages_are_sent_to_the_model() {
+        let provider = Arc::new(RecordingProvider {
+            responses: vec![
+                r#"{"done":true,"thought":"ok","tool_calls":[],"result":"resumed"}"#.to_string(),
+            ],
+            calls: AtomicUsize::new(0),
+            seen_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine = AgentEngine::new(provider.clone(), Arc::new(NoopTools), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: String::new(),
+                system_prompt: "fresh-system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+                resume_messages: Some(vec![
+                    ChatMessage::new(ChatRole::System, "old-system"),
+                    ChatMessage::new(ChatRole::User, "Goal: original"),
+                    ChatMessage::new(
+                        ChatRole::Assistant,
+                        r#"{"done":false,"thought":"working","tool_calls":[],"result":null}"#,
+                    ),
+                ]),
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::GoalReached);
+        assert_eq!(output.result, "resumed");
+        let seen = provider.seen_messages.lock().expect("seen messages");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0][0].content.as_ref(), "fresh-system");
+        assert_eq!(seen[0][1].content.as_ref(), "Goal: original");
+        assert!(seen[0][2].content.contains("working"));
     }
 }

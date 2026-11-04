@@ -185,6 +185,7 @@ impl<R: TaskRunner> KuibysheffExecutor<R> {
             max_duration_sec: config.max_duration_sec,
             max_cost: config.max_cost.clone(),
             save_chat_history: config.save_chat_history,
+            continue_from: None,
             cancel,
             events: AgentEventTx::noop(),
         }
