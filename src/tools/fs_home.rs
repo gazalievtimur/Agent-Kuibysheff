@@ -315,7 +315,11 @@ impl HomeFs {
             None => timeout_ms,
         };
 
-        let env = build_sandbox_env(&self.root, &program_policy.inherit_env);
+        let env = build_sandbox_env(
+            &self.root,
+            &program_policy.inherit_env,
+            program_policy.executable.as_path(),
+        );
         tracing::info!(
             capability = "home.run",
             alias = %alias,
@@ -334,6 +338,7 @@ impl HomeFs {
             deadline: Duration::from_millis(timeout_ms),
             max_output_chars: self.policy.max_output_chars,
             allow_children: program_policy.allow_children,
+            max_processes: self.policy.max_processes,
         };
 
         let output = self.sandbox.run(spec).await.map_err(map_sandbox_error)?;

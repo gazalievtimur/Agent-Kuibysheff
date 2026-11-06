@@ -32,7 +32,7 @@ impl WindowsSandbox {
     pub fn probe() -> Result<(), SandboxWindowsError> {
         reclaim_stale_profiles();
 
-        JobObject::create(true, None)
+        JobObject::create(None, None)
             .map_err(|err| SandboxWindowsError::unavailable(format!("job probe failed: {err}")))?;
         PipePair::create_inheritable()
             .map_err(|err| SandboxWindowsError::unavailable(format!("pipe probe failed: {err}")))?;

@@ -19,6 +19,19 @@ const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const AT_EMPTY_PATH: i32 = 0x1000;
 const AT_RECURSIVE: i32 = 0x8000;
 
+fn essential_readonly_dirs() -> &'static [&'static str] {
+    &[
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/usr/bin",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/libexec",
+        "/usr/share",
+    ]
+}
+
 #[repr(C)]
 struct MountAttr {
     attr_set: u64,
@@ -132,14 +145,7 @@ pub fn setup_rootfs(
     if let Some(parent) = request.executable.parent() {
         readonly.insert(absolute_logical(parent)?);
     }
-    for essential in [
-        "/bin",
-        "/lib",
-        "/lib64",
-        "/usr/bin",
-        "/usr/lib",
-        "/usr/lib64",
-    ] {
+    for essential in essential_readonly_dirs() {
         let p = Path::new(essential);
         if p.exists() {
             readonly.insert(absolute_logical(p)?);
@@ -434,4 +440,16 @@ fn mount_raw(
         return Err(errno_err(stage, label));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::essential_readonly_dirs;
+
+    #[test]
+    fn essential_dirs_include_usr_share_and_libexec() {
+        let dirs = essential_readonly_dirs();
+        assert!(dirs.contains(&"/usr/libexec"));
+        assert!(dirs.contains(&"/usr/share"));
+    }
 }

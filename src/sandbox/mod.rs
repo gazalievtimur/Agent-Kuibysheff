@@ -40,6 +40,7 @@ pub struct SandboxSpec {
     pub deadline: Duration,
     pub max_output_chars: usize,
     pub allow_children: bool,
+    pub max_processes: u32,
 }
 
 /// Captured result of a sandboxed run.
@@ -295,20 +296,40 @@ impl SandboxBackend for MockBackend {
 pub fn build_sandbox_env(
     home: &std::path::Path,
     inherit_keys: &[String],
+    executable: &Path,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert("HOME".to_string(), home.display().to_string());
     env.insert("TMP".to_string(), home.join("tmp").display().to_string());
     env.insert("TEMP".to_string(), home.join("tmp").display().to_string());
+    #[cfg(unix)]
+    env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
     for key in inherit_keys {
         if is_forbidden_env_key(key) {
+            continue;
+        }
+        if key.eq_ignore_ascii_case("PATH") {
             continue;
         }
         if let Ok(value) = std::env::var(key) {
             env.insert(key.clone(), value);
         }
     }
+    apply_git_sandbox_env(&mut env, executable);
     env
+}
+
+fn apply_git_sandbox_env(env: &mut BTreeMap<String, String>, executable: &Path) {
+    let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    if !name.eq_ignore_ascii_case("git") && !name.eq_ignore_ascii_case("git.exe") {
+        return;
+    }
+    env.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
+    env.insert("GIT_CONFIG_COUNT".to_string(), "1".to_string());
+    env.insert("GIT_CONFIG_KEY_0".to_string(), "safe.directory".to_string());
+    env.insert("GIT_CONFIG_VALUE_0".to_string(), "*".to_string());
 }
 
 #[cfg(test)]
@@ -330,7 +351,28 @@ mod tests {
             deadline: Duration::from_secs(1),
             max_output_chars: 100,
             allow_children: false,
+            max_processes: 1,
         }
+    }
+
+    #[test]
+    fn git_env_sets_safe_directory_without_host_path() {
+        let env = build_sandbox_env(
+            Path::new("/home/work"),
+            &["PATH".to_string()],
+            Path::new(r"C:\Program Files\Git\cmd\git.exe"),
+        );
+        assert_eq!(
+            env.get("GIT_CONFIG_KEY_0").map(String::as_str),
+            Some("safe.directory")
+        );
+        assert_eq!(env.get("GIT_CONFIG_VALUE_0").map(String::as_str), Some("*"));
+        assert_eq!(
+            env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+            Some("0")
+        );
+        #[cfg(unix)]
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin:/bin"));
     }
 
     #[test]

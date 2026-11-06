@@ -23,6 +23,16 @@ fn main() {
                 }
             }
         }
+        Some("read") => {
+            let path = args.next().expect("read path");
+            match std::fs::read_to_string(&path) {
+                Ok(body) => print!("{body}"),
+                Err(err) => {
+                    eprintln!("read failed: {err}");
+                    std::process::exit(2);
+                }
+            }
+        }
         Some("emit-bytes") => {
             let n: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(100);
             let chunk = "A".repeat(n.min(1_048_576));

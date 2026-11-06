@@ -14,7 +14,6 @@ const CLONE_NEWNS: u64 = 0x0002_0000;
 const CLONE_NEWUSER: u64 = 0x1000_0000;
 const CLONE_NEWPID: u64 = 0x2000_0000;
 const CLONE_NEWIPC: u64 = 0x0800_0000;
-const CLONE_NEWNET: u64 = 0x4000_0000;
 const CLONE_PIDFD: u64 = 0x0000_1000;
 const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
 
@@ -39,7 +38,10 @@ pub struct CloneResult {
     pub pidfd: OwnedFd,
 }
 
-/// Creates a child in user/mount/pid/ipc/net namespaces and returns a pidfd.
+/// Creates a child in user/mount/pid/ipc namespaces and returns a pidfd.
+///
+/// The host network namespace is shared so allowlisted programs can open
+/// connections. Loopback is part of that namespace on Linux.
 pub fn clone_sandbox_init<F>(child_main: F) -> Result<CloneResult, SandboxLinuxError>
 where
     F: FnOnce() + Send,
@@ -50,7 +52,6 @@ where
             | CLONE_NEWNS
             | CLONE_NEWPID
             | CLONE_NEWIPC
-            | CLONE_NEWNET
             | CLONE_PIDFD
             | CLONE_CLEAR_SIGHAND,
         pidfd: ptr::from_mut(&mut pidfd) as u64,

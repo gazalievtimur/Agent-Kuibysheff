@@ -6,7 +6,7 @@
 
 - **Worker, not orchestrator**: the CLI does not modify a target repository directly; it writes deliverables into a caller-provided `--home` workspace.
 - **Fail-closed security**: a required `access` policy denies everything that is not explicitly allowed (tools, paths, programs, env vars). Permissive pre-0.2 behavior is only available via explicit `access: { mode: legacy }`.
-- **OS-level sandboxing**: `home.run` payloads execute inside Linux namespaces or a Windows AppContainer with no network.
+- **OS-level sandboxing**: `home.run` payloads execute inside Linux namespaces or a Windows AppContainer. Allowlisted programs get outbound network. Windows loopback stays closed. The user profile is not mounted.
 - **Composability**: trait-based layering allows providers, tool executors, and sandbox backends to be swapped or tested independently.
 - **Single JSON contract**: regardless of success or failure, `run` prints one `RunOutput` JSON document; `stop_reason: error` also exits non-zero.
 
@@ -322,9 +322,10 @@ P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-archi
 
    Skill bodies are not inlined. Runtime rules advertise only tools the
    effective policy allows. When `home.run` is allowed, they also state the
-   **sandbox contract** derived from `access.run.programs` (no network; only
-   listed aliases and their executables / `runtime_read_roots`; filesystem
-   limited to home grants plus those roots; on `sandbox failure` /
+   **sandbox contract** derived from `access.run.programs` (outbound network; only
+   listed aliases and their executables / `runtime_read_roots`; install trees
+   are readable; data access stays inside home grants; the user profile is
+   unreachable; on `sandbox failure` /
    `sandbox unavailable`, do not retry the same call — use an MCP tool for
    the same job if one exists, else stop). Profile `master_prompt` /
    `rules` / skills carry **workflow** constraints only (for example “commit

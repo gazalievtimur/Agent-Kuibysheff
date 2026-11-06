@@ -101,11 +101,30 @@ fn open_executable(path: &std::path::Path) -> Result<OwnedFd, SandboxLinuxError>
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+fn apply_nproc_limit(max_processes: u32) {
+    if max_processes == 0 {
+        return;
+    }
+    let limit = libc::rlimit {
+        rlim_cur: libc::rlim_t::from(max_processes),
+        rlim_max: libc::rlim_t::from(max_processes),
+    };
+    // SAFETY: setrlimit affects only this process and the children it execs.
+    // Failure leaves the host default; the job-equivalent on Linux is the timeout kill.
+    unsafe {
+        let _ = libc::setrlimit(libc::RLIMIT_NPROC, &limit);
+    }
+}
+
 fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
     // Move to requested cwd (now inside pivoted root).
     if let Ok(cwd) = c_path(&request.cwd) {
         // SAFETY: chdir to policy cwd inside the sandbox root.
         let _ = unsafe { libc::chdir(cwd.as_ptr()) };
+    }
+
+    if request.allow_children {
+        apply_nproc_limit(request.max_processes);
     }
 
     // Install the seccomp filter in the payload process. When children are not allowed,

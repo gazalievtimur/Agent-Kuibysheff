@@ -45,6 +45,7 @@ fn base_request(cwd: PathBuf, exe: PathBuf, argv: Vec<String>) -> SandboxLaunchR
         deadline: Duration::from_secs(15),
         max_output_chars: 64 * 1024,
         allow_children: false,
+        max_processes: 1,
     }
 }
 
@@ -158,33 +159,33 @@ fn timeout_kills_tree() {
 }
 
 #[test]
-fn network_namespace_has_no_foreign_ifaces() {
+fn host_interfaces_visible_in_sandbox() {
     let Some(_guard) = require_sandbox() else {
         return;
     };
     let dir = tempdir().unwrap();
-    // Empty netns: /proc/net/dev should not mention host NICs.
-    // Read via shell redirection (no `cat`) so the check works with
-    // `allow_children: false`.
+    // Shared host netns: /proc/net/dev lists a non-loopback interface.
     let script = fixture_script(
         dir.path(),
         r#"
-dev=
+found=0
 while IFS= read -r line; do
-  dev="$dev
-$line"
+  case "$line" in
+    *eth*|*wlan*|*enp*|*ens*|*wlp*|*eno*|*docker*|*veth*|*virbr*|*tailscale*)
+      found=1
+      ;;
+  esac
 done < /proc/net/dev
-case "$dev" in
-  *eth*|*wlan*|*enp*|*ens*|*wlp*)
-    printf '%s\n' "$dev"
-    exit 1
-    ;;
-esac
-echo net-isolated
+if [ "$found" -eq 1 ]; then
+  echo net-shared
+  exit 0
+fi
+echo only-lo
+exit 1
 "#,
     );
     let request = base_request(dir.path().to_path_buf(), script, Vec::new());
-    let result = LinuxSandbox::run(&request).expect("net isolation run");
+    let result = LinuxSandbox::run(&request).expect("host netns run");
     assert_eq!(
         result.exit_code,
         Some(0),
@@ -192,7 +193,7 @@ echo net-isolated
         result.stderr,
         result.stdout
     );
-    assert!(result.stdout.contains("net-isolated"));
+    assert!(result.stdout.contains("net-shared"));
 }
 
 #[test]
@@ -453,7 +454,7 @@ echo symlink-denied
 }
 
 #[test]
-fn network_namespace_only_lo_and_connect_fails() {
+fn host_routes_visible_in_sandbox() {
     let Some(_guard) = require_sandbox() else {
         return;
     };
@@ -461,35 +462,20 @@ fn network_namespace_only_lo_and_connect_fails() {
     let script = fixture_script(
         dir.path(),
         r#"
-# Enumerate /sys/class/net when present; only `lo` is allowed (empty netns is OK).
-count=0
-extra=
-for p in /sys/class/net/*; do
-  [ -e "$p" ] || continue
-  name=$(basename "$p")
-  count=$((count + 1))
-  if [ "$name" != "lo" ]; then
-    extra="$extra $name"
-  fi
-done
-if [ -n "$extra" ]; then
-  echo "ifaces-count=$count extra=$extra"
-  exit 1
+lines=0
+while IFS= read -r line; do
+  lines=$((lines + 1))
+done < /proc/net/route
+if [ "$lines" -ge 2 ]; then
+  echo routes-visible
+  exit 0
 fi
-# Connect to a public IP must fail (no route / no iface).
-if command -v python3 >/dev/null 2>&1; then
-  if python3 -c 'import socket; s=socket.socket(); s.settimeout(1); s.connect(("1.1.1.1", 80))' 2>/dev/null; then
-    echo connect-ok
-    exit 1
-  fi
-fi
-echo net-lo-only
+echo no-routes
+exit 1
 "#,
     );
-    let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
-    // python3 -c spawns a helper process; allow_children must be true for the connect probe.
-    request.allow_children = true;
-    let result = LinuxSandbox::run(&request).expect("net lo-only run");
+    let request = base_request(dir.path().to_path_buf(), script, Vec::new());
+    let result = LinuxSandbox::run(&request).expect("routes run");
     assert_eq!(
         result.exit_code,
         Some(0),
@@ -498,7 +484,7 @@ echo net-lo-only
         result.stdout
     );
     assert!(
-        result.stdout.contains("net-lo-only"),
+        result.stdout.contains("routes-visible"),
         "stdout={} stderr={}",
         result.stdout,
         result.stderr

@@ -167,6 +167,7 @@ pub struct HomeFsPolicy {
     pub max_arg_chars: usize,
     pub max_output_chars: usize,
     pub max_timeout_ms: u64,
+    pub max_processes: u32,
 }
 
 impl HomeFsPolicy {
@@ -183,6 +184,7 @@ impl HomeFsPolicy {
                 max_arg_chars: policy.max_arg_chars(),
                 max_output_chars: policy.max_output_chars(),
                 max_timeout_ms: policy.max_timeout_ms(),
+                max_processes: policy.max_processes(),
             }
         }
     }
@@ -201,6 +203,7 @@ impl HomeFsPolicy {
             max_arg_chars: policy.max_arg_chars(),
             max_output_chars: policy.max_output_chars(),
             max_timeout_ms: policy.max_timeout_ms(),
+            max_processes: policy.max_processes(),
         }
     }
 }

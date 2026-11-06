@@ -611,6 +611,7 @@ async fn model_can_home_run_via_native_sandbox() {
             max_arg_chars: 4096,
             max_output_chars: 65_536,
             max_timeout_ms: 60_000,
+            max_processes: 32,
         },
         ..AccessPolicyConfig::default()
     };

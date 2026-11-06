@@ -8,10 +8,11 @@ use std::thread;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FALSE, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0,
+    CloseHandle, LocalFree, FALSE, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
 };
 use windows_sys::Win32::NetworkManagement::WindowsFirewall::NetworkIsolationGetAppContainerConfig;
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
     EqualSid, GetTokenInformation, TokenAppContainerSid, TokenCapabilities, TokenIsAppContainer,
     PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
@@ -101,13 +102,13 @@ pub fn apply_access_grants(
     request: &SandboxLaunchRequest,
 ) -> Result<(), SandboxWindowsError> {
     for path in &request.home_write {
-        journal.grant_path(path, package_sid, ACCESS_WRITE, true)?;
+        journal.grant_tree(path, package_sid, ACCESS_WRITE)?;
     }
     for path in &request.home_read {
-        journal.grant_path(path, package_sid, ACCESS_READ, true)?;
+        journal.grant_tree(path, package_sid, ACCESS_READ)?;
     }
     for path in &request.runtime_read_roots {
-        journal.grant_path(path, package_sid, ACCESS_EXECUTE, true)?;
+        journal.grant_runtime_root(path, package_sid)?;
     }
     journal.grant_path(&request.executable, package_sid, ACCESS_EXECUTE, true)?;
     if let Some(parent) = request.executable.parent() {
@@ -115,7 +116,9 @@ pub fn apply_access_grants(
             journal.grant_path(parent, package_sid, ACCESS_EXECUTE, true)?;
         }
     }
-    journal.grant_path(&request.cwd, package_sid, ACCESS_EXECUTE, true)?;
+    // Traverse the cwd node only. Tree-wide execute here would expose siblings
+    // of a strict grant such as `out/`.
+    journal.grant_path(&request.cwd, package_sid, ACCESS_EXECUTE, false)?;
     Ok(())
 }
 
@@ -267,6 +270,92 @@ impl Drop for KillOnDrop {
 /// Win32 GetExitCodeProcess value meaning the process has not exited.
 const STILL_ACTIVE: u32 = 259;
 
+/// `internetClient` and `privateNetworkClientServer`. Loopback stays closed.
+const NETWORK_CAPABILITY_SDDLS: [&str; 2] = ["S-1-15-3-1", "S-1-15-3-3"];
+/// `SE_GROUP_ENABLED` — required on AppContainer capability SIDs.
+const SE_GROUP_ENABLED: u32 = 0x0000_0004;
+
+struct NetworkCapabilities {
+    sids: Vec<PSID>,
+    attrs: Vec<SID_AND_ATTRIBUTES>,
+}
+
+impl NetworkCapabilities {
+    fn create() -> Result<Self, SandboxWindowsError> {
+        let mut sids = Vec::with_capacity(NETWORK_CAPABILITY_SDDLS.len());
+        for sddl in NETWORK_CAPABILITY_SDDLS {
+            sids.push(alloc_sid(sddl)?);
+        }
+        let attrs = sids
+            .iter()
+            .map(|sid| SID_AND_ATTRIBUTES {
+                Sid: *sid,
+                Attributes: SE_GROUP_ENABLED,
+            })
+            .collect();
+        Ok(Self { sids, attrs })
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut SID_AND_ATTRIBUTES {
+        self.attrs.as_mut_ptr()
+    }
+
+    fn len(&self) -> u32 {
+        u32::try_from(self.attrs.len()).unwrap_or(u32::MAX)
+    }
+
+    fn sids(&self) -> &[PSID] {
+        &self.sids
+    }
+}
+
+impl Drop for NetworkCapabilities {
+    fn drop(&mut self) {
+        for sid in &self.sids {
+            if !sid.is_null() {
+                // SAFETY: ConvertStringSidToSidW allocated this SID with LocalAlloc.
+                unsafe {
+                    LocalFree(sid.cast());
+                }
+            }
+        }
+    }
+}
+
+fn alloc_sid(sddl: &str) -> Result<PSID, SandboxWindowsError> {
+    let wide = to_wide_null(sddl);
+    let mut sid: PSID = ptr::null_mut();
+    // SAFETY: ConvertStringSidToSidW writes an allocated SID on success.
+    let ok = unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) };
+    if ok == 0 || sid.is_null() {
+        return Err(setup_last(
+            SandboxStage::TokenCheck,
+            &format!("ConvertStringSidToSidW({sddl})"),
+        ));
+    }
+    Ok(sid)
+}
+
+fn capability_set_matches(groups: &TOKEN_GROUPS, expected: &[PSID]) -> bool {
+    if groups.GroupCount as usize != expected.len() {
+        return false;
+    }
+    let base = std::ptr::addr_of!(groups.Groups).cast::<SID_AND_ATTRIBUTES>();
+    let mut matched = vec![false; expected.len()];
+    for index in 0..expected.len() {
+        // SAFETY: GetTokenInformation wrote `GroupCount` SID_AND_ATTRIBUTES entries.
+        let entry = unsafe { &*base.add(index) };
+        for (expected_index, expected_sid) in expected.iter().enumerate() {
+            // SAFETY: both SIDs are allocated and non-null for this check.
+            let same = unsafe { EqualSid(entry.Sid, *expected_sid) };
+            if same != FALSE {
+                matched[expected_index] = true;
+            }
+        }
+    }
+    matched.iter().all(|ok| *ok)
+}
+
 fn create_suspended_appcontainer(
     request: &SandboxLaunchRequest,
     profile: &AppContainerProfile,
@@ -276,10 +365,11 @@ fn create_suspended_appcontainer(
     stderr_writer: HANDLE,
 ) -> Result<LaunchedProcess, SandboxWindowsError> {
     let mut attr = AttrList::new(2)?;
+    let mut network = NetworkCapabilities::create()?;
     let mut caps = SECURITY_CAPABILITIES {
         AppContainerSid: profile.sid(),
-        Capabilities: ptr::null_mut(),
-        CapabilityCount: 0,
+        Capabilities: network.as_mut_ptr(),
+        CapabilityCount: network.len(),
         Reserved: 0,
     };
     // SAFETY: attribute list owns the SECURITY_CAPABILITIES pointer for CreateProcess lifetime.
@@ -366,7 +456,7 @@ fn create_suspended_appcontainer(
     let mut kill_on_drop = KillOnDrop::arm(process.as_raw());
 
     job.assign(process.as_raw())?;
-    verify_suspended_token(process.as_raw(), profile.sid(), job)?;
+    verify_suspended_token(process.as_raw(), profile.sid(), job, network.sids())?;
     kill_on_drop.disarm();
     Ok(LaunchedProcess { process, thread })
 }
@@ -375,6 +465,7 @@ fn verify_suspended_token(
     process: HANDLE,
     expected_sid: PSID,
     job: &JobObject,
+    expected_capabilities: &[PSID],
 ) -> Result<(), SandboxWindowsError> {
     let mut token_raw: HANDLE = ptr::null_mut();
     // SAFETY: OpenProcessToken on a valid suspended process.
@@ -464,10 +555,13 @@ fn verify_suspended_token(
         }
         // SAFETY: buffer starts with TOKEN_GROUPS.
         let groups = unsafe { &*cap_buf.as_ptr().cast::<TOKEN_GROUPS>() };
-        if groups.GroupCount != 0 {
+        if !capability_set_matches(groups, expected_capabilities) {
             return Err(SandboxWindowsError::setup(
                 SandboxStage::TokenCheck,
-                "AppContainer token has non-empty capabilities",
+                format!(
+                    "AppContainer capabilities mismatch: count {}",
+                    groups.GroupCount
+                ),
             ));
         }
     }
@@ -507,9 +601,15 @@ pub fn run_sandboxed(
         deadline: request.deadline,
         max_output_chars: request.max_output_chars,
         allow_children: request.allow_children,
+        max_processes: request.max_processes,
     };
 
-    let job = JobObject::create(request.allow_children, None)?;
+    let process_limit = if request.allow_children {
+        u32::max(request.max_processes, 1)
+    } else {
+        1
+    };
+    let job = JobObject::create(Some(process_limit), None)?;
     let stdout = PipePair::create_inheritable()?;
     let stderr = PipePair::create_inheritable()?;
     let stdin = open_nul_inheritable()?;
@@ -635,8 +735,8 @@ fn minimal_runtime_env(
     env.entry("windir".to_string())
         .or_insert_with(|| system_root_s.clone());
     env.entry("SystemDrive".to_string()).or_insert(drive);
-    env.entry("PATH".to_string())
-        .or_insert_with(|| system_root.join("System32").to_string_lossy().into_owned());
+    env.insert("PATH".to_string(), sandbox_path(&request.executable));
+    apply_git_env(&mut env, &request.executable);
     // AppContainer process init expects these; point them at the package profile folder.
     env.entry("USERPROFILE".to_string())
         .or_insert_with(|| profile_s.clone());
@@ -680,11 +780,7 @@ fn stage_launch(
     request: &SandboxLaunchRequest,
     package_sid: PSID,
 ) -> Result<StagedLaunch, SandboxWindowsError> {
-    if request
-        .runtime_read_roots
-        .iter()
-        .any(|root| path_is_under(root, &request.executable))
-    {
+    if should_launch_in_place(request) {
         return Ok(StagedLaunch {
             executable: request.executable.clone(),
             cwd: request.cwd.clone(),
@@ -692,6 +788,65 @@ fn stage_launch(
     }
 
     stage_in_profile_folder(request, package_sid)
+}
+
+/// Installed tools keep their real path so relative helpers (`git`, Python `Lib/`) resolve.
+fn should_launch_in_place(request: &SandboxLaunchRequest) -> bool {
+    crate::native::acl::is_os_code_plane(&request.executable)
+        || request
+            .runtime_read_roots
+            .iter()
+            .any(|root| path_is_under(root, &request.executable))
+}
+
+fn sandbox_path(executable: &Path) -> String {
+    let mut dirs = Vec::new();
+    if let Some(product) = crate::native::acl::program_files_product_root(executable) {
+        dirs.extend(toolchain_bin_dirs(&product));
+    }
+    let system_root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    dirs.push(system_root.join("System32"));
+    join_path_env(&dirs)
+}
+
+pub(crate) fn toolchain_bin_dirs(product: &Path) -> Vec<PathBuf> {
+    const RELS: &[&str] = &[
+        "cmd",
+        "bin",
+        "usr/bin",
+        "mingw64/bin",
+        "mingw64/libexec/git-core",
+    ];
+    RELS.iter()
+        .map(|rel| product.join(rel))
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+pub(crate) fn join_path_env(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn apply_git_env(env: &mut std::collections::BTreeMap<String, String>, executable: &Path) {
+    let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    if !name.eq_ignore_ascii_case("git") && !name.eq_ignore_ascii_case("git.exe") {
+        return;
+    }
+    env.entry("GIT_TERMINAL_PROMPT".to_string())
+        .or_insert_with(|| "0".to_string());
+    env.entry("GIT_CONFIG_COUNT".to_string())
+        .or_insert_with(|| "1".to_string());
+    env.entry("GIT_CONFIG_KEY_0".to_string())
+        .or_insert_with(|| "safe.directory".to_string());
+    env.entry("GIT_CONFIG_VALUE_0".to_string())
+        .or_insert_with(|| "*".to_string());
 }
 
 /// Copies the executable (and sibling DLLs) into the AppContainer profile folder.
@@ -779,4 +934,29 @@ fn stage_in_profile_folder(
 #[allow(dead_code)]
 fn _keep_close_handle_import() {
     let _ = (CloseHandle, Path::new("."));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_path_env, toolchain_bin_dirs};
+    use std::path::PathBuf;
+
+    #[test]
+    fn toolchain_path_includes_existing_git_bins_and_not_the_host_path() {
+        let product = tempfile::tempdir().expect("product");
+        let mingw = product.path().join("mingw64").join("bin");
+        std::fs::create_dir_all(&mingw).expect("mingw");
+        std::fs::create_dir_all(product.path().join("cmd")).expect("cmd");
+        let dirs = toolchain_bin_dirs(product.path());
+        let joined = join_path_env(&dirs);
+        assert!(joined.contains("mingw64"));
+        assert!(joined.contains("cmd"));
+        assert!(!joined.contains("not-a-bin"));
+        let with_system = {
+            let mut all = dirs;
+            all.push(PathBuf::from(r"C:\Windows\System32"));
+            join_path_env(&all)
+        };
+        assert!(with_system.ends_with(r"C:\Windows\System32"));
+    }
 }
