@@ -295,11 +295,19 @@ impl ModelClient for OpenAiCompatClient {
         let mut retry_index = 0;
         let mut attempts = Vec::new();
         loop {
+            let reasoning_effort = self
+                .cfg
+                .effort
+                .as_deref()
+                .map(str::trim)
+                .filter(|effort| !effort.is_empty());
             let body = ChatCompletionRequest {
                 model: &self.cfg.model,
                 messages,
                 temperature: 0.0,
                 stream: false,
+                reasoning_effort,
+                thinking: self.cfg.thinking,
             };
 
             let occurred_at_ms = now_ms();
@@ -815,6 +823,10 @@ struct ChatCompletionRequest<'a> {
     messages: &'a [ChatMessage],
     temperature: f32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -863,8 +875,72 @@ mod tests {
             timeout_ms: 5_000,
             max_retries: 0,
             retry_base_delay_ms: 1,
+            effort: None,
+            thinking: None,
             history: crate::config::ProviderHistoryConfig::default(),
         }
+    }
+
+    fn completion_request<'a>(
+        messages: &'a [ChatMessage],
+        reasoning_effort: Option<&'a str>,
+        thinking: Option<bool>,
+    ) -> ChatCompletionRequest<'a> {
+        ChatCompletionRequest {
+            model: "test-model",
+            messages,
+            temperature: 0.0,
+            stream: false,
+            reasoning_effort,
+            thinking,
+        }
+    }
+
+    #[test]
+    fn completion_request_omits_unset_reasoning_fields() {
+        let messages = [ChatMessage::new(ChatRole::User, "hi")];
+        let body = completion_request(&messages, None, None);
+        let value = serde_json::to_value(&body).expect("json");
+        assert!(value.get("reasoning_effort").is_none());
+        assert!(value.get("thinking").is_none());
+        assert_eq!(value["temperature"], Value::from(0.0));
+        assert_eq!(value["stream"], Value::Bool(false));
+    }
+
+    #[test]
+    fn completion_request_includes_reasoning_fields() {
+        let messages = [ChatMessage::new(ChatRole::User, "hi")];
+        let body = completion_request(&messages, Some("high"), Some(false));
+        let value = serde_json::to_value(&body).expect("json");
+        assert_eq!(value["reasoning_effort"], Value::from("high"));
+        assert_eq!(value["thinking"], Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn request_sends_trimmed_effort_and_thinking_false() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })))
+            .mount(&server)
+            .await;
+
+        let mut cfg = test_config(&format!("{}/v1", server.uri()));
+        cfg.effort = Some("  high  ".to_string());
+        cfg.thinking = Some(false);
+        let client = OpenAiCompatClient::new(cfg).expect("client");
+        client
+            .complete(&[ChatMessage::new(ChatRole::User, "hi")])
+            .await
+            .expect("complete");
+
+        let requests = server.received_requests().await.expect("requests");
+        let body: Value = requests[0].body_json().expect("json");
+        assert_eq!(body["reasoning_effort"], Value::from("high"));
+        assert_eq!(body["thinking"], Value::Bool(false));
     }
 
     #[test]

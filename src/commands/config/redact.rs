@@ -255,6 +255,8 @@ mod tests {
                 timeout_ms: 60_000,
                 max_retries: 3,
                 retry_base_delay_ms: 500,
+                effort: None,
+                thinking: None,
                 history: Default::default(),
             },
             mcp: vec![

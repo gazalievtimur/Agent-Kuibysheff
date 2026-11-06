@@ -223,6 +223,12 @@ pub struct ProviderConfig {
     pub max_retries: u32,
     #[serde(default = "ProviderConfig::default_retry_base_delay_ms")]
     pub retry_base_delay_ms: u64,
+    /// Reasoning effort sent as `reasoning_effort`. Omitted from the request when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Provider thinking flag sent as `thinking`. Omitted from the request when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
     /// Context-window pruning for this model. Independent of `limits.max_tokens`.
     #[serde(default)]
     pub history: ProviderHistoryConfig,
@@ -701,6 +707,8 @@ pub fn bootstrap_app_config() -> AppConfig {
             timeout_ms: 60_000,
             max_retries: 3,
             retry_base_delay_ms: 500,
+            effort: None,
+            thinking: None,
             history: ProviderHistoryConfig::default(),
         },
         mcp: Vec::new(),
@@ -883,6 +891,16 @@ pub fn validate(cfg: &AppConfig) -> Result<(), ConfigError> {
     if cfg.provider.model.trim().is_empty() {
         return Err(ConfigError::Validation(
             "`provider.model` must not be empty".to_string(),
+        ));
+    }
+    if cfg
+        .provider
+        .effort
+        .as_ref()
+        .is_some_and(|effort| effort.trim().is_empty())
+    {
+        return Err(ConfigError::Validation(
+            "`provider.effort` must not be empty".to_string(),
         ));
     }
     if cfg.provider.api_key_env.trim().is_empty() && !cfg.provider.has_inline_api_key() {
@@ -1103,6 +1121,8 @@ mod tests {
                 timeout_ms: 1000,
                 max_retries: 2,
                 retry_base_delay_ms: 100,
+                effort: None,
+                thinking: None,
                 history: ProviderHistoryConfig::default(),
             },
             mcp: vec![McpServerConfig {
@@ -1149,6 +1169,59 @@ mod tests {
         let err = validate(&cfg).expect_err("empty model");
         assert!(
             err.to_string().contains("provider.model"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn provider_reasoning_fields_default_to_unset() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  mode: legacy
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        assert_eq!(cfg.provider.effort, None);
+        assert_eq!(cfg.provider.thinking, None);
+        validate(&cfg).expect("valid");
+    }
+
+    #[test]
+    fn provider_reasoning_fields_deserialize_when_set() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+  effort: high
+  thinking: false
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+access:
+  mode: legacy
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse");
+        assert_eq!(cfg.provider.effort.as_deref(), Some("high"));
+        assert_eq!(cfg.provider.thinking, Some(false));
+        validate(&cfg).expect("valid");
+    }
+
+    #[test]
+    fn config_validation_rejects_blank_effort() {
+        let mut cfg = sample_config();
+        cfg.provider.effort = Some("   ".to_string());
+        let err = validate(&cfg).expect_err("blank effort");
+        assert!(
+            err.to_string().contains("provider.effort"),
             "unexpected error: {err}"
         );
     }

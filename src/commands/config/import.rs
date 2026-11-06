@@ -31,6 +31,8 @@ struct ImportResult {
     bootstrapped: bool,
     /// True when the external payload declared `access` and it was written through.
     access_imported: bool,
+    /// True when live `provider`/`limits` were kept instead of the import payload.
+    runtime_preserved: bool,
 }
 
 /// Import a config file or settings directory into the protected agent profile.
@@ -62,8 +64,9 @@ pub fn run(args: &ConfigArgs, import_args: &ImportArgs) -> Result<(), ConfigCmdE
         })
     })?;
 
+    let had_live_config = paths.config.is_file();
     let mut bootstrapped = false;
-    if !paths.config.is_file() {
+    if !had_live_config {
         save_config(&paths.config, &bootstrap_app_config()).map_err(ConfigCmdError::from)?;
         bootstrapped = true;
     }
@@ -89,11 +92,26 @@ pub fn run(args: &ConfigArgs, import_args: &ImportArgs) -> Result<(), ConfigCmdE
 
     let mut imported = Vec::new();
     let mut access_imported = false;
+    let settings_only = import_args.settings_only;
+
+    if settings_only && meta.is_file() {
+        let _ = fs::remove_dir_all(&staging_root);
+        return Err(ConfigCmdError::message(
+            "`--settings-only` requires a directory bundle (prompts/skills), not a config file"
+                .to_string(),
+        ));
+    }
 
     let stage_result = if meta.is_file() {
         stage_config_file(source, stage_root, &mut imported, &mut access_imported)
     } else if meta.is_dir() {
-        stage_directory(source, stage_root, &mut imported, &mut access_imported)
+        stage_directory(
+            source,
+            stage_root,
+            &mut imported,
+            &mut access_imported,
+            settings_only,
+        )
     } else {
         Err(ConfigCmdError::message(format!(
             "`{}` is neither a file nor a directory",
@@ -112,17 +130,31 @@ pub fn run(args: &ConfigArgs, import_args: &ImportArgs) -> Result<(), ConfigCmdE
     }
 
     // Profile may already contain bootstrap config; treat that as non-empty.
+    // Settings-only refresh of an existing live profile does not need `--force`.
     if dir_non_empty(&paths.profile_dir)? && !import_args.force {
-        // Allow first-time import into a freshly bootstrapped profile (config only).
         let only_bootstrap = bootstrapped && profile_only_has_bootstrap(&paths.profile_dir)?;
-        if !only_bootstrap {
+        let settings_refresh = settings_only && had_live_config;
+        if !only_bootstrap && !settings_refresh {
             let _ = fs::remove_dir_all(&staging_root);
             return Err(ConfigCmdError::message(format!(
-                "profile `{}` is not empty; pass `--force` to overwrite",
+                "profile `{}` is not empty; pass `--force` to overwrite config, or `--settings-only` to refresh prompts/skills without touching agent-config.yaml",
                 paths.profile_dir.display()
             )));
         }
     }
+
+    let runtime_preserved = match preserve_live_runtime_in_staging(
+        stage_root,
+        &paths.config,
+        had_live_config,
+        import_args.replace_runtime,
+    ) {
+        Ok(preserved) => preserved,
+        Err(err) => {
+            let _ = fs::remove_dir_all(&staging_root);
+            return Err(err);
+        }
+    };
 
     if let Err(err) = install_staging(stage_root, &paths.profile_dir, &imported) {
         let _ = fs::remove_dir_all(&staging_root);
@@ -140,8 +172,34 @@ pub fn run(args: &ConfigArgs, import_args: &ImportArgs) -> Result<(), ConfigCmdE
         source: source.display().to_string(),
         bootstrapped,
         access_imported,
+        runtime_preserved,
     };
     emit_ok(args.format, "import", "done", &result)
+}
+
+/// Keep operator-tuned `provider` and `limits` when refreshing an existing profile.
+///
+/// Templates often pin a default model; Studio / `config provider set` change the live
+/// values. A settings import should update skills/MCP/access without wiping that.
+fn preserve_live_runtime_in_staging(
+    stage_root: &Path,
+    live_config: &Path,
+    had_live_config: bool,
+    replace_runtime: bool,
+) -> Result<bool, ConfigCmdError> {
+    if replace_runtime || !had_live_config {
+        return Ok(false);
+    }
+    let staged_config = stage_root.join(AGENT_CONFIG_FILE);
+    if !staged_config.is_file() {
+        return Ok(false);
+    }
+    let (live, _) = load_config(live_config)?;
+    let (mut staged, _) = load_config(&staged_config)?;
+    staged.provider = live.provider;
+    staged.limits = live.limits;
+    save_config(&staged_config, &staged).map_err(ConfigCmdError::from)?;
+    Ok(true)
 }
 
 fn profile_only_has_bootstrap(profile_dir: &Path) -> Result<bool, ConfigCmdError> {
@@ -205,6 +263,7 @@ fn stage_directory(
     stage_root: &Path,
     imported: &mut Vec<String>,
     access_imported: &mut bool,
+    settings_only: bool,
 ) -> Result<(), ConfigCmdError> {
     let master = source.join(MASTER_PROMPT_FILE);
     let skills = source.join(SKILLS_FILE);
@@ -232,10 +291,12 @@ fn stage_directory(
         imported.push(RULES_FILE.to_string());
     }
 
-    if let Some(config_src) = resolve_config_source(source)? {
-        let dest = stage_root.join(AGENT_CONFIG_FILE);
-        write_staged_config_from_payload(&config_src, &dest, access_imported)?;
-        imported.push(AGENT_CONFIG_FILE.to_string());
+    if !settings_only {
+        if let Some(config_src) = resolve_config_source(source)? {
+            let dest = stage_root.join(AGENT_CONFIG_FILE);
+            write_staged_config_from_payload(&config_src, &dest, access_imported)?;
+            imported.push(AGENT_CONFIG_FILE.to_string());
+        }
     }
 
     let dsl = fs::read_to_string(source.join(SKILLS_FILE)).map_err(|source_err| {
@@ -519,18 +580,34 @@ mod tests {
     use crate::access::AccessPolicyConfig;
     use crate::cli::{AgentIdentityArgs, ConfigArgs, ConfigCommand, ConfigFormat, InitArgs};
     use crate::commands::init;
-    use crate::config::load_config;
+    use crate::config::{load_config, save_config};
     use crate::project_paths::AGENT_CONFIG_FILE;
     use crate::settings::{load_settings, MASTER_PROMPT_FILE, SKILLS_FILE};
 
     fn config_args(root: &Path, agent_id: &str, from: PathBuf, force: bool) -> ConfigArgs {
+        config_args_opts(root, agent_id, from, force, false, false)
+    }
+
+    fn config_args_opts(
+        root: &Path,
+        agent_id: &str,
+        from: PathBuf,
+        force: bool,
+        settings_only: bool,
+        replace_runtime: bool,
+    ) -> ConfigArgs {
         ConfigArgs {
             identity: AgentIdentityArgs {
                 project_root: root.to_path_buf(),
                 agent: agent_id.to_string(),
             },
             format: ConfigFormat::Json,
-            command: ConfigCommand::Import(ImportArgs { from, force }),
+            command: ConfigCommand::Import(ImportArgs {
+                from,
+                force,
+                settings_only,
+                replace_runtime,
+            }),
         }
     }
 
@@ -870,5 +947,160 @@ access:
             !installed.exists(),
             "leftover companion must not survive replace"
         );
+    }
+
+    #[test]
+    fn import_preserves_live_provider_and_limits_by_default() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-preserve-runtime";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let (mut live, _) = load_config(&paths.config).expect("load live");
+        live.provider.model = "studio-chosen-model".to_string();
+        live.provider.base_url = "https://live.example/v1".to_string();
+        live.limits.max_iterations = 77;
+        live.limits.max_tokens = 12345;
+        save_config(&paths.config, &live).expect("save live");
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let template = r#"
+provider:
+  base_url: "https://template.example/v1"
+  model: "template-model"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 1000
+limits:
+  max_iterations: 3
+  max_tokens: 100
+  max_duration_sec: 30
+access:
+  mode: legacy
+"#;
+        write_settings_bundle(bundle.path(), Some(template));
+
+        run_import(&config_args(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+        ))
+        .expect("import");
+
+        let (cfg, _) = load_config(&paths.config).expect("reload");
+        assert_eq!(cfg.provider.model, "studio-chosen-model");
+        assert_eq!(cfg.provider.base_url, "https://live.example/v1");
+        assert_eq!(cfg.limits.max_iterations, 77);
+        assert_eq!(cfg.limits.max_tokens, 12345);
+        assert_eq!(
+            cfg.access.as_ref().map(|a| a.mode),
+            Some(crate::access::AccessModeField::Legacy),
+            "non-runtime sections still come from the template"
+        );
+        let settings = load_settings(&paths.settings_dir).expect("settings");
+        assert_eq!(settings.master_prompt, "imported master prompt");
+    }
+
+    #[test]
+    fn import_replace_runtime_overwrites_provider_and_limits() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-replace-runtime";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let (mut live, _) = load_config(&paths.config).expect("load live");
+        live.provider.model = "studio-chosen-model".to_string();
+        live.limits.max_iterations = 77;
+        save_config(&paths.config, &live).expect("save live");
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let template = r#"
+provider:
+  base_url: "https://template.example/v1"
+  model: "template-model"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 1000
+limits:
+  max_iterations: 3
+  max_tokens: 100
+  max_duration_sec: 30
+"#;
+        write_settings_bundle(bundle.path(), Some(template));
+
+        run_import(&config_args_opts(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            true,
+            false,
+            true,
+        ))
+        .expect("import");
+
+        let (cfg, _) = load_config(&paths.config).expect("reload");
+        assert_eq!(cfg.provider.model, "template-model");
+        assert_eq!(cfg.provider.base_url, "https://template.example/v1");
+        assert_eq!(cfg.limits.max_iterations, 3);
+        assert_eq!(cfg.limits.max_tokens, 100);
+    }
+
+    #[test]
+    fn settings_only_refreshes_without_force_and_skips_config() {
+        let root = tempfile::tempdir().expect("temp root");
+        let agent_id = "import-settings-only";
+        init::run(&InitArgs {
+            agent_id: agent_id.to_string(),
+            project_root: root.path().to_path_buf(),
+            force: false,
+            interactive: false,
+        })
+        .expect("init");
+
+        let paths = resolve_agent_identity(root.path(), agent_id, None).expect("paths");
+        let (mut live, _) = load_config(&paths.config).expect("load live");
+        live.provider.model = "keep-me".to_string();
+        save_config(&paths.config, &live).expect("save live");
+
+        let bundle = tempfile::tempdir().expect("bundle");
+        let template = r#"
+provider:
+  base_url: "https://template.example/v1"
+  model: "template-model"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_ms: 1000
+limits:
+  max_iterations: 3
+  max_tokens: 100
+  max_duration_sec: 30
+"#;
+        write_settings_bundle(bundle.path(), Some(template));
+
+        run_import(&config_args_opts(
+            root.path(),
+            agent_id,
+            bundle.path().to_path_buf(),
+            false,
+            true,
+            false,
+        ))
+        .expect("settings-only without force");
+
+        let (cfg, _) = load_config(&paths.config).expect("reload");
+        assert_eq!(cfg.provider.model, "keep-me");
+        let settings = load_settings(&paths.settings_dir).expect("settings");
+        assert_eq!(settings.master_prompt, "imported master prompt");
+        assert!(settings.skills_source.contains("imported"));
     }
 }

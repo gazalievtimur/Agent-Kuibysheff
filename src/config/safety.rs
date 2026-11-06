@@ -77,6 +77,8 @@ mod tests {
                 timeout_ms: 1000,
                 max_retries: 2,
                 retry_base_delay_ms: 100,
+                effort: None,
+                thinking: None,
                 history: ProviderHistoryConfig::default(),
             },
             mcp: vec![],

@@ -5,6 +5,10 @@ provider:
   timeout_ms: 60000
   max_retries: 3
   retry_base_delay_ms: 500
+  # Optional. Sent as reasoning_effort. Omitted when unset.
+  # effort: high
+  # Optional. Sent as thinking. Omitted when unset. false is sent as false.
+  # thinking: true
   # Context-window pruning for this model (independent of limits.max_tokens).
   # Raise for long-context models. Rough guide: ~4 chars ≈ 1 token.
   history:

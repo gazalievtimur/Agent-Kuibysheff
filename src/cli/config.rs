@@ -67,9 +67,20 @@ pub struct ImportArgs {
     /// External config file or settings/agent directory bundle.
     #[arg(long, value_name = "PATH")]
     pub from: PathBuf,
-    /// Overwrite an existing non-empty profile.
+    /// Overwrite an existing non-empty profile (needed only when replacing `agent-config.yaml`).
     #[arg(long)]
     pub force: bool,
+    /// Import only settings (`master_prompt.md`, `skills.dsl`, `rules.md`, skill packages).
+    ///
+    /// Skips `agent-config.yaml` even if the bundle contains one. Safe to re-run on a
+    /// live Studio profile without `--force` — model, MCP, and limits stay untouched.
+    #[arg(long)]
+    pub settings_only: bool,
+    /// When importing `agent-config.yaml`, also replace live `provider` and `limits`.
+    ///
+    /// Default keeps those operator-tuned fields from the existing profile.
+    #[arg(long)]
+    pub replace_runtime: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -86,6 +97,12 @@ pub enum ProviderCmd {
         timeout_ms: Option<u64>,
         #[arg(long)]
         max_retries: Option<u32>,
+        /// Reasoning effort sent as `reasoning_effort`.
+        #[arg(long)]
+        effort: Option<String>,
+        /// Provider thinking flag sent as `thinking`.
+        #[arg(long)]
+        thinking: Option<bool>,
     },
 }
 
