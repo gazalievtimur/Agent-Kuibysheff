@@ -95,6 +95,7 @@ flowchart TD
 - `src/a2a/` — Agent-to-Agent (A2A) 1.0 HTTP server via official `a2a-lf` / `a2a-server-lf` SDK (`AgentExecutor` → `run_agent_prompt`, Agent Card from profile, JSON-RPC + REST, optional Bearer).
 - `src/config.rs` — loads and validates YAML/JSON runtime config (`provider` including optional `provider.history`, `mcp`, `limits`, `logging`, required `access`). Embeds access DTOs owned by `access::config`, maps `AccessError` → `ConfigError`, applies CLI overrides, and resolves host paths relative to the config file directory.
 - `src/settings.rs` — loads the settings directory: `master_prompt.md`, `skills.dsl`, optional `rules.md`, and optional `skills/<name>/` packages.
+- `src/prompt.rs` — builds the dynamic **runtime rules** fragment of the system prompt from the effective tool allowlist and `ResolvedAccessPolicy` (including the `home.run` sandbox contract when that tool is allowed).
 - `src/context.rs` — reads `--files` inputs, applies `InputFilesPolicy`, truncates to a char budget, and builds the context string injected into the user message.
 
 ### Agent core
@@ -313,7 +314,24 @@ P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-archi
 1. `main` calls `sandbox_linux::try_run_helper()` before Tokio.
 2. `run()` loads config, applies CLI overrides, validates, initializes tracing and loggers.
 3. Settings, skills, input files, `HomeFs`, `LocalTools`, and MCP connections are initialized.
-4. The system prompt is assembled from `master_prompt.md`, optional `rules.md`, the skills catalog (`policy`, `instructions=stored|none`, file count), and hardcoded runtime rules. Skill bodies are not inlined.
+4. The system prompt is assembled once per run (same formula for CLI `run`,
+   ACP, A2A, and the studio UI — the UI only launches the same worker):
+
+   `master_prompt.md` + optional `rules.md` + skills catalog
+   (`policy`, `instructions=stored|none`, file count) + `build_runtime_rules(...)`.
+
+   Skill bodies are not inlined. Runtime rules advertise only tools the
+   effective policy allows. When `home.run` is allowed, they also state the
+   **sandbox contract** derived from `access.run.programs` (no network; only
+   listed aliases and their executables / `runtime_read_roots`; filesystem
+   limited to home grants plus those roots; on `sandbox failure` /
+   `sandbox unavailable`, do not retry the same call — use an MCP tool for
+   the same job if one exists, else stop). Profile `master_prompt` /
+   `rules` / skills carry **workflow** constraints only (for example “commit
+   via `bot_git`, not `home.run git`”); they must not restate the generic
+   AppContainer lecture — that belongs in runtime rules so every agent and
+   every entry point shares one contract.
+
 5. `AgentEngine::run` starts the loop.
 6. On exit, `RunOutput` is serialized to pretty JSON and printed to stdout; the
    process exits non-zero when `stop_reason` is `error`.
@@ -325,6 +343,7 @@ P0 items `01`–`03` and docs sync item [`09`](architecture-review/09-sync-archi
 - **Literal argv execution**: `home.run` executes the program directly with the provided arguments; no shell interpretation.
 - **Bounded output**: sandboxed runs are capped by `max_output_chars` and a deadline to avoid pipe deadlocks and runaway processes.
 - **Immutable policy after startup**: `ResolvedAccessPolicy` and `EffectiveToolPolicy` are built once before the loop begins.
+- **One prompt policy for all entry points**: studio / CLI / ACP / A2A share the same system-prompt assembly; sandbox limits for `home.run` are injected from access policy into runtime rules, not as UI-specific instructions.
 
 ## Further reading
 

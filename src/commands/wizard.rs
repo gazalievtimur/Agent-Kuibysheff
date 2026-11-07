@@ -392,6 +392,8 @@ fn change_provider_interactive<R: BufRead, W: Write>(
             api_key_env: Some(api_key_env.clone()),
             timeout_ms: None,
             max_retries: None,
+            effort: None,
+            thinking: None,
         }),
     ))?;
     if !api_key_raw.is_empty() {

@@ -16,6 +16,8 @@ struct ProviderView {
     timeout_ms: u64,
     max_retries: u32,
     retry_base_delay_ms: u64,
+    effort: Option<String>,
+    thinking: Option<bool>,
 }
 
 pub fn run(args: &ConfigArgs, cmd: &ProviderCmd) -> Result<(), ConfigCmdError> {
@@ -31,12 +33,16 @@ pub fn run(args: &ConfigArgs, cmd: &ProviderCmd) -> Result<(), ConfigCmdError> {
             api_key_env,
             timeout_ms,
             max_retries,
+            effort,
+            thinking,
         } => {
             if base_url.is_none()
                 && model.is_none()
                 && api_key_env.is_none()
                 && timeout_ms.is_none()
                 && max_retries.is_none()
+                && effort.is_none()
+                && thinking.is_none()
             {
                 return Err(ConfigCmdError::message(
                     "provider set requires at least one flag",
@@ -58,6 +64,18 @@ pub fn run(args: &ConfigArgs, cmd: &ProviderCmd) -> Result<(), ConfigCmdError> {
             if let Some(v) = max_retries {
                 profile.config.provider.max_retries = *v;
             }
+            if let Some(v) = effort {
+                let trimmed = v.trim();
+                if trimmed.is_empty() {
+                    return Err(ConfigCmdError::message(
+                        "`provider.effort` must not be empty",
+                    ));
+                }
+                profile.config.provider.effort = Some(trimmed.to_string());
+            }
+            if let Some(v) = thinking {
+                profile.config.provider.thinking = Some(*v);
+            }
             save_profile_config(&profile.paths, &profile.config)?;
             let view = provider_view(&profile.config.provider);
             emit_ok(args.format, "provider", "set", &view)
@@ -74,5 +92,7 @@ fn provider_view(p: &crate::config::ProviderConfig) -> ProviderView {
         timeout_ms: p.timeout_ms,
         max_retries: p.max_retries,
         retry_base_delay_ms: p.retry_base_delay_ms,
+        effort: p.effort.clone(),
+        thinking: p.thinking,
     }
 }
