@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate `agent-client-protocol` from 3.x to 5.x (`Agent.v1()` / `Client.v1()`,
+  `v1::schema`). The wire protocol stays ACP schema v1.
+
 ## [0.3.1] - 2026-11-04
 
 ### Added

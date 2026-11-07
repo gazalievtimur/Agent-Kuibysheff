@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest,
     NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
     SessionUpdate, StopReason, TextContent,
 };
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error as AcpError};
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::{Agent, Channel, Client, Error as AcpError};
 use tokio::sync::Mutex;
 
 #[tokio::test]
@@ -19,7 +20,7 @@ async fn acp_initialize_session_prompt_roundtrip() {
 
     let agent_task = tokio::spawn(async move {
         Agent
-            .builder()
+            .v1()
             .name("test-agent")
             .on_receive_request(
                 async move |req: InitializeRequest, responder, _cx| {
@@ -41,7 +42,7 @@ async fn acp_initialize_session_prompt_roundtrip() {
                     cx.send_notification(SessionNotification::new(
                         req.session_id.clone(),
                         SessionUpdate::AgentMessageChunk(
-                            agent_client_protocol::schema::v1::ContentChunk::new(
+                            agent_client_protocol::v1::schema::ContentChunk::new(
                                 ContentBlock::Text(TextContent::new("hello from agent")),
                             ),
                         ),
@@ -55,7 +56,7 @@ async fn acp_initialize_session_prompt_roundtrip() {
     });
 
     let client_result = Client
-        .builder()
+        .v1()
         .name("test-client")
         .on_receive_notification(
             async move |notif: SessionNotification, _cx| {

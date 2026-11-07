@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, Implementation, InitializeRequest,
     InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     SessionId, SessionNotification, StopReason as AcpStopReason,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Error as AcpError, Responder, Stdio};
+use agent_client_protocol::v1::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, Error as AcpError, Stdio};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
@@ -76,7 +77,7 @@ pub async fn run_acp_server(args: AcpArgs) -> Result<(), AcpError> {
     let rt_cancel = Arc::clone(&runtime);
 
     Agent
-        .builder()
+        .v1()
         .name("agent_Kuibysheff")
         .on_receive_request(
             async move |req: InitializeRequest, responder, _cx| {
@@ -301,7 +302,7 @@ fn evict_lru_session_if_needed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::TextContent;
+    use agent_client_protocol::v1::schema::TextContent;
 
     #[test]
     fn extract_prompt_text_joins_text_blocks() {
