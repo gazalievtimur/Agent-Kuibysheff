@@ -1,6 +1,7 @@
 //! Windows AppContainer sandbox orchestration.
 
 mod acl;
+mod cwd_link;
 mod folder;
 mod job;
 mod journal;

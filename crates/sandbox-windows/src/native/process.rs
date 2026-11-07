@@ -33,6 +33,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::error::{SandboxStage, SandboxWindowsError};
 use crate::native::acl::{AclJournal, ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE};
+use crate::native::cwd_link::CwdJunction;
 use crate::native::folder::appcontainer_folder;
 use crate::native::job::JobObject;
 use crate::native::pipes::PipePair;
@@ -601,7 +602,7 @@ pub fn run_sandboxed(
     assert_no_loopback_exemption(profile.sid())?;
 
     let staged = stage_launch(request, profile.sid())?;
-    let staged_request = SandboxLaunchRequest {
+    let mut staged_request = SandboxLaunchRequest {
         executable: staged.executable,
         argv: request.argv.clone(),
         cwd: staged.cwd,
@@ -614,6 +615,8 @@ pub fn run_sandboxed(
         allow_children: request.allow_children,
         max_processes: request.max_processes,
     };
+    // Held until this function returns, which is after git has exited.
+    let _git_cwd = git_cwd_junction(journal, profile.sid(), &mut staged_request);
 
     let process_limit = if request.allow_children {
         u32::max(request.max_processes, 1)
@@ -843,11 +846,49 @@ pub(crate) fn join_path_env(dirs: &[PathBuf]) -> String {
         .join(";")
 }
 
+fn is_git_executable(executable: &Path) -> bool {
+    executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("git") || name.eq_ignore_ascii_case("git.exe")
+        })
+}
+
+/// Points git at a junction under `ProgramData` when that link can be created.
+///
+/// The real working tree stays the junction target. Listing `C:\Users` is not
+/// required to resolve the link path.
+fn git_cwd_junction(
+    journal: &mut AclJournal,
+    package_sid: PSID,
+    request: &mut SandboxLaunchRequest,
+) -> Option<CwdJunction> {
+    if !is_git_executable(&request.executable) {
+        return None;
+    }
+    let link = CwdJunction::mount(&request.cwd).ok()?;
+    if journal
+        .grant_reparse_point(link.path(), package_sid, ACCESS_EXECUTE)
+        .is_err()
+    {
+        return None;
+    }
+    if let Some(parent) = link.path().parent() {
+        journal.grant_ancestor_traverse(parent, package_sid);
+        if journal
+            .grant_path(parent, package_sid, ACCESS_EXECUTE, false)
+            .is_err()
+        {
+            return None;
+        }
+    }
+    request.cwd = link.path().to_path_buf();
+    Some(link)
+}
+
 fn apply_git_env(env: &mut std::collections::BTreeMap<String, String>, executable: &Path) {
-    let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
-        return;
-    };
-    if !name.eq_ignore_ascii_case("git") && !name.eq_ignore_ascii_case("git.exe") {
+    if !is_git_executable(executable) {
         return;
     }
     env.entry("GIT_TERMINAL_PROMPT".to_string())

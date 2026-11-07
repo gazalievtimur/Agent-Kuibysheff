@@ -497,6 +497,38 @@ impl AclJournal {
         }
     }
 
+    /// Grants `path` itself and does not resolve a mount point.
+    ///
+    /// `canonicalize` would follow the junction and put the ACE on the target
+    /// instead of the link git actually walks.
+    pub fn grant_reparse_point(
+        &mut self,
+        path: &Path,
+        package_sid: PSID,
+        access: u32,
+    ) -> Result<(), SandboxWindowsError> {
+        let path_buf = acl_path(path);
+        if !self.seen.insert(path_buf.clone()) {
+            return Ok(());
+        }
+        match write_object_dacl(&path_buf, package_sid, access) {
+            Ok(sd) => {
+                self.grants.push(AclGrant {
+                    path: path_buf,
+                    object_type: SE_FILE_OBJECT,
+                    restore: AclRestore::Snapshot(sd),
+                    propagated: false,
+                    object_only: true,
+                });
+                Ok(())
+            }
+            Err(err) => {
+                self.seen.remove(&path_buf);
+                Err(err)
+            }
+        }
+    }
+
     /// Lets the package open the Windows NUL device read-write.
     ///
     /// Git maps `/dev/null` to `NUL` and opens it that way during startup
