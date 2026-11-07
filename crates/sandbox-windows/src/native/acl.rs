@@ -4,7 +4,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, FALSE, TRUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE, TRUE,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, ProgressInvokeNever, SetEntriesInAclW,
     SetNamedSecurityInfoW, TreeSetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
@@ -12,14 +14,16 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
-    InitializeSecurityDescriptor, SetFileSecurityW, SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE,
-    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_DESCRIPTOR, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    InitializeSecurityDescriptor, MakeSelfRelativeSD, SetKernelObjectSecurity,
+    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
+    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_DESCRIPTOR,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+    CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
-    FILE_TRAVERSE,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, OPEN_EXISTING, WRITE_DAC,
 };
 
 use crate::error::{SandboxStage, SandboxWindowsError};
@@ -325,7 +329,10 @@ impl AclJournal {
         let Ok(canonical) = std::fs::canonicalize(path) else {
             return;
         };
-        let access = FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
+        // Git opens the working directory, then asks for its long path. That
+        // walk lists every ancestor. File contents stay unread: this mask has
+        // no FILE_READ_DATA. The ACE is removed when the launch journal drops.
+        let access = FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY;
         for ancestor in traverse_ancestors(&acl_path(&canonical)) {
             let _ = self.try_grant_object_dacl(&ancestor, package_sid, access);
         }
@@ -1008,38 +1015,17 @@ fn write_object_dacl(
         ));
     }
 
-    let mut object_sd: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
-    // SAFETY: object_sd is a local descriptor; new_dacl stays alive until the set returns.
-    let applied = unsafe {
-        InitializeSecurityDescriptor(
-            ptr::addr_of_mut!(object_sd).cast(),
-            SECURITY_DESCRIPTOR_REVISION,
-        ) != FALSE
-            && SetSecurityDescriptorDacl(
-                ptr::addr_of_mut!(object_sd).cast(),
-                TRUE,
-                new_dacl.cast(),
-                FALSE,
-            ) != FALSE
-            && SetFileSecurityW(
-                wide.as_ptr(),
-                DACL_SECURITY_INFORMATION,
-                ptr::addr_of_mut!(object_sd).cast(),
-            ) != FALSE
-    };
-    // SAFETY: new_dacl was allocated by SetEntriesInAclW. SetFileSecurityW copies it.
+    let applied = set_object_dacl(path_buf, new_dacl);
+    // SAFETY: new_dacl was allocated by SetEntriesInAclW. set_object_dacl copies it.
     unsafe {
         LocalFree(new_dacl.cast());
     }
-    if !applied {
+    if let Err(err) = applied {
         // SAFETY: sd was allocated by GetNamedSecurityInfoW and is uniquely owned here.
         unsafe {
             LocalFree(sd.cast());
         }
-        return Err(setup_last(
-            SandboxStage::AclGrant,
-            &format!("SetFileSecurityW({})", path_buf.display()),
-        ));
+        return Err(err);
     }
     Ok(sd)
 }
@@ -1053,31 +1039,109 @@ fn restore_object_dacl(path: &Path, original_sd: PSECURITY_DESCRIPTOR) {
         GetSecurityDescriptorDacl(original_sd, &mut present, &mut saved_dacl, &mut defaulted)
     };
     if ok != FALSE && present != FALSE {
-        let wide = path_to_wide_null(&acl_path(path));
-        let mut object_sd: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
-        // SAFETY: write the saved DACL back onto this object only.
-        let _ = unsafe {
-            InitializeSecurityDescriptor(
-                ptr::addr_of_mut!(object_sd).cast(),
-                SECURITY_DESCRIPTOR_REVISION,
-            ) != FALSE
-                && SetSecurityDescriptorDacl(
-                    ptr::addr_of_mut!(object_sd).cast(),
-                    TRUE,
-                    saved_dacl.cast(),
-                    FALSE,
-                ) != FALSE
-                && SetFileSecurityW(
-                    wide.as_ptr(),
-                    DACL_SECURITY_INFORMATION,
-                    ptr::addr_of_mut!(object_sd).cast(),
-                ) != FALSE
-        };
+        let _ = set_object_dacl(&acl_path(path), saved_dacl);
     }
     // SAFETY: original_sd was allocated by GetNamedSecurityInfoW and is uniquely owned.
     unsafe {
         LocalFree(original_sd.cast());
     }
+}
+
+/// Writes `dacl` onto `path` alone.
+///
+/// `SetNamedSecurityInfoW` reapplies inheritable ACEs to every child, which
+/// rewrites a profile tree. `SetKernelObjectSecurity` updates one object.
+fn set_object_dacl(path: &Path, dacl: *mut ACL) -> Result<(), SandboxWindowsError> {
+    let mut absolute: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    // SAFETY: absolute is a local descriptor. `dacl` stays alive for the copy below.
+    let ready = unsafe {
+        InitializeSecurityDescriptor(
+            ptr::addr_of_mut!(absolute).cast(),
+            SECURITY_DESCRIPTOR_REVISION,
+        ) != FALSE
+            && SetSecurityDescriptorDacl(
+                ptr::addr_of_mut!(absolute).cast(),
+                TRUE,
+                dacl.cast(),
+                FALSE,
+            ) != FALSE
+    };
+    if !ready {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("InitializeSecurityDescriptor({})", path.display()),
+        ));
+    }
+
+    let mut size = 0u32;
+    // SAFETY: a null buffer asks for the self-relative size.
+    unsafe {
+        MakeSelfRelativeSD(
+            ptr::addr_of_mut!(absolute).cast(),
+            ptr::null_mut(),
+            &mut size,
+        );
+    }
+    if size == 0 {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("MakeSelfRelativeSD({})", path.display()),
+        ));
+    }
+    let mut relative = vec![0u8; size as usize];
+    // SAFETY: `relative` has the size reported above; the call copies `dacl` into it.
+    let made = unsafe {
+        MakeSelfRelativeSD(
+            ptr::addr_of_mut!(absolute).cast(),
+            relative.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if made == FALSE {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("MakeSelfRelativeSD({})", path.display()),
+        ));
+    }
+
+    let wide = path_to_wide_null(&acl_path(path));
+    // SAFETY: WRITE_DAC opens this directory only; OPEN_REPARSE_POINT does not follow a junction.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("CreateFileW(WRITE_DAC, {})", path.display()),
+        ));
+    }
+    // SAFETY: `handle` is the directory opened above; `relative` is a self-relative SD.
+    let set_ok = unsafe {
+        SetKernelObjectSecurity(
+            handle,
+            DACL_SECURITY_INFORMATION,
+            relative.as_mut_ptr().cast(),
+        )
+    };
+    // SAFETY: `handle` is uniquely owned here.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if set_ok == FALSE {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("SetKernelObjectSecurity({})", path.display()),
+        ));
+    }
+    Ok(())
 }
 
 fn restore_snapshot(path: &Path, object_type: i32, original_sd: PSECURITY_DESCRIPTOR) {
@@ -1230,6 +1294,36 @@ mod tests {
             root,
             Path::new(r"C:\Windows.old\System32\cmd.exe")
         ));
+    }
+
+    #[test]
+    fn object_only_grant_does_not_reach_children() {
+        let profile =
+            crate::native::profile::AppContainerProfile::create_unique().expect("profile");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("parent");
+        let child = parent.join("child.txt");
+        std::fs::create_dir(&parent).expect("parent");
+        std::fs::write(&child, b"x").expect("child");
+        let access =
+            super::FILE_TRAVERSE | super::FILE_READ_ATTRIBUTES | super::FILE_LIST_DIRECTORY;
+        let mut journal = AclJournal::new();
+        journal
+            .try_grant_object_dacl(&parent, profile.sid(), access)
+            .expect("grant");
+        assert!(
+            acl_has_allow_sid(&parent, profile.sid(), false),
+            "parent is missing the package ACE"
+        );
+        assert!(
+            !acl_has_allow_sid(&child, profile.sid(), false),
+            "child inherited the package ACE"
+        );
+        drop(journal);
+        assert!(
+            !acl_has_allow_sid(&parent, profile.sid(), false),
+            "package ACE survived restore"
+        );
     }
 
     #[test]

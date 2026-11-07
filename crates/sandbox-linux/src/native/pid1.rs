@@ -217,9 +217,12 @@ mod tests {
     use super::apply_nproc_limit;
 
     #[test]
+    #[allow(unexpected_cfgs)]
     fn nproc_limit_skips_zero_and_applies_a_high_cap() {
         apply_nproc_limit(0);
         // A low cap would block later tests in this process from spawning.
+        // Miri has no `setrlimit` shim; coverage still runs this on Linux.
+        #[cfg(not(miri))]
         apply_nproc_limit(65_536);
     }
 }
