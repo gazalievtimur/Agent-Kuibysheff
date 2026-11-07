@@ -1,6 +1,6 @@
 //! Map Kuibysheff engine events / stop reasons onto ACP schema types.
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     ContentBlock, ContentChunk, SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall,
     ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };

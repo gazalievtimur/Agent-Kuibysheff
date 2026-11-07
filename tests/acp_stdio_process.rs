@@ -7,12 +7,13 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::v1::schema::{
     ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
     StopReason, TextContent,
 };
-use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::{ByteStreams, Client, ConnectionTo, Error as AcpError};
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::{ByteStreams, Client, Error as AcpError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -146,7 +147,7 @@ access:
     let captured_notifications = Arc::clone(&notifications);
 
     let client_result = Client
-        .builder()
+        .v1()
         .name("bridge-test-client")
         .on_receive_notification(
             async move |notif: SessionNotification, _cx| {
