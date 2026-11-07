@@ -1,6 +1,7 @@
 //! Windows AppContainer sandbox orchestration.
 
 mod acl;
+mod cwd_link;
 mod folder;
 mod job;
 mod journal;
@@ -12,12 +13,21 @@ mod util;
 use crate::error::{SandboxStage, SandboxWindowsError};
 use crate::request::{SandboxLaunchRequest, SandboxLaunchResult};
 
-use self::acl::AclJournal;
+use std::sync::Mutex;
+
+use self::acl::{AclJournal, HostPrivilegeGuard};
 use self::job::JobObject;
 use self::journal::{reclaim_stale_profiles, ProfileJournalEntry};
 use self::pipes::PipePair;
 use self::process::{assert_no_loopback_exemption, run_sandboxed};
 use self::profile::AppContainerProfile;
+
+/// Ancestor grants edit shared host directories. One launch at a time keeps a
+/// snapshot restore from racing another launch's DACL.
+fn shared_acl_lock() -> &'static Mutex<()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    &LOCK
+}
 
 /// Safe entry points for the Windows AppContainer backend.
 #[derive(Debug, Default, Clone, Copy)]
@@ -32,7 +42,7 @@ impl WindowsSandbox {
     pub fn probe() -> Result<(), SandboxWindowsError> {
         reclaim_stale_profiles();
 
-        JobObject::create(true, None)
+        JobObject::create(None, None)
             .map_err(|err| SandboxWindowsError::unavailable(format!("job probe failed: {err}")))?;
         PipePair::create_inheritable()
             .map_err(|err| SandboxWindowsError::unavailable(format!("pipe probe failed: {err}")))?;
@@ -64,6 +74,14 @@ impl WindowsSandbox {
         let _journal_entry = ProfileJournalEntry::create(profile.name()).map_err(|err| {
             SandboxWindowsError::setup(SandboxStage::Profile, format!("profile journal: {err}"))
         })?;
+        let _acl_lock = shared_acl_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // `C:\Users` is owned by SYSTEM. Listing it is what git's long-path
+        // lookup needs, and only backup/restore privileges can add that ACE.
+        // Declared before the journal so the DACL is restored while the
+        // privileges are still enabled.
+        let _privileges = HostPrivilegeGuard::enable();
 
         let mut acl_journal = AclJournal::new();
         let result = run_sandboxed(request, &profile, &mut acl_journal);

@@ -277,6 +277,7 @@ mod tests {
             deadline: Duration::from_secs(1),
             max_output_chars: 1024,
             allow_children: false,
+            max_processes: 1,
         }
     }
 

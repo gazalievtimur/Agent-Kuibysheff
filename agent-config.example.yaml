@@ -6,6 +6,10 @@ provider:
   timeout_ms: 60000
   max_retries: 3
   retry_base_delay_ms: 500
+  # Optional. Sent as reasoning_effort. Omitted when unset.
+  # effort: high
+  # Optional. Sent as thinking. Omitted when unset. false is sent as false.
+  # thinking: true
   # Context-window pruning for this model (independent of limits.max_tokens).
   # Raise for long-context models. Rough guide: ~4 chars ≈ 1 token.
   history:
@@ -125,13 +129,13 @@ access:
   run:
     # Empty programs => home.run cannot execute anything even if the tool is allowed.
     programs: []
-    # Example program alias (uncomment and adjust paths for your host):
+    # Example program alias (uncomment and adjust paths for your host).
+    # Git under Program Files needs no runtime_read_roots; children are required.
     # programs:
-    #   - name: python
-    #     executable: "python"   # or absolute path to interpreter
-    #     runtime_read_roots: ["REQUIRED_PYTHON_ROOT"]    # interpreter install / libs
-    #     inherit_env: ["SYSTEMROOT"]             # Windows; Linux often needs none
-    #     allow_children: false
+    #   - name: git
+    #     executable: 'C:\Program Files\Git\cmd\git.exe'
+    #     allow_children: true
+    max_processes: 32
     max_args: 32
     max_arg_chars: 4096
     max_output_chars: 200000

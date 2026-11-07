@@ -15,7 +15,8 @@ Minimal and reliable CLI agent worker in Rust.
 - Enforces hard stop limits: iterations, tokens, max duration, and optional max cost.
 - Enforces an optional fail-closed `access` policy (tools, paths, `home.run`
   programs) and runs `home.run` inside an OS sandbox (Linux namespaces /
-  Windows AppContainer) with no network.
+  Windows AppContainer) with outbound network. User-profile secrets stay
+  outside the sandbox.
 - Keeps skill instructions in the agent profile next to the master prompt.
   The model sees a catalog, then reads `skill.md` and companion files on demand.
 - Produces a final JSON result with per-request token/cost accounting and optional
@@ -199,8 +200,9 @@ Local banks (security / Scale-FS / A2A): [local/README.md](local/README.md).
 
 Model context-window pruning lives under `provider.history` (defaults
 `max_tail_messages: 30`, `max_chars: 200000`) and is independent of
-`limits.max_tokens`. Optional `provider.effort` sets reasoning effort for
-compatible models (`reasoning_effort` in the Chat Completions request).
+`limits.max_tokens`. Optional `provider.effort` is sent as `reasoning_effort`,
+and optional `provider.thinking` (`true` or `false`) is sent as `thinking`,
+on every Chat Completions request. Unset fields are omitted.
 
 ## Agent profile
 

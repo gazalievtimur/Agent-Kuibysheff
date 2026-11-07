@@ -22,8 +22,11 @@ pub struct JobObject {
 
 impl JobObject {
     /// Creates a job with `KILL_ON_JOB_CLOSE` (breakaway is never enabled).
+    ///
+    /// `active_process_limit` of `Some(1)` keeps a single process. `None` leaves
+    /// the count unbounded (probe only).
     pub fn create(
-        allow_children: bool,
+        active_process_limit: Option<u32>,
         memory_limit_bytes: Option<u64>,
     ) -> Result<Self, SandboxWindowsError> {
         // SAFETY: CreateJobObjectW returns a new job handle or NULL.
@@ -38,9 +41,9 @@ impl JobObject {
         // valid representation before we set LimitFlags and related fields.
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if !allow_children {
+        if let Some(limit) = active_process_limit {
             info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-            info.BasicLimitInformation.ActiveProcessLimit = 1;
+            info.BasicLimitInformation.ActiveProcessLimit = limit.max(1);
         }
         if let Some(bytes) = memory_limit_bytes {
             info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;

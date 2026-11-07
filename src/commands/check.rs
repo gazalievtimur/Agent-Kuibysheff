@@ -40,6 +40,7 @@ pub enum CheckStatus {
     Ok,
     Fail,
     Skip,
+    Warn,
 }
 
 impl fmt::Display for CheckStatus {
@@ -48,6 +49,7 @@ impl fmt::Display for CheckStatus {
             Self::Ok => write!(f, "ok"),
             Self::Fail => write!(f, "fail"),
             Self::Skip => write!(f, "skip"),
+            Self::Warn => write!(f, "warn"),
         }
     }
 }
@@ -463,9 +465,38 @@ fn check_access(access: &crate::access::ResolvedAccessPolicy, items: &mut Vec<Ch
                         ),
                     });
                 }
+                if !program.allow_children
+                    && is_program_files_executable(program.executable.as_path())
+                {
+                    items.push(CheckItem {
+                        name: format!("access.run.{}.children", program.alias),
+                        status: CheckStatus::Warn,
+                        detail: "executable is under Program Files and allow_children is false; tools such as git cannot spawn helper processes".to_string(),
+                    });
+                }
             }
         }
     }
+}
+
+fn is_program_files_executable(path: &Path) -> bool {
+    let lossy = path.to_string_lossy().replace('/', "\\");
+    let mut comps = lossy.split('\\').filter(|part| !part.is_empty());
+    let Some(first) = comps.next() else {
+        return false;
+    };
+    let top = if first.ends_with(':') {
+        comps.next()
+    } else if first == "?" {
+        let _drive = comps.next();
+        comps.next()
+    } else {
+        None
+    };
+    matches!(
+        top.map(|part| part.to_ascii_lowercase()).as_deref(),
+        Some("program files") | Some("program files (x86)")
+    )
 }
 
 fn check_sandbox(
@@ -657,6 +688,22 @@ mod tests {
             interactive: false,
         })
         .expect("init");
+    }
+
+    #[test]
+    fn program_files_warning_matches_install_roots_only() {
+        assert!(is_program_files_executable(Path::new(
+            r"C:\Program Files\Git\cmd\git.exe"
+        )));
+        assert!(is_program_files_executable(Path::new(
+            r"C:\Program Files (x86)\Git\cmd\git.exe"
+        )));
+        assert!(!is_program_files_executable(Path::new(
+            r"C:\Program Files Evil\git.exe"
+        )));
+        assert!(!is_program_files_executable(Path::new(
+            r"C:\Users\me\AppData\Local\Programs\Git\cmd\git.exe"
+        )));
     }
 
     fn check_args(project: &Path, agent: &str) -> CheckArgs {

@@ -21,6 +21,7 @@ macro_rules! sandbox_launch_request_from_spec {
             deadline: spec.deadline,
             max_output_chars: spec.max_output_chars,
             allow_children: spec.allow_children,
+            max_processes: spec.max_processes,
         }
     }};
 }
@@ -99,6 +100,7 @@ mod linux {
                 deadline: Duration::from_secs(3),
                 max_output_chars: 99,
                 allow_children: true,
+                max_processes: 32,
             };
             let req = to_launch_request(spec);
             assert_eq!(req.executable, PathBuf::from("/bin/true"));
@@ -111,6 +113,7 @@ mod linux {
             assert_eq!(req.deadline, Duration::from_secs(3));
             assert_eq!(req.max_output_chars, 99);
             assert!(req.allow_children);
+            assert_eq!(req.max_processes, 32);
         }
 
         #[test]
@@ -221,6 +224,7 @@ mod windows {
                 deadline: Duration::from_secs(3),
                 max_output_chars: 99,
                 allow_children: false,
+                max_processes: 1,
             };
             let req = to_launch_request(spec);
             assert_eq!(req.argv, vec!["/c".to_string(), "echo".to_string()]);

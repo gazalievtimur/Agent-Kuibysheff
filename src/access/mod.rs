@@ -322,6 +322,7 @@ pub struct ResolvedAccessPolicy {
     max_arg_chars: usize,
     max_output_chars: usize,
     max_timeout_ms: u64,
+    max_processes: u32,
 }
 
 impl ResolvedAccessPolicy {
@@ -390,6 +391,11 @@ impl ResolvedAccessPolicy {
         self.max_timeout_ms
     }
 
+    #[must_use]
+    pub fn max_processes(&self) -> u32 {
+        self.max_processes
+    }
+
     /// Compiles legacy defaults for explicit `access.mode: legacy` (and in-memory tests).
     #[must_use]
     pub fn legacy() -> Self {
@@ -405,6 +411,7 @@ impl ResolvedAccessPolicy {
             max_arg_chars: RunPolicyConfig::default_max_arg_chars(),
             max_output_chars: RunPolicyConfig::default_max_output_chars(),
             max_timeout_ms: RunPolicyConfig::default_max_timeout_ms(),
+            max_processes: RunPolicyConfig::default_max_processes(),
         }
     }
 }
@@ -554,6 +561,7 @@ pub fn resolve_access_policy(
         max_arg_chars: resolved_run.max_arg_chars,
         max_output_chars: resolved_run.max_output_chars,
         max_timeout_ms: resolved_run.max_timeout_ms,
+        max_processes: resolved_run.max_processes,
     })
 }
 
@@ -662,6 +670,11 @@ fn validate_run_limits(run: &RunPolicyConfig) -> Result<(), AccessError> {
     if run.max_timeout_ms == 0 {
         return Err(AccessError::Validation(
             "`access.run.max_timeout_ms` must be > 0".to_string(),
+        ));
+    }
+    if run.max_processes == 0 {
+        return Err(AccessError::Validation(
+            "`access.run.max_processes` must be > 0".to_string(),
         ));
     }
     Ok(())
@@ -785,6 +798,7 @@ struct ResolvedRunLimits {
     max_arg_chars: usize,
     max_output_chars: usize,
     max_timeout_ms: u64,
+    max_processes: u32,
 }
 
 fn resolve_run(run: &RunPolicyConfig, config_dir: &Path) -> Result<ResolvedRunLimits, AccessError> {
@@ -840,6 +854,7 @@ fn resolve_run(run: &RunPolicyConfig, config_dir: &Path) -> Result<ResolvedRunLi
         max_arg_chars: run.max_arg_chars,
         max_output_chars: run.max_output_chars,
         max_timeout_ms: run.max_timeout_ms,
+        max_processes: run.max_processes,
     })
 }
 
@@ -867,6 +882,15 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn program_allow_children_defaults_to_true() {
+        let program: ProgramPolicyConfig = serde_yaml::from_str(
+            "name: git\nexecutable: 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe'\n",
+        )
+        .expect("parse");
+        assert!(program.allow_children);
+    }
 
     #[test]
     fn qualified_tool_rejects_bare_names() {
@@ -950,6 +974,7 @@ mod tests {
                 max_arg_chars: 4096,
                 max_output_chars: 200_000,
                 max_timeout_ms: 120_000,
+                max_processes: 32,
             },
             ..AccessPolicyConfig::default()
         };

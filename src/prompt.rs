@@ -77,7 +77,7 @@ pub fn build_runtime_rules(
 fn append_home_run_sandbox_contract(lines: &mut Vec<String>, access: &ResolvedAccessPolicy) {
     lines.push("home.run sandbox contract:".to_string());
     lines.push(
-        "- home.run has no network; only the listed program aliases may be used.".to_string(),
+        "- home.run may use the network; only the listed program aliases may be used.".to_string(),
     );
     for (alias, program) in access.programs() {
         let executable = program.executable.as_path().display();
@@ -96,7 +96,7 @@ fn append_home_run_sandbox_contract(lines: &mut Vec<String>, access: &ResolvedAc
         }
     }
     lines.push(
-        "- Filesystem access is limited to home grants plus that program's runtime_read_roots; paths outside those roots are unreachable."
+        "- The program may read and execute its install tree and runtime_read_roots. It may read home read grants and write home write grants. The user profile, SSH keys, and global git config are unreachable."
             .to_string(),
     );
     lines.push(
@@ -221,6 +221,7 @@ mod tests {
                 max_arg_chars: 4096,
                 max_output_chars: 200_000,
                 max_timeout_ms: 120_000,
+                max_processes: 32,
             },
             ..AccessPolicyConfig::default()
         };
@@ -317,8 +318,8 @@ mod tests {
             "home.run must be advertised: {rules}"
         );
         assert!(
-            rules.contains("no network"),
-            "sandbox contract must state no network: {rules}"
+            rules.contains("may use the network"),
+            "sandbox contract must state network access: {rules}"
         );
         assert!(
             rules.contains("sandbox failure"),

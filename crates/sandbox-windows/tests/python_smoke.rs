@@ -38,6 +38,7 @@ fn python_under_runtime_root_runs() {
         deadline: Duration::from_secs(30),
         max_output_chars: 64 * 1024,
         allow_children: false,
+        max_processes: 1,
     };
     let result = WindowsSandbox::run(&request).expect("run");
     assert!(!result.timed_out, "stderr={}", result.stderr);

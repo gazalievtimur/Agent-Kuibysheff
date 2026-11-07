@@ -43,8 +43,11 @@ Please include:
 
 - **MCP stdio / Streamable HTTP** — tools run with the privileges of the process
   and configured MCP servers; untrusted tool output can influence the model.
-- **Network egress** — provider HTTP and MCP HTTP leave the host; `home.run` OS
-  sandboxes are intended to have **no network**.
+- **Network egress** — provider HTTP, MCP HTTP, and `home.run` payloads can
+  leave the host. `home.run` shares the host network on Linux and gets
+  outbound Internet plus LAN capabilities on Windows. Loopback from an
+  AppContainer stays closed. User-profile secrets are not mounted into the
+  sandbox.
 - **A2A inbound HTTP** (`kbshff a2a`) — new listen surface for peer agents.
   Default bind is loopback (`127.0.0.1`). Do not expose on a public interface
   without a reverse proxy and `--token-env` (Bearer). The Agent Card endpoint

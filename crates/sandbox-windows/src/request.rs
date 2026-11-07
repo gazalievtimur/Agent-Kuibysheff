@@ -15,6 +15,8 @@ pub struct SandboxLaunchRequest {
     pub deadline: Duration,
     pub max_output_chars: usize,
     pub allow_children: bool,
+    /// Active process cap when `allow_children` is set. `1` is forced when it is not.
+    pub max_processes: u32,
 }
 
 /// Safe launch result returned to the agent facade.

@@ -131,6 +131,9 @@ pub struct RunPolicyConfig {
     pub max_output_chars: usize,
     #[serde(default = "RunPolicyConfig::default_max_timeout_ms")]
     pub max_timeout_ms: u64,
+    /// Process-tree cap for programs that may spawn children.
+    #[serde(default = "RunPolicyConfig::default_max_processes")]
+    pub max_processes: u32,
 }
 
 impl Default for RunPolicyConfig {
@@ -141,6 +144,7 @@ impl Default for RunPolicyConfig {
             max_arg_chars: Self::default_max_arg_chars(),
             max_output_chars: Self::default_max_output_chars(),
             max_timeout_ms: Self::default_max_timeout_ms(),
+            max_processes: Self::default_max_processes(),
         }
     }
 }
@@ -165,6 +169,11 @@ impl RunPolicyConfig {
     pub const fn default_max_timeout_ms() -> u64 {
         120_000
     }
+
+    #[must_use]
+    pub const fn default_max_processes() -> u32 {
+        32
+    }
 }
 
 /// One sandboxed executable exposed to the model under a stable alias.
@@ -181,6 +190,11 @@ pub struct ProgramPolicyConfig {
     /// Environment variable names inherited into the sandbox (values come from the agent process).
     #[serde(default)]
     pub inherit_env: Vec<String>,
-    #[serde(default)]
+    /// Toolchains such as Git spawn helper processes. Set `false` for a single-process lockdown.
+    #[serde(default = "default_allow_children")]
     pub allow_children: bool,
+}
+
+fn default_allow_children() -> bool {
+    true
 }

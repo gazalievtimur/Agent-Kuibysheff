@@ -18,6 +18,13 @@ pub struct SandboxLaunchRequest {
     pub deadline: Duration,
     pub max_output_chars: usize,
     pub allow_children: bool,
+    /// Active-process hint applied with `RLIMIT_NPROC` when children are allowed.
+    #[serde(default = "default_max_processes")]
+    pub max_processes: u32,
+}
+
+fn default_max_processes() -> u32 {
+    32
 }
 
 /// Safe launch result returned to the agent facade.

@@ -136,7 +136,7 @@ kbshff a2a \
   [--save-chat-history]
 
 kbshff config --project-root <DIR> --agent <ID> [--format text|json] \
-  import --from <PATH> [--force]
+  import --from <PATH> [--force] [--settings-only] [--replace-runtime]
   | show | provider … | limits … | access … | mcp … | billing … \
   | event-mcp … | skill … | prompt … | rules … | tools effective [--connect]
 
@@ -157,13 +157,18 @@ A symlink or non-directory at the runtime path fails load. With
 `config import` copies an external config file or settings directory into the
 protected profile. External paths are treated as untrusted payloads until
 contents are installed under `.kuibysheff/protected/` and validated there
-(`load_config` + safety + skills parse). `--force` overwrites a non-empty
-profile. If the profile has no `agent-config.yaml` yet, the agent bootstraps a
-minimal fail-closed `access` policy first so settings can be imported;
-external `access` is imported when present and becomes authoritative only after
-that write-then-validate step. Directory import may omit a config file
-(settings-only); missing `access` in an external config is filled with the same
-minimal policy before validation.
+(`load_config` + safety + skills parse). Prefer `--settings-only` to refresh
+`master_prompt.md` / `skills.dsl` / `rules.md` / skill packages on a live
+profile — it skips `agent-config.yaml` and does not require `--force`.
+`--force` is for replacing config (and other profile files) on a non-empty
+profile. When `agent-config.yaml` is imported into an existing profile, live
+`provider` and `limits` are preserved by default; pass `--replace-runtime` to
+take those from the payload. If the profile has no `agent-config.yaml` yet,
+the agent bootstraps a minimal fail-closed `access` policy first so settings
+can be imported; external `access` is imported when present and becomes
+authoritative only after that write-then-validate step. Directory import may
+omit a config file; missing `access` in an external config is filled with the
+same minimal policy before validation.
 
 `check` probes the protected profile without running the agent loop.
 
@@ -378,7 +383,9 @@ effective_tools    = effective_builtins ∪ effective_mcp
 - There is no generic `network` config section. The agent process may call only
   the configured `provider.base_url` origin (no proxy, no cross-origin
   redirects). MCP stdio subprocesses and configured MCP HTTP endpoints may use
-  the network. `home.run` payloads never get network access.
+  the network. `home.run` payloads share the host network (Linux) or receive
+  outbound Internet and LAN capabilities (Windows). Loopback stays closed on
+  Windows. The user profile, SSH keys, and global git config stay unreachable.
 
 Example config and skills:
 
@@ -547,15 +554,16 @@ Payloads never run via a plain process spawn. The CLI uses a platform backend:
 
 | Platform | Mechanism | Guarantees |
 |----------|-----------|------------|
-| Linux | unprivileged user/mount/pid/ipc/net namespaces, pivot_root, caps drop, seccomp denylist | No host network; filesystem limited to explicit binds; process tree killed on timeout (`pidfd`) |
-| Windows | AppContainer (empty capabilities) + Job Object | No network capabilities / loopback exemption; ACL grants only for configured paths; job kill on timeout |
+| Linux | unprivileged user/mount/pid/ipc namespaces, pivot_root, caps drop, seccomp denylist | Host network (including loopback); filesystem limited to explicit binds plus OS install trees; process tree killed on timeout (`pidfd`) |
+| Windows | AppContainer (`internetClient`, `privateNetworkClientServer`) + Job Object | Outbound Internet and LAN; no loopback exemption; ACL grants only for configured paths; OS install trees are not rewritten; job kill on timeout |
 
 The same worker (and the same system prompt) is used for CLI `run`, ACP, A2A,
 and the studio UI. When `home.run` is in the effective allowlist,
 `build_runtime_rules` injects a **sandbox contract** from
-`access.run.programs`: no network; only listed program aliases with their
-executables / `runtime_read_roots`; paths outside home grants plus those roots
-are unreachable; on `sandbox failure` / `sandbox unavailable` the model must
+`access.run.programs`: outbound network; only listed program aliases with their
+executables / `runtime_read_roots`; the program may read its install tree; data
+reads and writes stay inside home grants; the user profile and SSH keys are
+unreachable; on `sandbox failure` / `sandbox unavailable` the model must
 not retry the same call (prefer an MCP tool for the same job, else stop).
 Profile `master_prompt` / `rules` / skills add workflow-only constraints (for
 example routing git commit/push through an MCP server). They must not duplicate

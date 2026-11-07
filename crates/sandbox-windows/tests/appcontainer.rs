@@ -29,6 +29,7 @@ fn make_request(cwd: &Path, argv: Vec<String>) -> SandboxLaunchRequest {
         deadline: Duration::from_secs(15),
         max_output_chars: 64 * 1024,
         allow_children: false,
+        max_processes: 1,
     }
 }
 
@@ -121,6 +122,93 @@ fn truncates_large_stdout() {
     let result = WindowsSandbox::run(&request).expect("truncate");
     assert!(result.stdout_truncated);
     assert!(result.stdout.chars().count() <= 64);
+}
+
+#[test]
+fn reads_existing_file_under_grant() {
+    let dir = tempdir().unwrap();
+    let note = dir.path().join("note.txt");
+    std::fs::write(&note, "hello-existing").unwrap();
+    let request = make_request(dir.path(), vec!["read".into(), note.display().to_string()]);
+    let result = WindowsSandbox::run(&request).expect("read existing");
+    assert_eq!(result.exit_code, Some(0), "stderr={}", result.stderr);
+    assert!(
+        result.stdout.contains("hello-existing"),
+        "stdout={} stderr={}",
+        result.stdout,
+        result.stderr
+    );
+}
+
+#[test]
+fn denies_read_outside_grant() {
+    let root = tempdir().unwrap();
+    let allowed = root.path().join("allowed");
+    let sibling = root.path().join("sibling");
+    std::fs::create_dir_all(&allowed).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    let secret = sibling.join("secret.txt");
+    std::fs::write(&secret, "top-secret").unwrap();
+
+    let mut request = make_request(&allowed, vec!["read".into(), secret.display().to_string()]);
+    request.home_write = vec![allowed.clone()];
+    request.home_read = vec![allowed];
+
+    let result = WindowsSandbox::run(&request).expect("read outside");
+    assert_ne!(result.exit_code, Some(0), "stdout={}", result.stdout);
+    assert!(
+        !result.stdout.contains("top-secret"),
+        "sibling read must be denied; stdout={} stderr={}",
+        result.stdout,
+        result.stderr
+    );
+}
+
+#[test]
+fn git_status_in_workspace_when_installed() {
+    let git = PathBuf::from(r"C:\Program Files\Git\cmd\git.exe");
+    if !git.is_file() {
+        eprintln!("skip: git is not installed at {}", git.display());
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let mut request = SandboxLaunchRequest {
+        executable: git,
+        argv: vec!["init".into()],
+        cwd: dir.path().to_path_buf(),
+        env: BTreeMap::new(),
+        home_read: vec![dir.path().to_path_buf()],
+        home_write: vec![dir.path().to_path_buf()],
+        runtime_read_roots: Vec::new(),
+        deadline: Duration::from_secs(30),
+        max_output_chars: 64 * 1024,
+        allow_children: true,
+        max_processes: 32,
+    };
+    let init = WindowsSandbox::run(&request).expect("git init");
+    assert_eq!(
+        init.exit_code,
+        Some(0),
+        "stdout={} stderr={}",
+        init.stdout,
+        init.stderr
+    );
+    std::fs::write(dir.path().join("note.txt"), "hi").unwrap();
+    request.argv = vec!["status".into(), "--short".into()];
+    let status = WindowsSandbox::run(&request).expect("git status");
+    assert_eq!(
+        status.exit_code,
+        Some(0),
+        "stdout={} stderr={}",
+        status.stdout,
+        status.stderr
+    );
+    assert!(
+        status.stdout.contains("note.txt"),
+        "stdout={} stderr={}",
+        status.stdout,
+        status.stderr
+    );
 }
 
 #[test]

@@ -138,8 +138,8 @@ cargo check -p sandbox-linux --target x86_64-unknown-linux-gnu
 | `timeout_kills_tree` | Short deadline → `timed_out` or exit `124` |
 | `timeout_kills_process_tree_with_allow_children` | Child+grandchild under deadline |
 | `seccomp_denies_unshare_and_mount` | Denylist blocks mount/unshare from payload |
-| `network_namespace_has_no_foreign_ifaces` | Empty netns: no host NICs in `/proc/net/dev` |
-| `network_namespace_only_lo_and_connect_fails` | Only `lo` under `/sys/class/net`; connect fails |
+| `host_interfaces_visible_in_sandbox` | Shared host netns: a non-loopback NIC appears in `/proc/net/dev` |
+| `host_routes_visible_in_sandbox` | Shared host netns: `/proc/net/route` has more than a header |
 | `argv_metacharacters_are_literal` | Shell metacharacters stay literal argv (not executed) |
 | `truncates_large_stdout` | Large stdout sets truncation flag and respects `max_output_chars` |
 | `truncates_large_stderr_and_combined_pipes` | stdout+stderr both truncated |
