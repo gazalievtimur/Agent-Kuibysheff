@@ -12,12 +12,21 @@ mod util;
 use crate::error::{SandboxStage, SandboxWindowsError};
 use crate::request::{SandboxLaunchRequest, SandboxLaunchResult};
 
+use std::sync::Mutex;
+
 use self::acl::AclJournal;
 use self::job::JobObject;
 use self::journal::{reclaim_stale_profiles, ProfileJournalEntry};
 use self::pipes::PipePair;
 use self::process::{assert_no_loopback_exemption, run_sandboxed};
 use self::profile::AppContainerProfile;
+
+/// Ancestor grants edit shared host directories. One launch at a time keeps a
+/// snapshot restore from racing another launch's DACL.
+fn shared_acl_lock() -> &'static Mutex<()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    &LOCK
+}
 
 /// Safe entry points for the Windows AppContainer backend.
 #[derive(Debug, Default, Clone, Copy)]
@@ -64,6 +73,9 @@ impl WindowsSandbox {
         let _journal_entry = ProfileJournalEntry::create(profile.name()).map_err(|err| {
             SandboxWindowsError::setup(SandboxStage::Profile, format!("profile journal: {err}"))
         })?;
+        let _acl_lock = shared_acl_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut acl_journal = AclJournal::new();
         let result = run_sandboxed(request, &profile, &mut acl_journal);

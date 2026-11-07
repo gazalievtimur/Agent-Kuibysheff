@@ -211,3 +211,15 @@ fn reap_until(target: pid_t) -> Result<i32, SandboxLinuxError> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::apply_nproc_limit;
+
+    #[test]
+    fn nproc_limit_skips_zero_and_applies_a_high_cap() {
+        apply_nproc_limit(0);
+        // A low cap would block later tests in this process from spawning.
+        apply_nproc_limit(65_536);
+    }
+}

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, FALSE};
+use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS, FALSE, TRUE};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, ProgressInvokeNever, SetEntriesInAclW,
     SetNamedSecurityInfoW, TreeSetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
@@ -12,12 +12,14 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    InitializeSecurityDescriptor, SetFileSecurityW, SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE,
+    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SECURITY_DESCRIPTOR, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_TRAVERSE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+    FILE_TRAVERSE,
 };
 
 use crate::error::{SandboxStage, SandboxWindowsError};
@@ -26,6 +28,7 @@ use crate::native::util::{path_to_wide_null, setup_last, to_wide_null};
 /// SID on every AppContainer token. Program Files already grants this read/execute.
 const ALL_APPLICATION_PACKAGES_SDDL: &str = "S-1-15-2-1";
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 const OBJECT_INHERIT_ACE: u8 = 1;
 const CONTAINER_INHERIT_ACE: u8 = 2;
 
@@ -38,6 +41,23 @@ pub(crate) const ACCESS_WRITE: u32 = FILE_GENERIC_READ
     | DELETE
     | FILE_DELETE_CHILD;
 pub(crate) const ACCESS_EXECUTE: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | FILE_TRAVERSE;
+
+/// Ancestors of `path` that still have a parent, nearest first.
+///
+/// The drive root is omitted: AppContainer can already traverse it, and its
+/// DACL is not ours to edit.
+pub(crate) fn traverse_ancestors(path: &Path) -> Vec<PathBuf> {
+    let mut ancestors = Vec::new();
+    let mut current = path.to_path_buf();
+    while let Some(parent) = current.parent() {
+        if parent.parent().is_none() {
+            break;
+        }
+        ancestors.push(parent.to_path_buf());
+        current = parent.to_path_buf();
+    }
+    ancestors
+}
 
 /// Strips Windows verbatim (`\\?\`) prefixes that break some security APIs.
 pub(crate) fn acl_path(path: &Path) -> PathBuf {
@@ -172,6 +192,9 @@ struct AclGrant {
     restore: AclRestore,
     /// Children inherited the root ACE through `TreeSetNamedSecurityInfoW`.
     propagated: bool,
+    /// Set with `SetFileSecurityW`, which does not walk child objects.
+    /// `SetNamedSecurityInfoW` on a profile directory rewrites the whole tree.
+    object_only: bool,
 }
 
 /// Journal of ACL grants; Drop restores every original DACL.
@@ -289,6 +312,63 @@ impl AclJournal {
             )
         })?);
         self.grant_canonical(&canonical, package_sid, access, inherit)
+    }
+
+    /// Grants traverse on each ancestor of `path`, stopping above the drive root.
+    ///
+    /// AppContainer tokens do not receive the Users group. A grant on the leaf
+    /// directory does not let `getcwd` walk `C:\Users\...` parents. Traverse and
+    /// read-attributes do not allow listing those directories or reading files
+    /// inside them. Failures are ignored so a locked ancestor does not abort
+    /// the launch.
+    pub fn grant_ancestor_traverse(&mut self, path: &Path, package_sid: PSID) {
+        let Ok(canonical) = std::fs::canonicalize(path) else {
+            return;
+        };
+        let access = FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
+        for ancestor in traverse_ancestors(&acl_path(&canonical)) {
+            let _ = self.try_grant_object_dacl(&ancestor, package_sid, access);
+        }
+    }
+
+    /// Adds one ACE to `path` only. Does not propagate to children.
+    fn try_grant_object_dacl(
+        &mut self,
+        path: &Path,
+        package_sid: PSID,
+        access: u32,
+    ) -> Result<(), SandboxWindowsError> {
+        let path_buf = match std::fs::canonicalize(path) {
+            Ok(path) => acl_path(&path),
+            Err(err) => {
+                return Err(SandboxWindowsError::setup(
+                    SandboxStage::AclGrant,
+                    format!("canonicalize({}): {err}", path.display()),
+                ));
+            }
+        };
+        if !self.seen.insert(path_buf.clone()) {
+            return Ok(());
+        }
+        if is_os_code_plane(&path_buf) || is_protected_tree(&path_buf) {
+            return Ok(());
+        }
+        match write_object_dacl(&path_buf, package_sid, access) {
+            Ok(sd) => {
+                self.grants.push(AclGrant {
+                    path: path_buf,
+                    object_type: SE_FILE_OBJECT,
+                    restore: AclRestore::Snapshot(sd),
+                    propagated: false,
+                    object_only: true,
+                });
+                Ok(())
+            }
+            Err(err) => {
+                self.seen.remove(&path_buf);
+                Err(err)
+            }
+        }
     }
 
     /// Lets the package open the Windows NUL device read-write.
@@ -429,6 +509,7 @@ impl AclJournal {
             object_type,
             restore: AclRestore::Snapshot(sd),
             propagated: false,
+            object_only: false,
         });
         Ok(())
     }
@@ -529,6 +610,7 @@ impl AclJournal {
             object_type: SE_FILE_OBJECT,
             restore: AclRestore::Snapshot(sd),
             propagated: false,
+            object_only: false,
         });
         Ok(())
     }
@@ -614,6 +696,7 @@ impl AclJournal {
             object_type: SE_FILE_OBJECT,
             restore: AclRestore::RevokePackageSid,
             propagated: false,
+            object_only: false,
         });
         Ok(())
     }
@@ -644,7 +727,11 @@ fn restore_one(grant: AclGrant, package_sid: PSID) {
     let path = grant.path.clone();
     match grant.restore {
         AclRestore::Snapshot(original_sd) => {
-            restore_snapshot(&path, grant.object_type, original_sd);
+            if grant.object_only {
+                restore_object_dacl(&path, original_sd);
+            } else {
+                restore_snapshot(&path, grant.object_type, original_sd);
+            }
         }
         AclRestore::RevokePackageSid => {
             if !package_sid.is_null() {
@@ -866,6 +953,133 @@ fn dacl_has_allow_sid(dacl: *mut ACL, sid: PSID, require_inherit: bool) -> bool 
     false
 }
 
+fn write_object_dacl(
+    path_buf: &Path,
+    package_sid: PSID,
+    access: u32,
+) -> Result<PSECURITY_DESCRIPTOR, SandboxWindowsError> {
+    let wide = path_to_wide_null(path_buf);
+    let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let mut dacl: *mut ACL = ptr::null_mut();
+    // SAFETY: GetNamedSecurityInfoW allocates a security descriptor on success.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("GetNamedSecurityInfoW({})", path_buf.display()),
+        ));
+    }
+
+    let trustee = TRUSTEE_W {
+        pMultipleTrustee: ptr::null_mut(),
+        MultipleTrusteeOperation: 0,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_USER,
+        ptstrName: package_sid.cast(),
+    };
+    let mut ea = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: access,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: 0,
+        Trustee: trustee,
+    };
+    let mut new_dacl: *mut ACL = ptr::null_mut();
+    // SAFETY: SetEntriesInAclW merges `ea` into `dacl` and allocates `new_dacl`.
+    let acl_status = unsafe { SetEntriesInAclW(1, &mut ea, dacl, &mut new_dacl) };
+    if acl_status != ERROR_SUCCESS {
+        // SAFETY: free the SD we just retrieved before returning.
+        unsafe {
+            LocalFree(sd.cast());
+        }
+        return Err(SandboxWindowsError::setup(
+            SandboxStage::AclGrant,
+            format!("SetEntriesInAclW failed status={acl_status}"),
+        ));
+    }
+
+    let mut object_sd: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    // SAFETY: object_sd is a local descriptor; new_dacl stays alive until the set returns.
+    let applied = unsafe {
+        InitializeSecurityDescriptor(
+            ptr::addr_of_mut!(object_sd).cast(),
+            SECURITY_DESCRIPTOR_REVISION,
+        ) != FALSE
+            && SetSecurityDescriptorDacl(
+                ptr::addr_of_mut!(object_sd).cast(),
+                TRUE,
+                new_dacl.cast(),
+                FALSE,
+            ) != FALSE
+            && SetFileSecurityW(
+                wide.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                ptr::addr_of_mut!(object_sd).cast(),
+            ) != FALSE
+    };
+    // SAFETY: new_dacl was allocated by SetEntriesInAclW. SetFileSecurityW copies it.
+    unsafe {
+        LocalFree(new_dacl.cast());
+    }
+    if !applied {
+        // SAFETY: sd was allocated by GetNamedSecurityInfoW and is uniquely owned here.
+        unsafe {
+            LocalFree(sd.cast());
+        }
+        return Err(setup_last(
+            SandboxStage::AclGrant,
+            &format!("SetFileSecurityW({})", path_buf.display()),
+        ));
+    }
+    Ok(sd)
+}
+
+fn restore_object_dacl(path: &Path, original_sd: PSECURITY_DESCRIPTOR) {
+    let mut saved_dacl: *mut ACL = ptr::null_mut();
+    let mut present: i32 = FALSE;
+    let mut defaulted: i32 = FALSE;
+    // SAFETY: GetSecurityDescriptorDacl reads fields from the owned original SD.
+    let ok = unsafe {
+        GetSecurityDescriptorDacl(original_sd, &mut present, &mut saved_dacl, &mut defaulted)
+    };
+    if ok != FALSE && present != FALSE {
+        let wide = path_to_wide_null(&acl_path(path));
+        let mut object_sd: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+        // SAFETY: write the saved DACL back onto this object only.
+        let _ = unsafe {
+            InitializeSecurityDescriptor(
+                ptr::addr_of_mut!(object_sd).cast(),
+                SECURITY_DESCRIPTOR_REVISION,
+            ) != FALSE
+                && SetSecurityDescriptorDacl(
+                    ptr::addr_of_mut!(object_sd).cast(),
+                    TRUE,
+                    saved_dacl.cast(),
+                    FALSE,
+                ) != FALSE
+                && SetFileSecurityW(
+                    wide.as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    ptr::addr_of_mut!(object_sd).cast(),
+                ) != FALSE
+        };
+    }
+    // SAFETY: original_sd was allocated by GetNamedSecurityInfoW and is uniquely owned.
+    unsafe {
+        LocalFree(original_sd.cast());
+    }
+}
+
 fn restore_snapshot(path: &Path, object_type: i32, original_sd: PSECURITY_DESCRIPTOR) {
     let mut saved_dacl: *mut ACL = ptr::null_mut();
     let mut present: i32 = FALSE;
@@ -1016,6 +1230,20 @@ mod tests {
             root,
             Path::new(r"C:\Windows.old\System32\cmd.exe")
         ));
+    }
+
+    #[test]
+    fn traverse_ancestors_stop_above_the_drive_root() {
+        let ancestors = super::traverse_ancestors(Path::new(r"C:\Users\me\AppData\Local\Temp\job"));
+        assert_eq!(
+            ancestors.first().map(PathBuf::as_path),
+            Some(Path::new(r"C:\Users\me\AppData\Local\Temp"))
+        );
+        assert_eq!(
+            ancestors.last().map(PathBuf::as_path),
+            Some(Path::new(r"C:\Users"))
+        );
+        assert!(ancestors.iter().all(|path| path.parent().is_some()));
     }
 
     #[test]

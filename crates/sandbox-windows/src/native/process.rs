@@ -119,6 +119,16 @@ pub fn apply_access_grants(
     // Traverse the cwd node only. Tree-wide execute here would expose siblings
     // of a strict grant such as `out/`.
     journal.grant_path(&request.cwd, package_sid, ACCESS_EXECUTE, false)?;
+    journal.grant_ancestor_traverse(&request.cwd, package_sid);
+    for path in request
+        .home_read
+        .iter()
+        .chain(&request.home_write)
+        .chain(&request.runtime_read_roots)
+    {
+        journal.grant_ancestor_traverse(path, package_sid);
+    }
+    journal.grant_ancestor_traverse(&request.executable, package_sid);
     journal.grant_nul_device(package_sid);
     Ok(())
 }
