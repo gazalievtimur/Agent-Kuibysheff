@@ -14,7 +14,7 @@ use crate::request::{SandboxLaunchRequest, SandboxLaunchResult};
 
 use std::sync::Mutex;
 
-use self::acl::AclJournal;
+use self::acl::{AclJournal, HostPrivilegeGuard};
 use self::job::JobObject;
 use self::journal::{reclaim_stale_profiles, ProfileJournalEntry};
 use self::pipes::PipePair;
@@ -76,6 +76,11 @@ impl WindowsSandbox {
         let _acl_lock = shared_acl_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // `C:\Users` is owned by SYSTEM. Listing it is what git's long-path
+        // lookup needs, and only backup/restore privileges can add that ACE.
+        // Declared before the journal so the DACL is restored while the
+        // privileges are still enabled.
+        let _privileges = HostPrivilegeGuard::enable();
 
         let mut acl_journal = AclJournal::new();
         let result = run_sandboxed(request, &profile, &mut acl_journal);

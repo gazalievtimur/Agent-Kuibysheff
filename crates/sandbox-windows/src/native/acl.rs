@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE, TRUE,
+    CloseHandle, LocalFree, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE, LUID, TRUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, ProgressInvokeNever, SetEntriesInAclW,
@@ -13,11 +13,12 @@ use windows_sys::Win32::Security::Authorization::{
     REVOKE_ACCESS, SE_FILE_OBJECT, TREE_SEC_INFO_SET, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
-    InitializeSecurityDescriptor, MakeSelfRelativeSD, SetKernelObjectSecurity,
-    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
-    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_DESCRIPTOR,
-    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    AclSizeInformation, AdjustTokenPrivileges, EqualSid, GetAce, GetAclInformation,
+    GetSecurityDescriptorDacl, InitializeSecurityDescriptor, LookupPrivilegeValueW,
+    MakeSelfRelativeSD, SetKernelObjectSecurity, SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE,
+    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, LUID_AND_ATTRIBUTES,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_DESCRIPTOR, SE_PRIVILEGE_ENABLED,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD,
@@ -25,6 +26,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, OPEN_EXISTING, WRITE_DAC,
 };
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::error::{SandboxStage, SandboxWindowsError};
 use crate::native::util::{path_to_wide_null, setup_last, to_wide_null};
@@ -196,9 +198,126 @@ struct AclGrant {
     restore: AclRestore,
     /// Children inherited the root ACE through `TreeSetNamedSecurityInfoW`.
     propagated: bool,
-    /// Set with `SetFileSecurityW`, which does not walk child objects.
+    /// Set with `SetKernelObjectSecurity`, which does not walk child objects.
     /// `SetNamedSecurityInfoW` on a profile directory rewrites the whole tree.
     object_only: bool,
+}
+
+/// Previous privilege state for the host process, restored on drop.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PrivilegeUpdate {
+    count: u32,
+    entries: [LUID_AND_ATTRIBUTES; 3],
+}
+
+/// Enables backup/restore on the host token when those privileges are already present.
+///
+/// An elevated GitHub runner can then add a traverse ACE on `C:\Users`, which a
+/// normal owner-only `WRITE_DAC` open cannot change. A filtered token has none
+/// of these privileges, and enabling is a no-op.
+pub(crate) struct HostPrivilegeGuard {
+    token: windows_sys::Win32::Foundation::HANDLE,
+    previous: PrivilegeUpdate,
+    active: bool,
+}
+
+impl HostPrivilegeGuard {
+    pub(crate) fn enable() -> Self {
+        let mut guard = Self {
+            token: ptr::null_mut(),
+            previous: PrivilegeUpdate {
+                count: 0,
+                entries: [LUID_AND_ATTRIBUTES {
+                    Luid: LUID {
+                        LowPart: 0,
+                        HighPart: 0,
+                    },
+                    Attributes: 0,
+                }; 3],
+            },
+            active: false,
+        };
+        // SAFETY: the process pseudo-handle is only used to open a real token.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut guard.token,
+            )
+        };
+        if opened == FALSE || guard.token.is_null() {
+            guard.token = ptr::null_mut();
+            return guard;
+        }
+
+        let mut update = guard.previous;
+        for name in [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "SeTakeOwnershipPrivilege",
+        ] {
+            let wide = to_wide_null(name);
+            let mut luid = LUID {
+                LowPart: 0,
+                HighPart: 0,
+            };
+            // SAFETY: `wide` is NUL-terminated; `luid` is an out parameter.
+            let found = unsafe { LookupPrivilegeValueW(ptr::null(), wide.as_ptr(), &mut luid) };
+            if found == FALSE {
+                continue;
+            }
+            let index = update.count as usize;
+            update.entries[index] = LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            };
+            update.count += 1;
+        }
+        if update.count == 0 {
+            return guard;
+        }
+
+        let mut previous_len = 0u32;
+        // SAFETY: `update` matches TOKEN_PRIVILEGES for up to three entries.
+        // `previous` receives the prior attributes of those same privileges.
+        let adjusted = unsafe {
+            AdjustTokenPrivileges(
+                guard.token,
+                FALSE,
+                ptr::from_ref(&update).cast::<TOKEN_PRIVILEGES>(),
+                u32::try_from(std::mem::size_of::<PrivilegeUpdate>()).unwrap_or(0),
+                ptr::from_mut(&mut guard.previous).cast::<TOKEN_PRIVILEGES>(),
+                &mut previous_len,
+            )
+        };
+        guard.active = adjusted != FALSE && guard.previous.count > 0;
+        guard
+    }
+}
+
+impl Drop for HostPrivilegeGuard {
+    fn drop(&mut self) {
+        if !self.token.is_null() {
+            if self.active {
+                // SAFETY: `previous` is the buffer filled by AdjustTokenPrivileges.
+                unsafe {
+                    AdjustTokenPrivileges(
+                        self.token,
+                        FALSE,
+                        ptr::from_ref(&self.previous).cast::<TOKEN_PRIVILEGES>(),
+                        0,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    );
+                }
+            }
+            // SAFETY: token was opened for this guard and is uniquely owned.
+            unsafe {
+                CloseHandle(self.token);
+            }
+        }
+    }
 }
 
 /// Journal of ACL grants; Drop restores every original DACL.
