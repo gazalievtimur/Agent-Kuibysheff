@@ -357,10 +357,12 @@ mod tests {
 
     #[test]
     fn git_env_sets_safe_directory_without_host_path() {
+        // `git.exe` keeps a single file name on both platforms. A Windows path
+        // with backslashes is one component on Unix, so the git env would not apply.
         let env = build_sandbox_env(
             Path::new("/home/work"),
             &["PATH".to_string()],
-            Path::new(r"C:\Program Files\Git\cmd\git.exe"),
+            Path::new("git.exe"),
         );
         assert_eq!(
             env.get("GIT_CONFIG_KEY_0").map(String::as_str),

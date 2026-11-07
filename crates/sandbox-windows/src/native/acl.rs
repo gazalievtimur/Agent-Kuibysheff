@@ -168,6 +168,7 @@ enum AclRestore {
 /// One path whose DACL was mutated for the AppContainer SID.
 struct AclGrant {
     path: PathBuf,
+    object_type: i32,
     restore: AclRestore,
     /// Children inherited the root ACE through `TreeSetNamedSecurityInfoW`.
     propagated: bool,
@@ -290,6 +291,20 @@ impl AclJournal {
         self.grant_canonical(&canonical, package_sid, access, inherit)
     }
 
+    /// Lets the package open the Windows NUL device read-write.
+    ///
+    /// Git maps `/dev/null` to `NUL` and opens it that way during startup
+    /// (`sanitize_stdfds`). Some AppContainer hosts deny that open until the
+    /// package SID is on the device DACL. Changing the DACL needs `WRITE_DAC`,
+    /// which a non-admin token often lacks; those hosts already allow the open,
+    /// so a failure is ignored and the launch continues.
+    pub fn grant_nul_device(&mut self, package_sid: PSID) {
+        let access = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+        // Best-effort: a non-admin token gets ACCESS_DENIED here. Hosts that
+        // already let AppContainers open NUL do not need the ACE.
+        let _ = self.try_grant_named(r"\\.\NUL", SE_FILE_OBJECT, package_sid, access);
+    }
+
     fn grant_canonical(
         &mut self,
         path: &Path,
@@ -326,6 +341,96 @@ impl AclJournal {
                 Err(err)
             }
         }
+    }
+
+    fn try_grant_named(
+        &mut self,
+        name: &str,
+        object_type: i32,
+        package_sid: PSID,
+        access: u32,
+    ) -> Result<(), SandboxWindowsError> {
+        let wide = to_wide_null(name);
+        let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        let mut dacl: *mut ACL = ptr::null_mut();
+        // SAFETY: GetNamedSecurityInfoW allocates a security descriptor on success.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                object_type,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(SandboxWindowsError::setup(
+                SandboxStage::AclGrant,
+                format!("GetNamedSecurityInfoW({name}) status={status}"),
+            ));
+        }
+        let trustee = TRUSTEE_W {
+            pMultipleTrustee: ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: package_sid.cast(),
+        };
+        let mut ea = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: access,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: trustee,
+        };
+        let mut new_dacl: *mut ACL = ptr::null_mut();
+        // SAFETY: SetEntriesInAclW merges `ea` into `dacl` and allocates `new_dacl`.
+        let acl_status = unsafe { SetEntriesInAclW(1, &mut ea, dacl, &mut new_dacl) };
+        if acl_status != ERROR_SUCCESS {
+            // SAFETY: `sd` was allocated by GetNamedSecurityInfoW and is uniquely owned here.
+            unsafe {
+                LocalFree(sd.cast());
+            }
+            return Err(SandboxWindowsError::setup(
+                SandboxStage::AclGrant,
+                format!("SetEntriesInAclW({name}) status={acl_status}"),
+            ));
+        }
+        // SAFETY: SetNamedSecurityInfoW applies `new_dacl` to the named object.
+        let set_status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                object_type,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                new_dacl,
+                ptr::null_mut(),
+            )
+        };
+        // SAFETY: `new_dacl` was allocated by SetEntriesInAclW.
+        unsafe {
+            LocalFree(new_dacl.cast());
+        }
+        if set_status != ERROR_SUCCESS {
+            // SAFETY: `sd` was allocated by GetNamedSecurityInfoW and is uniquely owned here.
+            unsafe {
+                LocalFree(sd.cast());
+            }
+            return Err(SandboxWindowsError::setup(
+                SandboxStage::AclGrant,
+                format!("SetNamedSecurityInfoW({name}) status={set_status}"),
+            ));
+        }
+        self.grants.push(AclGrant {
+            path: PathBuf::from(name),
+            object_type,
+            restore: AclRestore::Snapshot(sd),
+            propagated: false,
+        });
+        Ok(())
     }
 
     fn try_grant_dacl(
@@ -421,6 +526,7 @@ impl AclJournal {
 
         self.grants.push(AclGrant {
             path: path_buf.to_path_buf(),
+            object_type: SE_FILE_OBJECT,
             restore: AclRestore::Snapshot(sd),
             propagated: false,
         });
@@ -505,6 +611,7 @@ impl AclJournal {
         }
         self.grants.push(AclGrant {
             path: path_buf,
+            object_type: SE_FILE_OBJECT,
             restore: AclRestore::RevokePackageSid,
             propagated: false,
         });
@@ -536,7 +643,9 @@ fn restore_one(grant: AclGrant, package_sid: PSID) {
     let propagated = grant.propagated;
     let path = grant.path.clone();
     match grant.restore {
-        AclRestore::Snapshot(original_sd) => restore_snapshot(&path, original_sd),
+        AclRestore::Snapshot(original_sd) => {
+            restore_snapshot(&path, grant.object_type, original_sd);
+        }
         AclRestore::RevokePackageSid => {
             if !package_sid.is_null() {
                 let _ = write_dacl(&path, package_sid, 0, REVOKE_ACCESS, false);
@@ -757,7 +866,7 @@ fn dacl_has_allow_sid(dacl: *mut ACL, sid: PSID, require_inherit: bool) -> bool 
     false
 }
 
-fn restore_snapshot(path: &Path, original_sd: PSECURITY_DESCRIPTOR) {
+fn restore_snapshot(path: &Path, object_type: i32, original_sd: PSECURITY_DESCRIPTOR) {
     let mut saved_dacl: *mut ACL = ptr::null_mut();
     let mut present: i32 = FALSE;
     let mut defaulted: i32 = FALSE;
@@ -771,7 +880,7 @@ fn restore_snapshot(path: &Path, original_sd: PSECURITY_DESCRIPTOR) {
         let _ = unsafe {
             SetNamedSecurityInfoW(
                 wide.as_ptr(),
-                SE_FILE_OBJECT,
+                object_type,
                 DACL_SECURITY_INFORMATION,
                 ptr::null_mut(),
                 ptr::null_mut(),

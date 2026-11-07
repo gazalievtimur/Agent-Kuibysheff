@@ -278,6 +278,9 @@ fn allow_child_processes_when_allow_children_true() {
     let script = fixture_script(dir.path(), "sh -c 'echo child'");
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     request.allow_children = true;
+    // RLIMIT_NPROC counts every process of this uid in the user namespace,
+    // including PID1. `1` (the deny-children default) makes the payload's fork fail.
+    request.max_processes = 32;
     let result = LinuxSandbox::run(&request).expect("sandboxed child-allow run");
     assert_eq!(result.exit_code, Some(0), "stderr={}", result.stderr);
     assert!(result.stdout.contains("child"), "stdout={}", result.stdout);
@@ -306,6 +309,8 @@ while true; do :; done
     );
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     request.allow_children = true;
+    // PID1, the shell, and the background loop all count toward RLIMIT_NPROC.
+    request.max_processes = 32;
     request.deadline = Duration::from_millis(800);
     let started = std::time::Instant::now();
     let result = LinuxSandbox::run(&request).expect("tree timeout run");
@@ -355,6 +360,7 @@ echo seccomp-denied
     let mut request = base_request(dir.path().to_path_buf(), script, Vec::new());
     // unshare/mount binaries may fork helpers; allow children so the denial is seccomp.
     request.allow_children = true;
+    request.max_processes = 32;
     let result = LinuxSandbox::run(&request).expect("seccomp deny run");
     assert_eq!(
         result.exit_code,
