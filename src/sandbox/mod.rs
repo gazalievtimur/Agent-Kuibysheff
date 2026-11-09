@@ -222,6 +222,11 @@ fn validate_spec(spec: &SandboxSpec) -> Result<(), SandboxError> {
             reason: "max_output_chars must be > 0".to_string(),
         });
     }
+    if spec.max_processes == 0 {
+        return Err(SandboxError::PolicyDenied {
+            reason: "max_processes must be > 0".to_string(),
+        });
+    }
     Ok(())
 }
 
@@ -462,5 +467,27 @@ mod tests {
             .insert("LD_PRELOAD".to_string(), "/tmp/x.so".to_string());
         let err = runner.run(spec).await.expect_err("forbidden env");
         assert!(matches!(err, SandboxError::PolicyDenied { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_zero_max_processes() {
+        let runner =
+            SandboxRunner::with_backend(Arc::new(MockBackend::with_output(SandboxOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                exit_code: Some(0),
+                timed_out: false,
+            })));
+        let mut spec = sample_spec();
+        spec.max_processes = 0;
+        let err = runner.run(spec).await.expect_err("zero max_processes");
+        match err {
+            SandboxError::PolicyDenied { reason } => {
+                assert!(reason.contains("max_processes"), "{reason}");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }

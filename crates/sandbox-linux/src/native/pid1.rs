@@ -101,19 +101,33 @@ fn open_executable(path: &std::path::Path) -> Result<OwnedFd, SandboxLinuxError>
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn apply_nproc_limit(max_processes: u32) {
+fn apply_nproc_limit(max_processes: u32) -> Result<(), String> {
     if max_processes == 0 {
-        return;
+        return Err("max_processes must be non-zero".to_string());
     }
     let limit = libc::rlimit {
         rlim_cur: libc::rlim_t::from(max_processes),
         rlim_max: libc::rlim_t::from(max_processes),
     };
     // SAFETY: setrlimit affects only this process and the children it execs.
-    // Failure leaves the host default; the job-equivalent on Linux is the timeout kill.
-    unsafe {
-        let _ = libc::setrlimit(libc::RLIMIT_NPROC, &limit);
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &limit) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(format!("setrlimit(RLIMIT_NPROC): {err}"));
     }
+    Ok(())
+}
+
+/// Applies the child-process cap when the launch allows children.
+fn maybe_apply_nproc_limit(request: &SandboxLaunchRequest) -> Result<(), String> {
+    if !request.allow_children {
+        return Ok(());
+    }
+    apply_nproc_limit(request.max_processes)
+}
+
+fn nproc_limit_failure_message(reason: &str) -> String {
+    format!("sandbox payload nproc limit failed: {reason}\n")
 }
 
 fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
@@ -123,8 +137,13 @@ fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
         let _ = unsafe { libc::chdir(cwd.as_ptr()) };
     }
 
-    if request.allow_children {
-        apply_nproc_limit(request.max_processes);
+    if let Err(reason) = maybe_apply_nproc_limit(request) {
+        let msg = nproc_limit_failure_message(&reason);
+        // SAFETY: best-effort stderr write before exit.
+        unsafe {
+            let _ = libc::write(2, msg.as_ptr().cast(), msg.len());
+            libc::_exit(71);
+        }
     }
 
     // Install the seccomp filter in the payload process. When children are not allowed,
@@ -214,15 +233,81 @@ fn reap_until(target: pid_t) -> Result<i32, SandboxLinuxError> {
 
 #[cfg(test)]
 mod tests {
-    use super::apply_nproc_limit;
+    use super::{apply_nproc_limit, maybe_apply_nproc_limit, nproc_limit_failure_message};
+    use crate::request::SandboxLaunchRequest;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn sample_request(allow_children: bool, max_processes: u32) -> SandboxLaunchRequest {
+        SandboxLaunchRequest {
+            executable: PathBuf::from("/bin/true"),
+            argv: Vec::new(),
+            cwd: PathBuf::from("/"),
+            env: BTreeMap::new(),
+            home_read: Vec::new(),
+            home_write: Vec::new(),
+            runtime_read_roots: Vec::new(),
+            deadline: Duration::from_secs(1),
+            max_output_chars: 1024,
+            allow_children,
+            max_processes,
+        }
+    }
 
     #[test]
+    fn nproc_limit_rejects_zero() {
+        assert!(apply_nproc_limit(0).is_err());
+    }
+
+    #[test]
+    fn maybe_apply_nproc_skips_when_children_disallowed() {
+        let request = sample_request(false, 0);
+        assert!(maybe_apply_nproc_limit(&request).is_ok());
+    }
+
+    #[test]
+    fn nproc_limit_failure_message_mentions_reason() {
+        let msg = nproc_limit_failure_message("boom");
+        assert!(msg.contains("nproc limit failed"));
+        assert!(msg.contains("boom"));
+        assert!(msg.ends_with('\n'));
+    }
+
+    #[cfg(not(miri))]
+    #[test]
     #[allow(unexpected_cfgs)]
-    fn nproc_limit_skips_zero_and_applies_a_high_cap() {
-        apply_nproc_limit(0);
-        // A low cap would block later tests in this process from spawning.
-        // Miri has no `setrlimit` shim; coverage still runs this on Linux.
-        #[cfg(not(miri))]
-        apply_nproc_limit(65_536);
+    fn nproc_limit_setrlimit_ok_and_err_paths() {
+        let mut cur = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: query the current process RLIMIT_NPROC ceiling.
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut cur) }, 0);
+
+        // Re-applying the current hard ceiling only raises soft ≤ hard (allowed)
+        // and does not raise the hard limit, so later tests keep their spawn budget.
+        if cur.rlim_max > 0
+            && cur.rlim_max != libc::RLIM_INFINITY
+            && cur.rlim_max <= u64::from(u32::MAX)
+        {
+            let hard = cur.rlim_max as u32;
+            assert!(
+                apply_nproc_limit(hard).is_ok(),
+                "re-applying hard nproc={hard} should succeed"
+            );
+            let request = sample_request(true, hard);
+            assert!(maybe_apply_nproc_limit(&request).is_ok());
+        }
+
+        // Raising the hard limit without CAP_SYS_RESOURCE fails on CI hosts.
+        if cur.rlim_max != libc::RLIM_INFINITY && cur.rlim_max < u64::from(u32::MAX) {
+            let raised = (cur.rlim_max as u32).saturating_add(1).max(1);
+            let err = apply_nproc_limit(raised).expect_err("raising hard nproc");
+            assert!(err.contains("setrlimit"), "{err}");
+            let request = sample_request(true, raised);
+            let err = maybe_apply_nproc_limit(&request).expect_err("raise via maybe");
+            assert!(err.contains("setrlimit"), "{err}");
+        }
     }
 }
