@@ -468,4 +468,26 @@ mod tests {
         let err = runner.run(spec).await.expect_err("forbidden env");
         assert!(matches!(err, SandboxError::PolicyDenied { .. }));
     }
+
+    #[tokio::test]
+    async fn rejects_zero_max_processes() {
+        let runner =
+            SandboxRunner::with_backend(Arc::new(MockBackend::with_output(SandboxOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                exit_code: Some(0),
+                timed_out: false,
+            })));
+        let mut spec = sample_spec();
+        spec.max_processes = 0;
+        let err = runner.run(spec).await.expect_err("zero max_processes");
+        match err {
+            SandboxError::PolicyDenied { reason } => {
+                assert!(reason.contains("max_processes"), "{reason}");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }
