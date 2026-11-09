@@ -139,6 +139,12 @@ fn set_mount_point(link: &Path, target: &Path) -> Result<(), SandboxWindowsError
             &format!("CreateFileW({})", link.display()),
         ));
     }
+    let buffer_len = u32::try_from(buffer.len()).map_err(|_| {
+        SandboxWindowsError::setup(
+            SandboxStage::AclGrant,
+            "cwd junction reparse buffer is too large",
+        )
+    })?;
     let mut returned = 0u32;
     // SAFETY: `buffer` is a REPARSE_DATA_BUFFER for a mount point; `handle` owns the link.
     let ok = unsafe {
@@ -146,7 +152,7 @@ fn set_mount_point(link: &Path, target: &Path) -> Result<(), SandboxWindowsError
             handle,
             FSCTL_SET_REPARSE_POINT,
             buffer.as_ptr().cast(),
-            u32::try_from(buffer.len()).unwrap_or(0),
+            buffer_len,
             ptr::null_mut(),
             0,
             &mut returned,

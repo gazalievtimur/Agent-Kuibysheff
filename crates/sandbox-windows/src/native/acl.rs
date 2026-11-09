@@ -1,11 +1,13 @@
 //! Temporary ACL grants for AppContainer package SID, with rollback journal.
 
 use std::collections::HashSet;
+use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE, LUID, TRUE,
+    CloseHandle, GetLastError, LocalFree, SetLastError, ERROR_SUCCESS, FALSE, INVALID_HANDLE_VALUE,
+    LUID, TRUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, ProgressInvokeNever, SetEntriesInAclW,
@@ -278,20 +280,27 @@ impl HostPrivilegeGuard {
             return guard;
         }
 
+        let previous_capacity = u32::try_from(std::mem::size_of::<PrivilegeUpdate>())
+            .expect("PrivilegeUpdate fits in u32");
         let mut previous_len = 0u32;
         // SAFETY: `update` matches TOKEN_PRIVILEGES for up to three entries.
         // `previous` receives the prior attributes of those same privileges.
+        // Clear last-error first: AdjustTokenPrivileges can return non-zero while
+        // leaving ERROR_NOT_ALL_ASSIGNED when privileges were not enabled.
         let adjusted = unsafe {
+            SetLastError(ERROR_SUCCESS);
             AdjustTokenPrivileges(
                 guard.token,
                 FALSE,
                 ptr::from_ref(&update).cast::<TOKEN_PRIVILEGES>(),
-                u32::try_from(std::mem::size_of::<PrivilegeUpdate>()).unwrap_or(0),
+                previous_capacity,
                 ptr::from_mut(&mut guard.previous).cast::<TOKEN_PRIVILEGES>(),
                 &mut previous_len,
             )
         };
-        guard.active = adjusted != FALSE && guard.previous.count > 0;
+        // SAFETY: process-local TLS read after AdjustTokenPrivileges.
+        let last_error = unsafe { GetLastError() };
+        guard.active = adjusted != FALSE && last_error == ERROR_SUCCESS && guard.previous.count > 0;
         guard
     }
 }
@@ -1203,19 +1212,14 @@ fn restore_object_dacl(path: &Path, original_sd: PSECURITY_DESCRIPTOR) {
 /// `SetNamedSecurityInfoW` reapplies inheritable ACEs to every child, which
 /// rewrites a profile tree. `SetKernelObjectSecurity` updates one object.
 fn set_object_dacl(path: &Path, dacl: *mut ACL) -> Result<(), SandboxWindowsError> {
-    let mut absolute: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
-    // SAFETY: absolute is a local descriptor. `dacl` stays alive for the copy below.
+    let mut absolute = MaybeUninit::<SECURITY_DESCRIPTOR>::uninit();
+    // SAFETY: InitializeSecurityDescriptor writes a valid absolute SD header into
+    // `absolute`. `dacl` stays alive for SetSecurityDescriptorDacl and the copy below.
     let ready = unsafe {
-        InitializeSecurityDescriptor(
-            ptr::addr_of_mut!(absolute).cast(),
-            SECURITY_DESCRIPTOR_REVISION,
-        ) != FALSE
-            && SetSecurityDescriptorDacl(
-                ptr::addr_of_mut!(absolute).cast(),
-                TRUE,
-                dacl.cast(),
-                FALSE,
-            ) != FALSE
+        InitializeSecurityDescriptor(absolute.as_mut_ptr().cast(), SECURITY_DESCRIPTOR_REVISION)
+            != FALSE
+            && SetSecurityDescriptorDacl(absolute.as_mut_ptr().cast(), TRUE, dacl.cast(), FALSE)
+                != FALSE
     };
     if !ready {
         return Err(setup_last(
@@ -1225,13 +1229,9 @@ fn set_object_dacl(path: &Path, dacl: *mut ACL) -> Result<(), SandboxWindowsErro
     }
 
     let mut size = 0u32;
-    // SAFETY: a null buffer asks for the self-relative size.
+    // SAFETY: a null buffer asks for the self-relative size; `absolute` was initialized above.
     unsafe {
-        MakeSelfRelativeSD(
-            ptr::addr_of_mut!(absolute).cast(),
-            ptr::null_mut(),
-            &mut size,
-        );
+        MakeSelfRelativeSD(absolute.as_mut_ptr().cast(), ptr::null_mut(), &mut size);
     }
     if size == 0 {
         return Err(setup_last(
@@ -1243,7 +1243,7 @@ fn set_object_dacl(path: &Path, dacl: *mut ACL) -> Result<(), SandboxWindowsErro
     // SAFETY: `relative` has the size reported above; the call copies `dacl` into it.
     let made = unsafe {
         MakeSelfRelativeSD(
-            ptr::addr_of_mut!(absolute).cast(),
+            absolute.as_mut_ptr().cast(),
             relative.as_mut_ptr().cast(),
             &mut size,
         )

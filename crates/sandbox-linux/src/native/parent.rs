@@ -249,6 +249,11 @@ fn validate(request: &SandboxLaunchRequest) -> Result<(), SandboxLinuxError> {
             reason: "max_output_chars must be non-zero".to_string(),
         });
     }
+    if request.max_processes == 0 {
+        return Err(SandboxLinuxError::PolicyDenied {
+            reason: "max_processes must be non-zero".to_string(),
+        });
+    }
     if !request.executable.exists() {
         return Err(SandboxLinuxError::PolicyDenied {
             reason: format!("executable not found: {}", request.executable.display()),
@@ -311,6 +316,17 @@ mod tests {
         req.max_output_chars = 0;
         let err = validate(&req).expect_err("zero max_output");
         assert!(err.to_string().contains("max_output_chars"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_processes() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("payload.sh");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let mut req = minimal_request(exe, dir.path().to_path_buf());
+        req.max_processes = 0;
+        let err = validate(&req).expect_err("zero max_processes");
+        assert!(err.to_string().contains("max_processes"));
     }
 
     #[test]

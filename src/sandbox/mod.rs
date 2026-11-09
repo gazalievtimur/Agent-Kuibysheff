@@ -222,6 +222,11 @@ fn validate_spec(spec: &SandboxSpec) -> Result<(), SandboxError> {
             reason: "max_output_chars must be > 0".to_string(),
         });
     }
+    if spec.max_processes == 0 {
+        return Err(SandboxError::PolicyDenied {
+            reason: "max_processes must be > 0".to_string(),
+        });
+    }
     Ok(())
 }
 

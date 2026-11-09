@@ -101,19 +101,21 @@ fn open_executable(path: &std::path::Path) -> Result<OwnedFd, SandboxLinuxError>
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn apply_nproc_limit(max_processes: u32) {
+fn apply_nproc_limit(max_processes: u32) -> Result<(), String> {
     if max_processes == 0 {
-        return;
+        return Err("max_processes must be non-zero".to_string());
     }
     let limit = libc::rlimit {
         rlim_cur: libc::rlim_t::from(max_processes),
         rlim_max: libc::rlim_t::from(max_processes),
     };
     // SAFETY: setrlimit affects only this process and the children it execs.
-    // Failure leaves the host default; the job-equivalent on Linux is the timeout kill.
-    unsafe {
-        let _ = libc::setrlimit(libc::RLIMIT_NPROC, &limit);
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &limit) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(format!("setrlimit(RLIMIT_NPROC): {err}"));
     }
+    Ok(())
 }
 
 fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
@@ -124,7 +126,14 @@ fn payload_exec(request: &SandboxLaunchRequest, exec_fd: OwnedFd) -> ! {
     }
 
     if request.allow_children {
-        apply_nproc_limit(request.max_processes);
+        if let Err(reason) = apply_nproc_limit(request.max_processes) {
+            let msg = format!("sandbox payload nproc limit failed: {reason}\n");
+            // SAFETY: best-effort stderr write before exit.
+            unsafe {
+                let _ = libc::write(2, msg.as_ptr().cast(), msg.len());
+                libc::_exit(71);
+            }
+        }
     }
 
     // Install the seccomp filter in the payload process. When children are not allowed,
@@ -218,11 +227,11 @@ mod tests {
 
     #[test]
     #[allow(unexpected_cfgs)]
-    fn nproc_limit_skips_zero_and_applies_a_high_cap() {
-        apply_nproc_limit(0);
+    fn nproc_limit_rejects_zero_and_applies_a_high_cap() {
+        assert!(apply_nproc_limit(0).is_err());
         // A low cap would block later tests in this process from spawning.
         // Miri has no `setrlimit` shim; coverage still runs this on Linux.
         #[cfg(not(miri))]
-        apply_nproc_limit(65_536);
+        assert!(apply_nproc_limit(65_536).is_ok());
     }
 }

@@ -111,5 +111,10 @@ fn validate_request(request: &SandboxLaunchRequest) -> Result<(), SandboxWindows
             reason: "max_output_chars must be non-zero".to_string(),
         });
     }
+    if request.max_processes == 0 {
+        return Err(SandboxWindowsError::PolicyDenied {
+            reason: "max_processes must be non-zero".to_string(),
+        });
+    }
     Ok(())
 }

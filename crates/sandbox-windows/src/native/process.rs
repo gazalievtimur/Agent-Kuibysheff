@@ -616,10 +616,10 @@ pub fn run_sandboxed(
         max_processes: request.max_processes,
     };
     // Held until this function returns, which is after git has exited.
-    let _git_cwd = git_cwd_junction(journal, profile.sid(), &mut staged_request);
+    let _git_cwd = git_cwd_junction(journal, profile.sid(), &mut staged_request)?;
 
     let process_limit = if request.allow_children {
-        u32::max(request.max_processes, 1)
+        request.max_processes
     } else {
         1
     };
@@ -858,33 +858,24 @@ fn is_git_executable(executable: &Path) -> bool {
 /// Points git at a junction under `ProgramData` when that link can be created.
 ///
 /// The real working tree stays the junction target. Listing `C:\Users` is not
-/// required to resolve the link path.
+/// required to resolve the link path. Setup failures fail the launch instead of
+/// falling back to a cwd that AppContainer often cannot list.
 fn git_cwd_junction(
     journal: &mut AclJournal,
     package_sid: PSID,
     request: &mut SandboxLaunchRequest,
-) -> Option<CwdJunction> {
+) -> Result<Option<CwdJunction>, SandboxWindowsError> {
     if !is_git_executable(&request.executable) {
-        return None;
+        return Ok(None);
     }
-    let link = CwdJunction::mount(&request.cwd).ok()?;
-    if journal
-        .grant_reparse_point(link.path(), package_sid, ACCESS_EXECUTE)
-        .is_err()
-    {
-        return None;
-    }
+    let link = CwdJunction::mount(&request.cwd)?;
+    journal.grant_reparse_point(link.path(), package_sid, ACCESS_EXECUTE)?;
     if let Some(parent) = link.path().parent() {
         journal.grant_ancestor_traverse(parent, package_sid);
-        if journal
-            .grant_path(parent, package_sid, ACCESS_EXECUTE, false)
-            .is_err()
-        {
-            return None;
-        }
+        journal.grant_path(parent, package_sid, ACCESS_EXECUTE, false)?;
     }
     request.cwd = link.path().to_path_buf();
-    Some(link)
+    Ok(Some(link))
 }
 
 fn apply_git_env(env: &mut std::collections::BTreeMap<String, String>, executable: &Path) {
