@@ -1,5 +1,5 @@
 skill "workspace" {
-  policy: "Search and read workspace corpus; read/write home; run python when files are too large for home.read."
+  policy: "Search and read workspace corpus; page large home files with home.read windows (next_offset); home.run only if the goal explicitly requires a script."
   allowed_tools: [
     "home.list",
     "home.read",

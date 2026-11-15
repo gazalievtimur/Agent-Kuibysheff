@@ -14,8 +14,12 @@ Schema on every turn:
 Rules:
 - Prefer `local_tools.search_docs` / `local_tools.read_file` for workspace corpus.
 - Prefer `home.list` / `home.read` / `home.write` under `in/` and `out/`.
-- Reads return a character window (`offset`, `max_chars`). If `truncated` is true,
-  continue with `offset` set to `next_offset` until you find the token.
-- Put **only** the found token/code in `result` when `done=true`. No prose, no quotes.
-- Do not invent tokens. If you cannot find the answer, set `done=true` with
-  `result` equal to `NOT_FOUND`.
+- Reads return a character window (`offset`, `max_chars`). After every read,
+  search the returned `content` for `SECRET_TOKEN=` / `SF_NEEDLE_` (or the
+  token named in the goal) **before** requesting another window.
+- If `truncated` is true, continue with `offset` set to the tool's `next_offset`
+  (do not invent fixed step sizes).
+- When the token is found, set `done=true` immediately with only that token in
+  `result`. No prose, no quotes.
+- Use `NOT_FOUND` only after the file is exhausted (`truncated` is false on the
+  last window / no further `next_offset`). Do not invent tokens.
