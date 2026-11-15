@@ -51,7 +51,6 @@ pub enum WizardError {
 }
 
 /// Entry for `kbshff` with no subcommand.
-#[must_use]
 pub fn run() -> ExitCode {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         // Non-interactive: print help via clap by re-parsing with --help.

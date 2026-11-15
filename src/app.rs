@@ -107,7 +107,6 @@ impl TryFrom<RunArgs> for AgentPromptArgs {
 ///
 /// Call [`sandbox_linux::try_run_helper`] in `main` before this so the Linux helper stays
 /// single-threaded ahead of the Tokio runtime.
-#[must_use]
 pub fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
