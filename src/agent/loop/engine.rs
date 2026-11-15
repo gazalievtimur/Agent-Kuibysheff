@@ -25,7 +25,11 @@ use crate::tool_api::ToolExecutor;
 
 const REJECTED_ASSISTANT: &str =
     r#"{"done":false,"thought":"previous reply was not executed","tool_calls":[],"result":null}"#;
-const MODEL_TOOL_RESULT_MAX_CHARS: usize = 32_000;
+/// Cap for tool-result JSON shown to the model. Must stay above the default
+/// `home.read` window (`DEFAULT_MAX_CHARS` = 50_000 in `tools::fs_home`) plus
+/// JSON wrapper overhead, otherwise needles near the end of a default window
+/// are silently dropped by head-only truncation.
+const MODEL_TOOL_RESULT_MAX_CHARS: usize = 60_000;
 const PINNED_MAX_CHARS: usize = 12_000;
 const PINNED_HEADER: &str =
     "Pinned files (refreshed each turn; do not re-read a path listed here):";
@@ -975,15 +979,28 @@ fn model_tool_result(payload: Value) -> String {
     truncate_chars(&payload.to_string(), MODEL_TOOL_RESULT_MAX_CHARS)
 }
 
+/// Truncate for model context, keeping both a head and a tail so markers near
+/// the end of a large tool payload (for example a `home.read` window) remain
+/// visible when the payload exceeds `max_chars`.
 fn truncate_chars(text: &str, max_chars: usize) -> String {
-    const MARKER: &str = "\n...[truncated for model context]";
-    if text.chars().count() <= max_chars {
+    const MARKER: &str = "\n...[truncated for model context]...\n";
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
         return text.to_string();
     }
-    let keep = max_chars.saturating_sub(MARKER.chars().count());
-    let mut out: String = text.chars().take(keep).collect();
-    out.push_str(MARKER);
-    out
+    let marker_len = MARKER.chars().count();
+    let keep = max_chars.saturating_sub(marker_len);
+    if keep == 0 {
+        return MARKER.chars().take(max_chars).collect();
+    }
+    let head_len = keep / 2;
+    let tail_len = keep - head_len;
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text
+        .chars()
+        .skip(char_count.saturating_sub(tail_len))
+        .collect();
+    format!("{head}{MARKER}{tail}")
 }
 
 fn upsert_pinned_message(messages: &mut Vec<ChatMessage>, text: &str) {
@@ -1957,7 +1974,7 @@ mod tests {
             _tool: &str,
             _arguments: Value,
         ) -> Result<Value, crate::tool_api::ToolError> {
-            Ok(json!({ "blob": "x".repeat(40_000) }))
+            Ok(json!({ "blob": "x".repeat(80_000) }))
         }
 
         fn available_tools(&self) -> Vec<String> {
@@ -1999,7 +2016,44 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(second.contains("truncated for model context"));
-        assert!(second.chars().count() < 40_000);
+        assert!(second.chars().count() < 80_000);
+    }
+
+    #[test]
+    fn model_tool_result_keeps_secret_near_end_of_default_home_read_window() {
+        // Mirrors `DEFAULT_MAX_CHARS` in `tools::fs_home`.
+        const HOME_READ_DEFAULT_CHARS: usize = 50_000;
+        const NEEDLE: &str = "SECRET_TOKEN=SF_NEEDLE_oversize-run-01_TEST";
+        let mut content = "a".repeat(HOME_READ_DEFAULT_CHARS - NEEDLE.len());
+        content.push_str(NEEDLE);
+        assert_eq!(content.chars().count(), HOME_READ_DEFAULT_CHARS);
+
+        let payload = json!({
+            "path": "in/huge.log",
+            "offset": 400_000,
+            "max_chars": HOME_READ_DEFAULT_CHARS,
+            "content": content,
+            "truncated": false,
+            "next_offset": Value::Null,
+        });
+        let visible = model_tool_result(payload);
+        assert!(
+            visible.contains(NEEDLE),
+            "default home.read window must remain fully visible to the model"
+        );
+        assert!(!visible.contains("truncated for model context"));
+    }
+
+    #[test]
+    fn truncate_chars_keeps_head_and_tail_when_over_limit() {
+        let head_marker = "HEAD_MARK_AAA";
+        let tail_marker = "TAIL_MARK_ZZZ";
+        let text = format!("{head_marker}{}{tail_marker}", "m".repeat(10_000));
+        let out = truncate_chars(&text, 200);
+        assert!(out.contains(head_marker));
+        assert!(out.contains(tail_marker));
+        assert!(out.contains("truncated for model context"));
+        assert!(out.chars().count() <= 200);
     }
 
     #[tokio::test]

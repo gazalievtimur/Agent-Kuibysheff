@@ -18,6 +18,10 @@ use crate::sandbox::{
 use crate::tools::read_window::read_char_window;
 use crate::tools::HomeFsError;
 
+/// Default `home.read` character window. Keep this at or below what
+/// `MODEL_TOOL_RESULT_MAX_CHARS` in `agent::loop::engine` can show the model
+/// (including JSON wrapper); otherwise the model may miss content near the
+/// end of a default window.
 const DEFAULT_MAX_CHARS: usize = 50_000;
 const MAX_READ_CHARS: usize = 200_000;
 const DEFAULT_RUN_TIMEOUT_MS: u64 = 30_000;

@@ -17,6 +17,7 @@ Put only that TRACE_ID in result.
 ## Oversize home file
 
 ```text
-The file in/huge.log is too large for home.read. Use home.run with python to
-extract the SECRET_TOKEN line. Put only that token in result.
+The file in/huge.log is large. Use home.read with offset/max_chars windows
+(follow next_offset when truncated) to find the SECRET_TOKEN= line and put
+only that token value (SF_NEEDLE_...) in result.
 ```
