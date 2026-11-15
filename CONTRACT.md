@@ -355,11 +355,12 @@ fails config validation. Prior releases treated omission as silent legacy
 Effective tools are computed as follows:
 
 ```text
-KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file, profile.list_skill, profile.read_skill}
+KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file, profile.list_skill, profile.read_skill, agent.list_tools, agent.describe_tool}
 
 effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
 effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
 effective_tools    = effective_builtins ∪ effective_mcp
+                     ∪ {agent.list_tools, agent.describe_tool}  # every run
                      ∪ {profile.list_skill, profile.read_skill}  # only when a skill folder exists
 ```
 
@@ -373,6 +374,13 @@ effective_tools    = effective_builtins ∪ effective_mcp
   it.
 - `rules.md` and the `policy` string inside a `skills.dsl` block are prompt-only
   guidance for the model. They are not enforced by the runtime policy engine.
+- `agent.list_tools` and `agent.describe_tool` are granted on every run. They
+  need no `skills.dsl` entry. `list_tools` returns `server`, `name`, and
+  `description` for tools in `effective_tools`. `describe_tool` returns
+  `description` and `inputSchema` for one of those tools. A name outside that
+  set is denied and its schema is not returned. The system prompt and the
+  initial user message both include the `Agent As MCP` block that names these
+  calls.
 - When a skill package exists for a name in `skills.dsl` (under
   `.kuibysheff/runtime/skills/<id>/<name>/`, or the legacy
   `protected/agents/<id>/skills/<name>/` fallback), the system prompt lists that
@@ -507,11 +515,13 @@ Tool calls use `server: "home"`:
 ```json
 {"server":"home","tool":"list","arguments":{"path":"."}}
 {"server":"home","tool":"read","arguments":{"path":"in/src/foo.rs","offset":0,"max_chars":50000}}
-{"server":"home","tool":"write","arguments":{"path":"out/notes.md","content":"short text"}}
+{"server":"home","tool":"write","arguments":{"path":"out/notes.md","content":"file text"}}
 {"server":"home","tool":"run","arguments":{"program":"python","args":["solution.py"],"timeout_ms":30000}}
 ```
 
-Short files stay in `arguments.content`. BSL, XML, and any text with quotes or longer than a few hundred characters must not be embedded in that string. Set `arguments.body` to `"raw"`, omit `content`, and put the file bytes after the JSON object:
+Put the entire file text in `arguments.content` as one JSON string. Escape quotes and newlines by JSON rules. File type does not select the field.
+
+`arguments.body` set to `"raw"` (with `content` omitted) is only for a later turn, after a previous `home.write` of the same path was not executed because the JSON object was unterminated. That reply uses `mode` `create`. After the JSON object write a newline, `<<<FILE`, a newline, the file bytes, a newline, and `FILE>>>`:
 
 ```json
 {"done":false,"thought":"write module","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/src/Module.bsl","body":"raw","mode":"create"}}],"result":null}
@@ -523,7 +533,7 @@ file bytes, not JSON-escaped
 FILE>>>
 ```
 
-`mode` is `create` (replace the file; the default) or `append` (add to the same path). A reply whose raw body is missing the closing `FILE>>>` is not written. The next turn resends only the remaining bytes with `mode` `append`. `content` and `body: "raw"` together are rejected. One `home.write` per turn.
+`mode` `create` replaces the file (the default). `mode` `append` adds bytes only after a previous `home.write` of the same path succeeded and the tool result includes `bytes_written`. A reply that declares `body` `"raw"` without a `<<<FILE` body is not written; the next turn puts the entire file in `arguments.content`. A reply whose raw body has no closing `FILE>>>` line is not written either; those bytes are discarded and the next turn sends the entire file in `arguments.content`. `content` and `body: "raw"` together are rejected. One `home.write` per turn. The argument contract is the `home.write` description returned by `agent.list_tools` and `agent.describe_tool`.
 
 Paths for `list` / `read` / `write` must be relative, cannot contain `..`, and
 are checked after filesystem canonicalization. Symlinks that resolve outside

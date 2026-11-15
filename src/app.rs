@@ -47,6 +47,7 @@ use crate::sandbox::SandboxRunner;
 use crate::settings::load_settings;
 use crate::skills::package::catalog_from_settings;
 use crate::tool_api::ToolExecutor;
+use crate::tools::agent_catalog::{AgentCatalog, ExternalCatalogTool};
 use crate::tools::fs_home::HomeFs;
 use crate::tools::local_tools::LocalTools;
 use crate::tools::profile_skills::SkillLibrary;
@@ -672,6 +673,7 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
     if !settings.skill_packages.is_empty() {
         effective.grant_profile_skills();
     }
+    effective.grant_agent_catalog();
     let pipeline_events = EventMcpDispatcher::new(&cfg.event_mcp, mcp.clone(), loggers.mcp.clone())
         .context("compiling Event-MCP handlers")?;
 
@@ -727,9 +729,24 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
     )
     .context("initializing provider")?;
     let skill_library = SkillLibrary::new(settings.skill_packages.clone());
+    let mcp_descriptors = mcp
+        .list_tool_descriptors()
+        .await
+        .context("listing MCP tool descriptors for Agent As MCP")?;
+    let catalog = AgentCatalog::from_effective(
+        &effective,
+        mcp_descriptors.into_iter().map(|tool| ExternalCatalogTool {
+            server: tool.server,
+            name: tool.name,
+            description: tool.description.unwrap_or_default(),
+            input_schema: tool.input_schema,
+        }),
+    );
     let tools = PolicyToolExecutor::new(
         Arc::new(
-            CompositeToolExecutor::new(home, local_tools, mcp).with_skill_library(skill_library),
+            CompositeToolExecutor::new(home, local_tools, mcp)
+                .with_skill_library(skill_library)
+                .with_catalog(catalog),
         ),
         effective.clone(),
     );

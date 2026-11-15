@@ -9,7 +9,8 @@ use thiserror::Error;
 use tracing::{info, instrument, warn};
 
 use super::directive::{
-    approx_json_object_count, content_preview, parse_directive, ToolCallDirective,
+    approx_json_object_count, content_preview, parse_directive, DirectiveFailureKind,
+    ToolCallDirective,
 };
 use super::history::{prune_message_history, push_message, HISTORY_PREFIX_LEN};
 use crate::access::QualifiedTool;
@@ -20,11 +21,15 @@ use crate::event_mcp::{EventMcpError, EventStage, NoopPipelineEvents, PipelineEv
 use crate::limits::{LimitExceeded, LimitsConfig, RunMetrics};
 use crate::logging::{Loggers, LoggingError};
 use crate::output::{RunOutput, StopReason, UsageReport};
+use crate::prompt::AGENT_AS_MCP_BLOCK;
 use crate::provider::{ChatMessage, ChatRole, ModelClient};
 use crate::tool_api::ToolExecutor;
 
 const REJECTED_ASSISTANT: &str =
     r#"{"done":false,"thought":"previous reply was not executed","tool_calls":[],"result":null}"#;
+/// Consecutive replies that declare `body: "raw"` and send no `<<<FILE` body.
+const MISSING_RAW_BODY_STOP_LIMIT: u32 = 3;
+const MISSING_RAW_BODY_STOP: &str = "Execution stopped: file was not written because the reply declared a raw home.write body and did not send file bytes.";
 /// Cap for tool-result JSON shown to the model. Must stay above the default
 /// `home.read` window (`DEFAULT_MAX_CHARS` = 50_000 in `tools::fs_home`) plus
 /// JSON wrapper overhead, otherwise needles near the end of a default window
@@ -177,6 +182,7 @@ impl AgentEngine {
         let mut stop_reason = StopReason::LimitReached;
         let mut diag = RunDiagnostics::default();
         let mut absent_paths: HashSet<String> = HashSet::new();
+        let mut missing_raw_body_streak: u32 = 0;
         let model_prefix = HISTORY_PREFIX_LEN.saturating_add(usize::from(!pinned_files.is_empty()));
 
         // Align hard deadline with RunMetrics wall clock (not composition-root setup time).
@@ -385,9 +391,17 @@ impl AgentEngine {
             }
 
             let parsed = match parse_directive(&completion.content) {
-                Ok(v) => v,
+                Ok(v) => {
+                    missing_raw_body_streak = 0;
+                    v
+                }
                 Err(err) => {
                     diag.parse_failures = diag.parse_failures.saturating_add(1);
+                    if err.kind() == DirectiveFailureKind::MissingRawBody {
+                        missing_raw_body_streak = missing_raw_body_streak.saturating_add(1);
+                    } else {
+                        missing_raw_body_streak = 0;
+                    }
                     let content_len = completion.content.len();
                     let approx_json_objects = approx_json_object_count(&completion.content);
                     let preview = content_preview(&completion.content, 200);
@@ -440,6 +454,11 @@ impl AgentEngine {
                         &history,
                     );
                     prune_message_history(&mut messages, &history, model_prefix);
+                    if missing_raw_body_streak >= MISSING_RAW_BODY_STOP_LIMIT {
+                        final_result = MISSING_RAW_BODY_STOP.to_string();
+                        stop_reason = StopReason::Error;
+                        break;
+                    }
                     continue;
                 }
             };
@@ -1100,7 +1119,8 @@ fn build_user_message(
         format!("Attached input files (read-only context):\n{input_files_context}")
     };
     format!(
-        "Goal: {prompt}\n\n{attached_files}\n\nAvailable tools: {tools}\n\nRespond with one JSON object. No markdown fences.\n\nRequired response shape:\n{{\"done\": bool, \"thought\": string, \"tool_calls\": [{{\"server\":\"home\", \"tool\":\"write\", \"arguments\": {{\"path\":\"out/file.md\", \"content\":\"short text\"}}}}], \"result\": string|null}}\n\nFor BSL, XML, or any file with quotes or longer than a few hundred characters, omit content and set \"body\":\"raw\". The only text allowed after the JSON object is the file itself:\n<<<FILE\nfile bytes\nFILE>>>\nUse \"mode\":\"append\" to continue a file whose previous raw body was cut off. Do not put that file text inside the JSON string.\n\nRules:\n- Use done=false and tool_calls while files still need to be written.\n- Use server=\"home\" for filesystem tools.\n- One home.write per turn.\n- Set done=true only after required files were written.\n- Never describe tool calls in plain text.",
+        "Goal: {prompt}\n\n{attached_files}\n\nAvailable tools: {tools}\n\nRespond with one JSON object. No markdown fences.\n\nRequired response shape:\n{{\"done\": bool, \"thought\": string, \"tool_calls\": [{{\"server\":\"home\", \"tool\":\"write\", \"arguments\": {{\"path\":\"out/file.md\", \"content\":\"file text\"}}}}], \"result\": string|null}}\n\n{agent_as_mcp}\n\nRules:\n- Use done=false and tool_calls while files still need to be written.\n- Use server=\"home\" for filesystem tools.\n- One home.write per turn.\n- Set done=true only after required files were written.\n- Never describe tool calls in plain text.",
+        agent_as_mcp = AGENT_AS_MCP_BLOCK,
         tools = available_tools.join(", ")
     )
 }
@@ -1389,6 +1409,11 @@ mod tests {
         assert!(message.contains("read-only context"));
         assert!(message.contains("input.rs"));
         assert!(message.contains("home.read"));
+        assert!(message.contains("Agent As MCP"));
+        assert!(message.contains("list_tools"));
+        assert!(message.contains("describe_tool"));
+        assert!(!message.contains("few hundred"));
+        assert!(!message.contains("<<<FILE"));
     }
 
     #[tokio::test]
@@ -1900,6 +1925,40 @@ mod tests {
             .join("\n");
         assert!(!second.contains(secret));
         assert!(second.contains("parse_error"));
+    }
+
+    #[tokio::test]
+    async fn three_raw_writes_without_a_file_body_stop_the_run() {
+        let raw = r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/a.bsl","body":"raw"}}],"result":null}"#;
+        let tools = Arc::new(RecordingTools {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let provider = Arc::new(ScriptedProvider {
+            responses: vec![raw.to_string(), raw.to_string(), raw.to_string()],
+            calls: AtomicUsize::new(0),
+            usage: test_usage(),
+        });
+        let engine = AgentEngine::new(provider.clone(), tools.clone(), Loggers::default());
+        let output = engine
+            .run(AgentRunRequest {
+                prompt: "write".to_string(),
+                system_prompt: "system".to_string(),
+                input_files_context: String::new(),
+                limits: test_limits(),
+                history: test_history(),
+                cancel: RunCancel::new(),
+                events: crate::agent::AgentEventTx::noop(),
+                home: std::path::PathBuf::new(),
+                pinned_files: Vec::new(),
+                resume_messages: None,
+            })
+            .await;
+
+        assert_eq!(output.stop_reason, StopReason::Error);
+        assert!(output.result.contains("not written"));
+        assert!(output.result.contains("raw"));
+        assert!(tools.calls.lock().expect("calls").is_empty());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
     }
 
     struct MissingTools {
