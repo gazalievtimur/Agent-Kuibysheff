@@ -460,6 +460,18 @@ impl EffectiveToolPolicy {
         }
     }
 
+    /// Grants `agent.list_tools` and `agent.describe_tool` for every run.
+    ///
+    /// The model reads tool descriptions through these calls. They are not part of
+    /// the access ∩ skills intersection, so a skill does not have to allowlist them.
+    pub fn grant_agent_catalog(&mut self) {
+        for name in ["agent.list_tools", "agent.describe_tool"] {
+            if let Ok(tool) = QualifiedTool::parse(name) {
+                self.tools.insert(tool);
+            }
+        }
+    }
+
     #[must_use]
     pub fn allows(&self, tool: &QualifiedTool) -> bool {
         self.tools.contains(tool)
@@ -1156,14 +1168,20 @@ mod tests {
     }
 
     #[test]
-    fn known_builtins_minus_legacy_is_only_home_run() {
+    fn known_builtins_outside_legacy_are_optional_tools() {
         let known: std::collections::HashSet<_> = known_builtins().collect();
         let legacy: std::collections::HashSet<_> = legacy_builtins().collect();
         let mut diff: Vec<_> = known.difference(&legacy).copied().collect();
         diff.sort_unstable();
         assert_eq!(
             diff,
-            vec!["home.run", "profile.list_skill", "profile.read_skill"]
+            vec![
+                "agent.describe_tool",
+                "agent.list_tools",
+                "home.run",
+                "profile.list_skill",
+                "profile.read_skill",
+            ]
         );
     }
 
@@ -1176,6 +1194,18 @@ mod tests {
         effective.grant_profile_skills();
         assert!(effective.allows(&QualifiedTool::parse("profile.read_skill").unwrap()));
         assert!(effective.allows(&QualifiedTool::parse("profile.list_skill").unwrap()));
+        assert!(effective.allows(&QualifiedTool::parse("home.read").unwrap()));
+    }
+
+    #[test]
+    fn grant_agent_catalog_adds_discovery_without_an_allowlist_entry() {
+        let access = ResolvedAccessPolicy::legacy();
+        let skills = BTreeSet::from([QualifiedTool::parse("home.read").unwrap()]);
+        let mut effective = EffectiveToolPolicy::compile(&access, &skills, []);
+        assert!(!effective.allows(&QualifiedTool::parse("agent.list_tools").unwrap()));
+        effective.grant_agent_catalog();
+        assert!(effective.allows(&QualifiedTool::parse("agent.list_tools").unwrap()));
+        assert!(effective.allows(&QualifiedTool::parse("agent.describe_tool").unwrap()));
         assert!(effective.allows(&QualifiedTool::parse("home.read").unwrap()));
     }
 

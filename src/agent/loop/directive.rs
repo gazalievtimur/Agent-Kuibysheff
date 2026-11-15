@@ -4,9 +4,18 @@ use serde_json::Value;
 pub(crate) const FILE_BEGIN: &str = "<<<FILE";
 pub(crate) const FILE_END: &str = "FILE>>>";
 
-const GENERAL_HINT: &str = "Respond with exactly one JSON object. Previous turn was not executed. Do not repeat the rejected body. Small files use arguments.content. For BSL, XML, or any text with quotes or longer than a few hundred characters, omit content and set arguments.body to \"raw\". After the JSON object write a newline, <<<FILE, a newline, the file bytes, a newline, and FILE>>>. If that body was cut off, resend only the remaining text with mode \"append\" and a complete <<<FILE ... FILE>>> block.";
+const GENERAL_HINT: &str = "Respond with exactly one JSON object. Previous turn was not executed. Do not repeat the rejected body. Put the file text in arguments.content as a JSON string. Use body \"raw\" and a complete <<<FILE newline file-bytes newline FILE>>> block only after a previous home.write of that path via arguments.content was not executed because the JSON object was unterminated.";
 
-const TRUNCATED_HINT: &str = "Previous turn was not executed because the raw file body was cut off (missing FILE>>>). Do not repeat the partial body. Resend the remaining text with home.write arguments {\"body\":\"raw\",\"mode\":\"append\"} and a complete <<<FILE newline file-bytes newline FILE>>> block.";
+/// Why a model reply was rejected before any tool ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectiveFailureKind {
+    /// JSON shape, trailing text, or another protocol mistake.
+    Other,
+    /// `body` is `"raw"` and the reply has no `<<<FILE` body.
+    MissingRawBody,
+    /// `<<<FILE` started and the closing `FILE>>>` line is absent.
+    TruncatedRawBody,
+}
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub(crate) struct ToolCallDirective {
@@ -40,19 +49,30 @@ pub(crate) struct ParsedDirective {
 pub(crate) struct DirectiveParseError {
     message: String,
     hint: String,
+    kind: DirectiveFailureKind,
 }
 
 impl DirectiveParseError {
-    fn new(message: impl Into<String>, hint: impl Into<String>) -> Self {
+    fn new(
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        kind: DirectiveFailureKind,
+    ) -> Self {
         Self {
             message: message.into(),
             hint: hint.into(),
+            kind,
         }
     }
 
     #[must_use]
     pub(crate) fn hint(&self) -> &str {
         &self.hint
+    }
+
+    #[must_use]
+    pub(crate) fn kind(&self) -> DirectiveFailureKind {
+        self.kind
     }
 }
 
@@ -64,7 +84,7 @@ impl std::fmt::Display for DirectiveParseError {
 
 impl From<serde_json::Error> for DirectiveParseError {
     fn from(err: serde_json::Error) -> Self {
-        Self::new(err.to_string(), GENERAL_HINT)
+        Self::new(err.to_string(), GENERAL_HINT, DirectiveFailureKind::Other)
     }
 }
 
@@ -74,6 +94,7 @@ pub(crate) fn parse_directive(raw: &str) -> Result<ParsedDirective, DirectivePar
         return Err(DirectiveParseError::new(
             "expected a JSON object",
             GENERAL_HINT,
+            DirectiveFailureKind::Other,
         ));
     }
     let (json_text, rest) = split_json_object(prepared)?;
@@ -151,6 +172,7 @@ fn split_json_object(input: &str) -> Result<(&str, &str), DirectiveParseError> {
     Err(DirectiveParseError::new(
         "unterminated JSON object",
         GENERAL_HINT,
+        DirectiveFailureKind::Other,
     ))
 }
 
@@ -167,6 +189,7 @@ fn attach_raw_body(directive: &mut ModelDirective, rest: &str) -> Result<(), Dir
                     return Err(DirectiveParseError::new(
                         "home.write cannot set both content and body \"raw\"",
                         GENERAL_HINT,
+                        DirectiveFailureKind::Other,
                     ));
                 }
                 raw_indexes.push(index);
@@ -175,6 +198,7 @@ fn attach_raw_body(directive: &mut ModelDirective, rest: &str) -> Result<(), Dir
                 return Err(DirectiveParseError::new(
                     "home.write body must be \"raw\" when present",
                     GENERAL_HINT,
+                    DirectiveFailureKind::Other,
                 ));
             }
         }
@@ -186,6 +210,7 @@ fn attach_raw_body(directive: &mut ModelDirective, rest: &str) -> Result<(), Dir
             return Err(DirectiveParseError::new(
                 "unexpected text after the JSON object",
                 GENERAL_HINT,
+                DirectiveFailureKind::Other,
             ));
         }
         return Ok(());
@@ -194,15 +219,22 @@ fn attach_raw_body(directive: &mut ModelDirective, rest: &str) -> Result<(), Dir
         return Err(DirectiveParseError::new(
             "only one raw home.write body is allowed per turn",
             GENERAL_HINT,
+            DirectiveFailureKind::Other,
         ));
     }
 
-    let body = extract_raw_body(rest)?;
     let index = raw_indexes[0];
+    let path = directive.tool_calls[index]
+        .arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let body = extract_raw_body(rest, path.as_deref())?;
     let Some(map) = directive.tool_calls[index].arguments.as_object_mut() else {
         return Err(DirectiveParseError::new(
             "home.write arguments must be an object",
             GENERAL_HINT,
+            DirectiveFailureKind::Other,
         ));
     };
     map.remove("body");
@@ -226,22 +258,45 @@ fn strip_closing_fence(rest: &str) -> &str {
     trimmed.strip_suffix("```").unwrap_or(trimmed).trim()
 }
 
-fn extract_raw_body(rest: &str) -> Result<String, DirectiveParseError> {
+fn missing_raw_body_hint(path: Option<&str>) -> String {
+    let path = path.unwrap_or("the requested path");
+    format!(
+        "Previous turn was not executed. home.write of `{path}` set body to \"raw\" but the reply had no <<<FILE body, so no file bytes were written. Put the entire file in arguments.content as a JSON string; escape quotes and newlines by JSON rules. Use body \"raw\", mode create, and a complete <<<FILE newline file-bytes newline FILE>>> block only after a previous home.write of this path via arguments.content was not executed because the JSON object was unterminated."
+    )
+}
+
+fn truncated_raw_body_hint(path: Option<&str>) -> String {
+    let path = path.unwrap_or("the requested path");
+    format!(
+        "Previous turn was not executed. The <<<FILE body for `{path}` had no closing FILE>>> line, so those bytes were discarded and are not on disk. Put the entire file in arguments.content as a JSON string."
+    )
+}
+
+fn extract_raw_body(rest: &str, path: Option<&str>) -> Result<String, DirectiveParseError> {
     let tail = strip_closing_fence_prefix(rest.trim_start());
     let Some(after_marker) = tail.strip_prefix(FILE_BEGIN) else {
         return Err(DirectiveParseError::new(
             "raw home.write is missing the <<<FILE body",
-            TRUNCATED_HINT,
+            missing_raw_body_hint(path),
+            DirectiveFailureKind::MissingRawBody,
         ));
     };
     let after_newline = after_marker
         .strip_prefix("\r\n")
         .or_else(|| after_marker.strip_prefix('\n'))
         .ok_or_else(|| {
-            DirectiveParseError::new("<<<FILE must be followed by a newline", TRUNCATED_HINT)
+            DirectiveParseError::new(
+                "<<<FILE must be followed by a newline",
+                missing_raw_body_hint(path),
+                DirectiveFailureKind::MissingRawBody,
+            )
         })?;
     let content = take_until_end_marker(after_newline).ok_or_else(|| {
-        DirectiveParseError::new("raw file body is missing FILE>>>", TRUNCATED_HINT)
+        DirectiveParseError::new(
+            "raw file body is missing FILE>>>",
+            truncated_raw_body_hint(path),
+            DirectiveFailureKind::TruncatedRawBody,
+        )
     })?;
     Ok(content.to_string())
 }
@@ -368,14 +423,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_directive_missing_end_marker_asks_for_append() {
+    fn parse_directive_missing_file_marker_asks_for_content() {
+        let raw = r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/a.bsl","body":"raw"}}],"result":null}"#;
+        let err = parse_directive(raw).expect_err("missing body");
+        assert_eq!(err.kind(), DirectiveFailureKind::MissingRawBody);
+        assert!(err.to_string().contains("<<<FILE"));
+        assert!(err.hint().contains("arguments.content"));
+        assert!(err.hint().contains("out/a.bsl"));
+        assert!(!err.hint().contains("append"));
+    }
+
+    #[test]
+    fn parse_directive_file_marker_without_newline_is_a_missing_body() {
+        let raw = concat!(
+            r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/a.bsl","body":"raw"}}],"result":null}"#,
+            "\n<<<FILE Процедура",
+        );
+        let err = parse_directive(raw).expect_err("marker without newline");
+        assert_eq!(err.kind(), DirectiveFailureKind::MissingRawBody);
+        assert!(!err.hint().contains("append"));
+    }
+
+    #[test]
+    fn parse_directive_missing_end_marker_discards_partial_body() {
         let raw = concat!(
             r#"{"done":false,"thought":"write","tool_calls":[{"server":"home","tool":"write","arguments":{"path":"out/a.bsl","body":"raw"}}],"result":null}"#,
             "\n<<<FILE\nПроцедура Тест()\n",
         );
         let err = parse_directive(raw).expect_err("truncated");
+        assert_eq!(err.kind(), DirectiveFailureKind::TruncatedRawBody);
         assert!(err.to_string().contains("FILE>>>"));
-        assert!(err.hint().contains("append"));
+        assert!(err.hint().contains("arguments.content"));
+        assert!(err.hint().contains("out/a.bsl"));
+        assert!(!err.hint().contains("append"));
     }
 
     #[test]

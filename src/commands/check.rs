@@ -214,6 +214,7 @@ pub async fn run_async(args: &CheckArgs) -> Result<CheckReport, CheckError> {
     if grant_profile_skills {
         effective.grant_profile_skills();
     }
+    effective.grant_agent_catalog();
     inventory.tools_available = effective.advertised();
     inventory.mcp_gated = mcp_parsed
         .iter()
@@ -739,6 +740,16 @@ mod tests {
                 .any(|i| i.name == "settings" && i.status == CheckStatus::Ok),
             "{report:?}"
         );
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "agent.list_tools"));
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "agent.describe_tool"));
     }
 
     #[test]
@@ -825,6 +836,16 @@ access:
             .tools_available
             .iter()
             .any(|tool| tool == "profile.read_skill"));
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "agent.list_tools"));
+        assert!(report
+            .inventory
+            .tools_available
+            .iter()
+            .any(|tool| tool == "agent.describe_tool"));
     }
 
     #[test]

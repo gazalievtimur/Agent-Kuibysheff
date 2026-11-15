@@ -3,6 +3,13 @@ use std::path::Path;
 use crate::access::{EffectiveToolPolicy, ResolvedAccessPolicy};
 use crate::tools::registry::{self, BuiltinPrompt, BUILTINS};
 
+/// How the model loads tool names, descriptions, and argument schemas.
+///
+/// Present on every model request: the system message and the initial user goal.
+pub const AGENT_AS_MCP_BLOCK: &str = "\
+Agent As MCP:
+Tool names in this prompt are not a contract. Before the first call to any other tool, call server \"agent\", tool \"list_tools\", arguments {}. The result lists every tool this run may call, with server, name, and description. For one tool's argument schema call server \"agent\", tool \"describe_tool\", arguments {\"server\":\"<server>\",\"tool\":\"<tool>\"}. Both return only allowed tools.";
+
 /// Builds the dynamic runtime rules section of the system prompt.
 ///
 /// Only tools that are actually in the effective allowlist are described, so the
@@ -64,11 +71,13 @@ pub fn build_runtime_rules(
 
     if effective.allows_server_tool("home", "write") {
         lines.push("- For coding tasks, write deliverables under out/ and create out/manifest.json according to the orchestrator contract in the supplied rules.".to_string());
-        lines.push("- Put short files in home.write arguments.content. Put BSL, XML, and any text with quotes or longer than a few hundred characters in a raw <<<FILE body after the JSON object (arguments.body = \"raw\"). One home.write per turn.".to_string());
+        lines.push("- One home.write per turn.".to_string());
     }
 
     lines.push("- When the goal is achieved, return done=true and fill `result`.".to_string());
     lines.push("- Return strict JSON and never use markdown.".to_string());
+    lines.push(String::new());
+    lines.push(AGENT_AS_MCP_BLOCK.to_string());
 
     lines.join("\n")
 }
@@ -122,8 +131,7 @@ fn prompt_line_for(
             ))
         }
         BuiltinPrompt::HomeWrite => Some(
-            "- home.write {\"path\":\"out/file.md\",\"content\":\"short text\"} for a short file. For BSL, XML, or any text with quotes or longer than a few hundred characters, omit content and use {\"path\":\"out/src/Module.bsl\",\"body\":\"raw\",\"mode\":\"create\"}. After the JSON object write <<<FILE, a newline, the file bytes, a newline, and FILE>>>. Use mode append when a previous raw body was cut off."
-                .to_string(),
+            "- home.write {\"path\":\"out/file.md\",\"content\":\"file text\"}".to_string(),
         ),
         BuiltinPrompt::HomeRead => Some(format!(
             "- {} {{\"path\":\"relative/path\",\"offset\":0,\"max_chars\":50000}}. Reads a character window from the agent home directory. If truncated, continue with next_offset.",
@@ -266,6 +274,10 @@ mod tests {
             !rules.contains("home.run sandbox contract"),
             "sandbox contract only when home.run is advertised: {rules}"
         );
+        assert!(
+            rules.contains("Agent As MCP"),
+            "Agent As MCP is part of every runtime prompt: {rules}"
+        );
     }
 
     #[test]
@@ -281,9 +293,16 @@ mod tests {
         assert!(rules.contains("home.read"));
         assert!(rules.contains("home.write"));
         assert!(
-            rules.contains("<<<FILE"),
-            "home.write must teach the raw file body: {rules}"
+            rules.contains("Agent As MCP"),
+            "every runtime prompt must explain Agent As MCP: {rules}"
         );
+        assert!(rules.contains("list_tools"));
+        assert!(rules.contains("describe_tool"));
+        assert!(
+            !rules.contains("<<<FILE"),
+            "the raw body protocol stays in the tool description: {rules}"
+        );
+        assert!(!rules.contains("few hundred"), "{rules}");
         assert!(rules.contains("local_tools.search_docs"));
         assert!(rules.contains("local_tools.read_file"));
         assert!(!rules.contains("home.run"));

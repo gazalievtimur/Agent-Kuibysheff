@@ -9,6 +9,7 @@ pub enum BuiltinHandlerId {
     Home,
     LocalTools,
     Profile,
+    Agent,
 }
 
 /// How the tool is described in the runtime prompt fragment.
@@ -20,7 +21,7 @@ pub enum BuiltinPrompt {
     HomeRun,
     /// `home.read` — windowed home file read with next_offset pagination.
     HomeRead,
-    /// `home.write` — short `content` or a raw body after the JSON object.
+    /// `home.write` — file text in `arguments.content`.
     HomeWrite,
     /// `local_tools.read_file` — example mentions the workspace root.
     WorkspaceReadFile,
@@ -51,6 +52,9 @@ impl ToolDescriptor {
     }
 }
 
+/// How `home.write` is described to the model through Agent As MCP.
+pub const HOME_WRITE_DESCRIPTION: &str = "Write a file under the agent home directory. Put the entire file text in arguments.content as one JSON string; escape quotes and newlines by JSON rules. File type does not select the field. Omit content and set body to \"raw\" only after a previous home.write of the same path was not executed because the JSON object was unterminated. Then mode is create, and after the JSON object write a newline, <<<FILE, a newline, the file bytes, a newline, and FILE>>>. Use mode append only after a previous home.write of the same path succeeded and the tool result includes bytes_written. A rejected turn writes nothing. One home.write per turn. Setting content and body \"raw\" together is rejected.";
+
 /// Canonical built-in catalog. Policy, prompt, and availability derive from this slice.
 pub const BUILTINS: &[ToolDescriptor] = &[
     ToolDescriptor {
@@ -79,7 +83,7 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         name: "home.write",
         server: "home",
         tool: "write",
-        description: "Write a file under the agent home directory. Short text goes in content. BSL, XML, and any text with quotes or longer than a few hundred characters uses body \"raw\" plus a <<<FILE block after the JSON object. mode is create (default) or append.",
+        description: HOME_WRITE_DESCRIPTION,
         schema_json: r#"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"body":{"type":"string","enum":["raw"]},"mode":{"type":"string","enum":["create","append"]}},"required":["path"],"additionalProperties":false}"#,
         legacy_default: true,
         requires_programs: false,
@@ -142,6 +146,28 @@ pub const BUILTINS: &[ToolDescriptor] = &[
         prompt: BuiltinPrompt::StaticArgs(
             r#"{"name":"research","path":"scripts/example.py","offset":0,"max_chars":50000}"#,
         ),
+    },
+    ToolDescriptor {
+        name: "agent.list_tools",
+        server: "agent",
+        tool: "list_tools",
+        description: "List tools this run may call. Each entry has server, name, and description. Denied tools are omitted.",
+        schema_json: r#"{"type":"object","properties":{},"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Agent,
+        prompt: BuiltinPrompt::StaticArgs("{}"),
+    },
+    ToolDescriptor {
+        name: "agent.describe_tool",
+        server: "agent",
+        tool: "describe_tool",
+        description: "Return one allowed tool's description and inputSchema. A denied tool is rejected and its schema is not returned.",
+        schema_json: r#"{"type":"object","properties":{"server":{"type":"string"},"tool":{"type":"string"}},"required":["server","tool"],"additionalProperties":false}"#,
+        legacy_default: false,
+        requires_programs: false,
+        handler: BuiltinHandlerId::Agent,
+        prompt: BuiltinPrompt::StaticArgs(r#"{"server":"home","tool":"write"}"#),
     },
 ];
 
@@ -225,7 +251,13 @@ mod tests {
         diff.sort_unstable();
         assert_eq!(
             diff,
-            vec!["home.run", "profile.list_skill", "profile.read_skill"]
+            vec![
+                "agent.describe_tool",
+                "agent.list_tools",
+                "home.run",
+                "profile.list_skill",
+                "profile.read_skill",
+            ]
         );
     }
 
@@ -234,6 +266,7 @@ mod tests {
         assert!(is_builtin_server("home"));
         assert!(is_builtin_server("local_tools"));
         assert!(is_builtin_server("profile"));
+        assert!(is_builtin_server("agent"));
         assert!(!is_builtin_server("docs"));
     }
 
@@ -251,6 +284,8 @@ mod tests {
                 "local_tools.read_file",
                 "profile.list_skill",
                 "profile.read_skill",
+                "agent.list_tools",
+                "agent.describe_tool",
             ]
         );
         for name in &names {

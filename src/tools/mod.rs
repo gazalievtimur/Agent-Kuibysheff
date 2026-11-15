@@ -3,6 +3,7 @@
 //! Stable: [`CompositeToolExecutor`], [`PolicyToolExecutor`], [`ToolError`], and
 //! [`registry`] descriptors. Concrete error submodule stays `pub(crate)`.
 
+pub(crate) mod agent_catalog;
 pub(crate) mod error;
 pub mod fs_home;
 pub mod local_tools;
@@ -22,6 +23,7 @@ use tracing::warn;
 use crate::access::EffectiveToolPolicy;
 use crate::tool_api::ToolExecutor;
 
+use self::agent_catalog::AgentCatalog;
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
 use self::profile_skills::SkillLibrary;
@@ -31,6 +33,7 @@ pub struct CompositeToolExecutor {
     home: HomeFs,
     local_tools: LocalTools,
     skills: SkillLibrary,
+    catalog: AgentCatalog,
     external: Arc<dyn ToolExecutor>,
 }
 
@@ -41,6 +44,7 @@ impl CompositeToolExecutor {
             home,
             local_tools,
             skills: SkillLibrary::default(),
+            catalog: AgentCatalog::default(),
             external,
         }
     }
@@ -49,6 +53,13 @@ impl CompositeToolExecutor {
     #[must_use]
     pub fn with_skill_library(mut self, skills: SkillLibrary) -> Self {
         self.skills = skills;
+        self
+    }
+
+    /// Attaches the Agent As MCP snapshot for this run.
+    #[must_use]
+    pub(crate) fn with_catalog(mut self, catalog: AgentCatalog) -> Self {
+        self.catalog = catalog;
         self
     }
 }
@@ -77,6 +88,7 @@ impl ToolExecutor for CompositeToolExecutor {
                 .call(tool, arguments)
                 .await
                 .map_err(ToolError::from),
+            Some(BuiltinHandlerId::Agent) => self.catalog.call(tool, arguments),
             None => self.external.call_tool(server, tool, arguments).await,
         }
     }
