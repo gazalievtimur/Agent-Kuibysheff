@@ -7,10 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-16
+
+### Added
+
+- Agent As MCP: every run grants `agent.list_tools` and `agent.describe_tool`.
+  The system prompt and the first user message tell the model to read that
+  catalog before calling another tool. Denied tools are omitted, and
+  `describe_tool` does not return their schemas.
+- Optional provider `reasoning_effort` and `thinking`. They are sent only when
+  those provider fields are set, and importing a profile keeps the live
+  provider unless `--replace-runtime` is passed.
+- The `home.run` sandbox contract is injected into runtime rules for every
+  entry point.
+- Allowlisted programs such as `git` run from their install tree inside the
+  home sandbox. The working folder is granted, child processes are bounded,
+  and `home.run` gets host network without mounting the user profile.
+
 ### Changed
 
-- Migrate `agent-client-protocol` from 3.x to 5.x (`Agent.v1()` / `Client.v1()`,
-  `v1::schema`). The wire protocol stays ACP schema v1.
+- `home.write` puts the entire file in `arguments.content`. A raw `<<<FILE`
+  body is only a retry after that path's JSON object was unterminated, and
+  `mode: append` is only after a previous write of that path succeeded and
+  returned `bytes_written`.
+- Migrate `agent-client-protocol` from 3.x to 5.1 (`Agent.v1()` /
+  `Client.v1()`, `v1::schema`). The wire protocol stays ACP schema v1.
+
+### Fixed
+
+- A missing raw `home.write` body is no longer treated as a truncated append.
+  Three consecutive missing-marker failures stop the run.
+- Default `home.read` windows stay visible to the model. The tool-result cap
+  keeps both the head and the tail, so a marker near the end of a large window
+  is not dropped.
+- Sandboxed `git` can resolve, read, and list its working directory, open the
+  null device, and fork. It runs through a ProgramData junction. `setrlimit`
+  and junction ACL errors fail closed, and `max_processes: 0` is rejected.
+- Remove redundant `#[must_use]` so the workspace builds with Clippy 1.100.
 
 ## [0.3.1] - 2026-11-04
 
