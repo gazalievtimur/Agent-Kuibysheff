@@ -265,6 +265,8 @@ Studio handoff: [docs/UI.md](docs/UI.md).
 
 ## Documentation
 
+Russian guide for operators and integrators: [docs/ru/README.md](docs/ru/README.md).
+
 Full index: [docs/README.md](docs/README.md).
 
 Security reports: [SECURITY.md](SECURITY.md). Support policy: [SUPPORT.md](SUPPORT.md).
