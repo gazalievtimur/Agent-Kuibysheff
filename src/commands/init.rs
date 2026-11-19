@@ -317,9 +317,12 @@ logging:
     struct AccessOnly {
         access: AccessPolicyConfig,
     }
-    match serde_yaml::to_string(&AccessOnly {
-        access: AccessPolicyConfig::minimal_profile(),
-    }) {
+    let mut access = AccessPolicyConfig::minimal_profile();
+    access
+        .tools
+        .builtins
+        .extend(crate::tools::registry::config_tool_names().map(str::to_string));
+    match serde_yaml::to_string(&AccessOnly { access }) {
         Ok(yaml) => body.push_str(&yaml),
         Err(_) => body.push_str(
             "access:\n  tools:\n    builtins:\n      - home.list\n      - home.read\n      - home.write\n  filesystem:\n    home:\n      read: [\"in\", \"out\"]\n      write: [\"out\"]\n",
@@ -409,6 +412,44 @@ mod tests {
         assert!(!settings.skills_source.is_empty());
         assert!(result.target_dir.join(AGENT_CONFIG_FILE).is_file());
         let _ = load_config(&result.target_dir.join(AGENT_CONFIG_FILE)).expect("load cfg");
+    }
+
+    #[test]
+    fn starter_profile_can_configure_itself() {
+        let dir = tempdir().expect("tempdir");
+        let result = run(&args(dir.path(), "demo", false)).expect("init");
+        let (cfg, _) = load_config(&result.target_dir.join(AGENT_CONFIG_FILE)).expect("cfg");
+        let builtins = &cfg.access.expect("access").tools.builtins;
+        let settings = load_settings(&result.target_dir).expect("settings");
+        let catalog =
+            crate::skills::dsl::SkillsCatalog::parse(&settings.skills_source).expect("dsl");
+        let configure = catalog
+            .skills
+            .iter()
+            .find(|skill| skill.name == "configure")
+            .expect("configure skill");
+        for name in crate::tools::registry::config_tool_names() {
+            assert!(
+                builtins.iter().any(|tool| tool == name),
+                "template access missing {name}"
+            );
+            assert!(
+                configure.allowed_tools.iter().any(|tool| tool == name),
+                "configure skill missing {name}"
+            );
+        }
+
+        let rendered = render_agent_config(&ConfigAnswers::default());
+        let path = dir.path().join("rendered.yaml");
+        std::fs::write(&path, rendered).expect("write");
+        let (cfg, _) = load_config(&path).expect("rendered");
+        let builtins = &cfg.access.expect("access").tools.builtins;
+        for name in crate::tools::registry::config_tool_names() {
+            assert!(
+                builtins.iter().any(|tool| tool == name),
+                "interactive render missing {name}"
+            );
+        }
     }
 
     #[test]

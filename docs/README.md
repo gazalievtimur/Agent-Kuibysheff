@@ -2,6 +2,8 @@
 
 User-facing docs for `agent_Kuibysheff`.
 
+Russian guide: [ru/README.md](ru/README.md).
+
 ## Core
 
 | Document | Description |

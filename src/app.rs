@@ -746,7 +746,11 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         Arc::new(
             CompositeToolExecutor::new(home, local_tools, mcp)
                 .with_skill_library(skill_library)
-                .with_catalog(catalog),
+                .with_catalog(catalog)
+                .with_config(crate::tools::config_edit::ConfigEditor::new(
+                    args.project_root.clone(),
+                    args.agent_id.clone(),
+                )),
         ),
         effective.clone(),
     );

@@ -17,6 +17,9 @@ ignore = [
     # serde_yaml 0.9 → unsafe-libyaml; no safe upgrade until we migrate parsers
     # (e.g. serde-saphyr). Issued to the advisory DB 2026-10-12.
     { id = "RUSTSEC-2024-0449", reason = "blocked on serde_yaml → serde-saphyr migration (revisit by 2026-12-31)" },
+    # chrono is pulled in by a2a / pbjson-types. RUSTSEC-2026-0543 says every
+    # version is unmaintained and there is no upgrade. Revisit if a2a drops it.
+    { id = "RUSTSEC-2026-0543", reason = "transitive chrono via a2a; no safe upgrade (revisit by 2026-12-31)" },
 ]
 
 [licenses]
