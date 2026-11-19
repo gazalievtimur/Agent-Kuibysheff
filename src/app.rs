@@ -18,7 +18,7 @@ use crate::access::{
 };
 use crate::acp;
 use crate::agent::{
-    generate_run_id, write_progress_line, AgentEngine, AgentEventTx, AgentRunRequest,
+    generate_run_id, write_progress_line, AgentEngine, AgentEvent, AgentEventTx, AgentRunRequest,
     ProgressEvent, RunCancel,
 };
 use crate::billing::{
@@ -654,19 +654,28 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         })
         .cloned()
         .collect();
-    let mcp = Arc::new(
-        McpRegistry::connect_all_isolated(
-            &regular_mcp_configs,
-            loggers.mcp.clone(),
-            run_cancel.token().clone(),
-            crate::mcp::McpIsolationContext {
-                project_root: args.project_root.clone(),
-                agent_id: args.agent_id.clone(),
-            },
-        )
-        .await
-        .context("connecting MCP servers")?,
-    );
+    let mcp = match McpRegistry::connect_all_isolated(
+        &regular_mcp_configs,
+        loggers.mcp.clone(),
+        run_cancel.token().clone(),
+        crate::mcp::McpIsolationContext {
+            project_root: args.project_root.clone(),
+            agent_id: args.agent_id.clone(),
+        },
+    )
+    .await
+    {
+        Ok(registry) => {
+            for notice in registry.skipped_notices() {
+                args.events.emit(AgentEvent::Thought(notice.clone()));
+            }
+            Arc::new(registry)
+        }
+        Err(err) => {
+            warn!(error = %err, "required MCP server failed to connect");
+            return Err(anyhow::anyhow!(err.required_failure_message()));
+        }
+    };
     let mcp_tools = parse_tool_list(mcp.available_tools())
         .map_err(|reason| anyhow::anyhow!("parsing MCP tool names: {reason}"))?;
     let mut effective = EffectiveToolPolicy::compile(&access_policy, &skills_allowed, mcp_tools);
@@ -696,7 +705,11 @@ pub async fn run_agent_prompt(args: AgentPromptArgs) -> Result<RunOutput> {
         )
         .await
         {
-            Ok(registry) => Some(Arc::new(registry)),
+            Ok(registry) if registry.skipped_notices().is_empty() => Some(Arc::new(registry)),
+            Ok(registry) => {
+                registry.shutdown().await;
+                None
+            }
             Err(error) => {
                 warn!(
                     server = server_name,

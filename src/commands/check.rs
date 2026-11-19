@@ -336,6 +336,15 @@ async fn check_mcp(
         )
         .await
         {
+            Ok(registry) if !registry.skipped_notices().is_empty() => {
+                let detail = registry.skipped_notices().join(" ");
+                items.push(CheckItem {
+                    name,
+                    status: CheckStatus::Warn,
+                    detail,
+                });
+                registry.shutdown().await;
+            }
             Ok(registry) => {
                 let tools = registry.available_tools();
                 let missing_billing_target = cfg
@@ -371,11 +380,12 @@ async fn check_mcp(
                 items.push(CheckItem {
                     name,
                     status: CheckStatus::Fail,
-                    detail: format!("{transport}: {err}"),
+                    detail: format!("{transport}: {}", err.required_failure_message()),
                 });
-                inventory
-                    .mcp_failed
-                    .push((server.name.clone(), format!("{transport}: {err}")));
+                inventory.mcp_failed.push((
+                    server.name.clone(),
+                    format!("{transport}: {}", err.required_failure_message()),
+                ));
             }
         }
     }

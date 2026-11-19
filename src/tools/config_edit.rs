@@ -703,6 +703,7 @@ fn build_mcp_add(args: &McpAddArgs) -> Result<McpServerConfig, ToolError> {
         (Some(command), None) => Ok(McpServerConfig {
             name,
             timeout_ms,
+            required: true,
             transport: McpTransport::Stdio(McpStdioConfig {
                 command: command.to_string(),
                 args: args.args.clone().unwrap_or_default(),
@@ -719,6 +720,7 @@ fn build_mcp_add(args: &McpAddArgs) -> Result<McpServerConfig, ToolError> {
             Ok(McpServerConfig {
                 name,
                 timeout_ms,
+                required: true,
                 transport: McpTransport::Http(McpHttpConfig {
                     url: url.to_string(),
                     headers: HashMap::new(),
@@ -754,6 +756,7 @@ fn build_mcp_set(
         return Ok(McpServerConfig {
             name: existing.name.clone(),
             timeout_ms,
+            required: existing.required,
             transport: McpTransport::Http(McpHttpConfig {
                 url: url.to_string(),
                 headers,
@@ -769,6 +772,7 @@ fn build_mcp_set(
         return Ok(McpServerConfig {
             name: existing.name.clone(),
             timeout_ms,
+            required: existing.required,
             transport: McpTransport::Stdio(McpStdioConfig {
                 command: command.to_string(),
                 args: kept.args,
@@ -783,6 +787,7 @@ fn build_mcp_set(
             Ok(McpServerConfig {
                 name: existing.name.clone(),
                 timeout_ms,
+                required: existing.required,
                 transport: McpTransport::Stdio(McpStdioConfig {
                     command: stdio.command.clone(),
                     args: kept.args,
@@ -800,6 +805,7 @@ fn build_mcp_set(
             Ok(McpServerConfig {
                 name: existing.name.clone(),
                 timeout_ms,
+                required: existing.required,
                 transport: McpTransport::Http(http.clone()),
             })
         }

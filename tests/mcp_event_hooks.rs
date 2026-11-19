@@ -18,6 +18,7 @@ fn fixture_server(name: &str, handler_id: &str) -> McpServerConfig {
     McpServerConfig {
         name: name.to_string(),
         timeout_ms: 5_000,
+        required: true,
         transport: McpTransport::Stdio(McpStdioConfig {
             command: fixture_bin(),
             args: vec!["event".to_string()],

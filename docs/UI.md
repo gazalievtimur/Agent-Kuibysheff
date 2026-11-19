@@ -90,8 +90,16 @@ Sidebar: agent list, Refresh, New agent, Import.
 | **MCP** | Discover tools from **saved** config; pick server/tool; JSON args (stubbed from `inputSchema`); Call; Pretty/Raw/Copy result. |
 | **Check** | Same probes as `kbshff check`; inventory (tools, MCP connected/failed/gated). |
 | **Test run** | One active run per studio process: prompt, files, home, limits; **Start run** / **Продолжить**; SSE events; `RunOutput`; log tails; `homes/<id>/out/` preview. |
+| **Chat** | Message thread for the same single run. Send starts `kbshff run` with `--save-chat-history`; later messages use `--continue-from` on `homes/<id>/logs/chat_history.json`. **New chat** deletes that file. |
 
 MCP card **Test** jumps to the MCP tab and discovers that server.
+
+### Chat
+
+- Uses the **saved** profile (Save Configure first) and the default home `homes/<agent>`.
+- The thread is schema 2 `chat_history.json`: system lines stay collapsed; user and assistant are separate bubbles. While a turn runs, thought and tool events from SSE appear under the thread, then the thread is replaced from `GET /api/agents/:id/chat`.
+- **New chat** is `DELETE /api/agents/:id/chat`. The next Send does not pass `continue_from_chat`.
+- Chat and Test run share one active run. A second Send or Start run returns HTTP 409.
 
 ### Configure → MCP forms
 
@@ -143,6 +151,8 @@ Mutating routes need `X-Kbshff-Studio: 1`. Errors: `{ "error": "..." }` with app
 | POST | `/api/agents/:id/mcp/discover` | Body optional `{ "server": "name" }` → `{ servers: [{ name, tools, error? }] }` tools include `name`, `description?`, `input_schema` |
 | POST | `/api/agents/:id/mcp/call` | `{ server, tool, arguments }` → `{ server, tool, result }` |
 | POST | `/api/agents/:id/runs` | Start or continue a single run (`continue_from_chat`) |
+| GET | `/api/agents/:id/chat` | Saved transcript for the default home. Missing file → `{ messages: [] }`. |
+| DELETE | `/api/agents/:id/chat` | Remove that `chat_history.json`. Studio header required. 409 while a run is active. |
 | GET | `/api/runs/:id` | Run status / output |
 | GET | `/api/runs/:id/events` | SSE |
 | POST | `/api/runs/:id/cancel` | Cancel |

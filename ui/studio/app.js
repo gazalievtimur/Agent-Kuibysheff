@@ -16,6 +16,10 @@
     runEvents: { items: [], view: "pretty" },
     currentRunId: null,
     eventSource: null,
+    runBusy: false,
+    chatRunAgent: null,
+    chatEpoch: 0,
+    chat: { messages: [], live: [], hasHistory: false, holdLocal: false },
     skillBodyName: "",
     testRunDrafts: {},
   };
@@ -166,12 +170,18 @@
     setStatus($("mcp-discover-status"), "");
     setStatus($("mcp-call-status"), "");
     setStatus($("run-status"), "");
+    if (!(state.runBusy && state.chatRunAgent === id)) {
+      state.chat.holdLocal = false;
+      state.chatEpoch += 1;
+      setStatus($("chat-status"), "");
+    }
     $("empty-state").classList.add("hidden");
     $("workspace").classList.remove("hidden");
     $("agent-title").textContent = id;
     await refreshAgents();
     await loadAll();
     await refreshOut();
+    await loadChat();
   }
 
   async function loadAll() {
@@ -393,6 +403,7 @@
         url: s.url || "",
         headers: s.headers && typeof s.headers === "object" ? { ...s.headers } : {},
         timeout_ms: s.timeout_ms ?? 20000,
+        required: s.required !== false,
         keep_auth: isSetMarker(s.auth) || (s.auth && typeof s.auth === "object"),
         auth: isSetMarker(s.auth) ? { set: true } : s.auth || null,
       };
@@ -414,6 +425,7 @@
         url: card.querySelector("[data-f='url']").value.trim(),
         headers: linesToSecretMap(card.querySelector("[data-f='headers']").value),
         timeout_ms: Number(card.querySelector("[data-f='timeout_ms']").value) || 20000,
+        required: !!card.querySelector("[data-f='required']")?.checked,
         keep_auth: keepAuth,
         auth: keepAuth ? { set: true } : null,
       };
@@ -428,6 +440,7 @@
         url: server.url,
         timeout_ms: server.timeout_ms,
       };
+      if (server.required === false) wire.required = false;
       if (server.headers && Object.keys(server.headers).length) {
         wire.headers = server.headers;
       }
@@ -442,6 +455,7 @@
       command: server.command,
       timeout_ms: server.timeout_ms,
     };
+    if (server.required === false) wire.required = false;
     if (server.args && server.args.length) wire.args = server.args;
     if (server.env && Object.keys(server.env).length) wire.env = server.env;
     if (server.cwd) wire.cwd = server.cwd;
@@ -478,6 +492,10 @@
         </header>
         <div class="mcp-grid">
           <label>Name <input data-f="name" type="text" value="${escapeAttr(s.name)}" /></label>
+          <label class="row">
+            <input data-f="required" type="checkbox"${s.required === false ? "" : " checked"} title="When off, a connection failure does not stop the run." />
+            Required
+          </label>
           <label>Transport
             <select data-f="transport">
               <option value="stdio"${!isHttp ? " selected" : ""}>stdio</option>
@@ -638,9 +656,12 @@
     document.querySelectorAll(".tab").forEach((t) => {
       t.classList.toggle("active", t.dataset.tab === name);
     });
-    ["config", "mcp", "check", "run"].forEach((tab) => {
+    ["config", "mcp", "check", "run", "chat"].forEach((tab) => {
       $(`tab-${tab}`).classList.toggle("hidden", tab !== name);
     });
+    if (name === "chat") {
+      loadChat().catch((err) => setStatus($("chat-status"), err.message, false));
+    }
   }
 
   function flatMcpTools() {
@@ -1288,9 +1309,409 @@
   }
 
   function setRunBusy(busy) {
+    state.runBusy = busy;
     $("btn-run").disabled = busy;
     $("btn-continue").disabled = busy;
     $("btn-cancel").disabled = !busy;
+    $("btn-chat-send").disabled = busy;
+    $("btn-chat-new").disabled = busy;
+    $("btn-chat-cancel").disabled = !busy;
+    $("chat-input").disabled = busy;
+  }
+
+  function historyHasPrompt(messages, prompt) {
+    const goal = `Goal: ${prompt}`;
+    return (messages || []).some((message) => {
+      if (!message || message.role !== "user") return false;
+      const content = String(message.content || "");
+      return content === prompt || content.startsWith(goal);
+    });
+  }
+
+  function friendlyRunError(text) {
+    const raw = String(text || "").replace(/\s+/g, " ").trim();
+    if (!raw) return "";
+    const server = raw.match(/server `([^`]+)`/);
+    const name = server ? server[1] : "MCP";
+    const down = /os error 10061|connection refused|tcp connect|error sending request/i.test(raw);
+    if (/connecting MCP servers/i.test(raw) || /MCP server `/i.test(raw)) {
+      if (down) {
+        return `MCP server ${name} is not running. The run stopped because this server is required.`;
+      }
+      if (/is not running|is unavailable|is optional/i.test(raw)) return raw;
+    }
+    return raw.length > 280 ? `${raw.slice(0, 277)}…` : raw;
+  }
+
+  function runOutcomeText(status) {
+    if (!status) return "";
+    if (status.error) return friendlyRunError(status.error);
+    const output = status.output;
+    if (!output) return "";
+    if (typeof output === "string") return friendlyRunError(output);
+    if (output.result) return friendlyRunError(output.result);
+    return "";
+  }
+
+  async function loadChat(options = {}) {
+    if (!state.agentId) return;
+    if (!options.force && state.chat.holdLocal) return;
+    if (!options.force && state.runBusy && state.chatRunAgent === state.agentId) return;
+    const epoch = state.chatEpoch;
+    const agentId = state.agentId;
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/chat`);
+    if (agentId !== state.agentId || epoch !== state.chatEpoch) return;
+    if (!options.force && state.chat.holdLocal) return;
+    state.chat.messages = Array.isArray(data.messages) ? data.messages : [];
+    state.chat.live = [];
+    state.chat.hasHistory = state.chat.messages.length > 0;
+    state.chat.meta = {
+      result: data.result,
+      stop_reason: data.stop_reason,
+      usage: data.usage,
+    };
+    renderChat();
+  }
+
+  function renderChat() {
+    const root = $("chat-thread");
+    root.innerHTML = "";
+    const messages = state.chat.messages || [];
+    if (!messages.length && !(state.chat.live || []).length) {
+      const empty = document.createElement("p");
+      empty.className = "chat-empty";
+      empty.textContent = "No messages yet. Send one to start a run.";
+      root.appendChild(empty);
+    }
+    const live = state.chat.live || [];
+    const embeddedThoughts = new Set();
+    messages.forEach((message) => {
+      if (!message || message.role !== "assistant") return;
+      const directive = parseAgentReply(message.content);
+      const thought = directive && typeof directive.thought === "string" ? directive.thought.trim() : "";
+      if (thought) embeddedThoughts.add(thought);
+    });
+    const setup = [];
+    const trailing = [];
+    live.forEach((event) => {
+      if (!event || event.type === "done") return;
+      const text = typeof event.text === "string" ? event.text.trim() : "";
+      if (event.type === "thought" && embeddedThoughts.has(text)) return;
+      if (isSetupNotice(event)) setup.push(event);
+      else trailing.push(event);
+    });
+    const split = splitAtLatestPrompt(messages);
+    messages.slice(0, split).forEach((message) => root.appendChild(renderChatMessage(message)));
+    setup.forEach((event) => {
+      const node = renderChatLive(event);
+      if (node) root.appendChild(node);
+    });
+    messages.slice(split).forEach((message) => root.appendChild(renderChatMessage(message)));
+    trailing.forEach((event) => {
+      const node = renderChatLive(event);
+      if (node) root.appendChild(node);
+    });
+    const meta = state.chat.meta;
+    if (meta && meta.stop_reason && !state.runBusy) {
+      const line = document.createElement("p");
+      line.className = "chat-tool";
+      const usage = meta.usage && meta.usage.total_tokens != null ? ` · ${meta.usage.total_tokens} tokens` : "";
+      line.textContent = `${meta.stop_reason}${usage}`;
+      root.appendChild(line);
+    }
+    root.scrollTop = root.scrollHeight;
+  }
+
+  function renderChatMessage(message) {
+    const role = message && message.role ? String(message.role) : "assistant";
+    const content = message && message.content != null ? String(message.content) : "";
+    if (role === "system") {
+      const details = document.createElement("details");
+      details.className = "chat-msg system";
+      const summary = document.createElement("summary");
+      summary.textContent = "system";
+      const body = document.createElement("div");
+      body.textContent = content;
+      details.append(summary, body);
+      return details;
+    }
+    if (role === "user") {
+      const block = document.createElement("div");
+      block.className = "chat-msg user";
+      block.textContent = displayUserText(content);
+      return block;
+    }
+    return renderAssistantReply(content);
+  }
+
+  function isSetupNotice(event) {
+    const text = event && typeof event.text === "string" ? event.text : "";
+    return event && event.type === "thought" && /is optional|is not running|is unavailable/i.test(text);
+  }
+
+  function isToolResultMessage(message) {
+    const text = String((message && message.content) || "").trim();
+    return text.startsWith("{") && text.includes('"tool_result"');
+  }
+
+  function splitAtLatestPrompt(messages) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i] && messages[i].role === "user" && !isToolResultMessage(messages[i])) {
+        return i + 1;
+      }
+    }
+    return 0;
+  }
+
+  function displayUserText(content) {
+    const match = String(content).match(/^Goal: ([\s\S]*?)\n\nAttached input files:/);
+    return match ? match[1].trim() : content;
+  }
+
+  function parseAgentReply(content) {
+    const trimmed = String(content).trim();
+    if (!trimmed.startsWith("{")) return null;
+    let value;
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    if (!("done" in value) && !Array.isArray(value.tool_calls)) return null;
+    return value;
+  }
+
+  function renderAssistantReply(content) {
+    const directive = parseAgentReply(content);
+    const block = document.createElement("div");
+    block.className = "chat-msg assistant";
+    if (!directive) {
+      block.textContent = content;
+      return block;
+    }
+    const result = typeof directive.result === "string" ? directive.result.trim() : "";
+    const thought = typeof directive.thought === "string" ? directive.thought.trim() : "";
+    const calls = Array.isArray(directive.tool_calls) ? directive.tool_calls : [];
+    if (thought && thought !== result) {
+      const details = document.createElement("details");
+      details.className = "chat-thought-fold";
+      const summary = document.createElement("summary");
+      summary.textContent = "Thought";
+      const note = document.createElement("p");
+      note.textContent = thought;
+      details.append(summary, note);
+      block.appendChild(details);
+    }
+    calls.forEach((call) => {
+      if (!call || typeof call !== "object") return;
+      const line = document.createElement("p");
+      line.className = "chat-tool";
+      const server = call.server ? String(call.server) : "";
+      const tool = call.tool ? String(call.tool) : "";
+      line.textContent = server && tool ? `${server}.${tool}` : tool || server || "tool";
+      block.appendChild(line);
+    });
+    if (result) {
+      const body = document.createElement("div");
+      body.className = "chat-reply";
+      body.textContent = result;
+      block.appendChild(body);
+    }
+    if (!block.childNodes.length) {
+      block.textContent = content;
+    }
+    return block;
+  }
+
+  function renderChatLive(event) {
+    const type = event && event.type;
+    if (!type || type === "done") return null;
+    if (type === "thought") {
+      const line = document.createElement("p");
+      line.className = "chat-thought";
+      line.textContent = event.text || "";
+      return line;
+    }
+    if (type === "tool_start") {
+      const line = document.createElement("p");
+      line.className = "chat-tool";
+      line.textContent = `tool ${event.server || ""}/${event.tool || ""}`;
+      return line;
+    }
+    if (type === "tool_finish") {
+      const line = document.createElement("p");
+      line.className = event.ok === false ? "chat-tool fail" : "chat-tool";
+      line.textContent = event.ok === false ? "tool failed" : "tool finished";
+      return line;
+    }
+    if (type === "message") {
+      return renderChatMessage({ role: "assistant", content: event.text || "" });
+    }
+    if (type === "usage_summary") return null;
+    const line = document.createElement("p");
+    line.className = "chat-tool";
+    line.textContent = String(type);
+    return line;
+  }
+
+  async function sendChat() {
+    const text = $("chat-input").value.trim();
+    if (!text || !state.agentId) return;
+    const continueFromChat = state.chat.hasHistory;
+    closeEvents();
+    state.chat.live = [];
+    state.chat.messages = state.chat.messages.concat([{ role: "user", content: text }]);
+    renderChat();
+    $("chat-input").value = "";
+    const body = {
+      prompt: text,
+      files: [],
+      home: null,
+      max_iterations: null,
+      max_tokens: null,
+      max_duration_sec: null,
+      max_cost: null,
+      save_chat_history: true,
+      continue_from_chat: continueFromChat,
+    };
+    setRunBusy(true);
+    state.chatRunAgent = state.agentId;
+    state.chat.holdLocal = false;
+    state.chatEpoch += 1;
+    state.chatFinish = null;
+    let res;
+    try {
+      res = await api(`/api/agents/${encodeURIComponent(state.agentId)}/runs`, {
+        method: "POST",
+        mutate: true,
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      if (state.agentId === state.chatRunAgent) {
+        const last = state.chat.messages[state.chat.messages.length - 1];
+        if (last && last.role === "user" && last.content === text) {
+          state.chat.messages.pop();
+        }
+        $("chat-input").value = text;
+        renderChat();
+      }
+      setRunBusy(false);
+      throw err;
+    }
+    state.currentRunId = res.run_id;
+    setStatus($("chat-status"), `Running ${res.run_id}`, true);
+    setStatus($("run-status"), `Running ${res.run_id}`, true);
+    const es = new EventSource(`/api/runs/${encodeURIComponent(res.run_id)}/events`);
+    state.eventSource = es;
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        appendEvent(data);
+        if (state.chatRunAgent === state.agentId) {
+          state.chat.live.push(data);
+          renderChat();
+        }
+        if (data.type === "done") {
+          es.close();
+          state.eventSource = null;
+          finishChatTurn(res.run_id, text);
+        }
+      } catch (err) {
+        appendEvent({ type: "message", text: String(err) });
+      }
+    };
+    es.onerror = () => {
+      finishChatTurn(res.run_id, text);
+    };
+  }
+
+  async function finishChatTurn(runId, sentText) {
+    if (state.chatFinish) return;
+    state.chatFinish = settleChatTurn(runId, sentText).finally(() => {
+      state.chatFinish = null;
+    });
+    await state.chatFinish;
+  }
+
+  async function settleChatTurn(runId, sentText) {
+    let status;
+    try {
+      status = await api(`/api/runs/${encodeURIComponent(runId)}`);
+    } catch (err) {
+      setStatus($("chat-status"), err.message, false);
+      return;
+    }
+    if (!status || status.status === "running" || state.currentRunId !== runId) return;
+    closeEvents();
+    const localMessages = (state.chat.messages || []).slice();
+    const live = (state.chat.live || []).filter((event) => event && event.type !== "done");
+    const notes = live.filter((event) => event.type === "thought" || event.type === "notice");
+    try {
+      await pollResult(runId);
+    } catch (err) {
+      setStatus($("chat-status"), err.message, false);
+      setRunBusy(false);
+      return;
+    }
+    if (state.chatRunAgent !== state.agentId) {
+      setRunBusy(false);
+      return;
+    }
+    setRunBusy(true);
+    let loaded = false;
+    try {
+      await loadChat({ force: true });
+      loaded = true;
+    } catch (err) {
+      setStatus($("chat-status"), err.message, false);
+    }
+    const outcome = runOutcomeText(status);
+    const kept = loaded && historyHasPrompt(state.chat.messages, sentText);
+    const failed = status.status === "failed" || status.status === "cancelled";
+    if (!kept) {
+      state.chat.messages = localMessages;
+      if (!historyHasPrompt(state.chat.messages, sentText)) {
+        state.chat.messages = state.chat.messages.concat([{ role: "user", content: sentText }]);
+      }
+      const shown = live.some((event) => event.type === "message" && event.text === outcome);
+      state.chat.live = outcome && !shown ? live.concat([{ type: "message", text: outcome }]) : live;
+      state.chat.holdLocal = true;
+      renderChat();
+      setStatus(
+        $("chat-status"),
+        outcome || `${status.status} (${runId})`,
+        !failed && Boolean(outcome)
+      );
+    } else {
+      state.chat.holdLocal = false;
+      if (notes.length) {
+        state.chat.live = notes;
+        renderChat();
+      }
+      setStatus(
+        $("chat-status"),
+        failed && outcome ? outcome : `${status.status} (${runId})`,
+        !failed
+      );
+    }
+    setRunBusy(false);
+  }
+
+  async function newChat() {
+    if (!state.agentId || state.runBusy) return;
+    await api(`/api/agents/${encodeURIComponent(state.agentId)}/chat`, {
+      method: "DELETE",
+      mutate: true,
+    });
+    state.chat.messages = [];
+    state.chat.live = [];
+    state.chat.hasHistory = false;
+    state.chat.holdLocal = false;
+    state.chatEpoch += 1;
+    state.chat.meta = null;
+    renderChat();
+    setStatus($("chat-status"), "New chat", true);
   }
 
   async function startRun(options = {}) {
@@ -1468,6 +1889,7 @@
         url: "",
         headers: {},
         timeout_ms: 20000,
+        required: true,
         keep_auth: false,
         auth: null,
       });
@@ -1556,6 +1978,15 @@
     });
     $("btn-cancel").addEventListener("click", () =>
       cancelRun().catch((e) => setStatus($("run-status"), e.message, false))
+    );
+    $("btn-chat-send").addEventListener("click", () =>
+      sendChat().catch((e) => setStatus($("chat-status"), e.message, false))
+    );
+    $("btn-chat-new").addEventListener("click", () =>
+      newChat().catch((e) => setStatus($("chat-status"), e.message, false))
+    );
+    $("btn-chat-cancel").addEventListener("click", () =>
+      cancelRun().catch((e) => setStatus($("chat-status"), e.message, false))
     );
     document.querySelectorAll("[data-log]").forEach((btn) => {
       btn.addEventListener("click", () =>

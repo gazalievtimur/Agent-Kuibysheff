@@ -75,6 +75,10 @@ pub struct AppConfig {
     /// Files reread into a history slot that pruning does not drop.
     #[serde(default)]
     pub context: ContextConfig,
+    /// Legacy completion hints (`paths`, `non_empty_dirs`). Kept so older profiles
+    /// still load and a studio save does not drop the section.
+    #[serde(default, skip_serializing_if = "DoneConfig::is_empty")]
+    pub done: DoneConfig,
 }
 
 /// Operator-selected files kept in the model window across history pruning.
@@ -83,6 +87,26 @@ pub struct AppConfig {
 pub struct ContextConfig {
     /// Paths relative to the agent home, for example `out/coder_memory.md`.
     pub pinned_files: Vec<String>,
+}
+
+/// Older profiles listed files the task was expected to produce.
+///
+/// The current run loop does not consult this section. It is retained so those
+/// profiles parse and round-trip through `config document`.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct DoneConfig {
+    /// Home-relative files expected at the end of a task.
+    pub paths: Vec<String>,
+    /// Home-relative directories expected to be non-empty.
+    pub non_empty_dirs: Vec<String>,
+}
+
+impl DoneConfig {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.non_empty_dirs.is_empty()
+    }
 }
 
 /// Monetary accounting configuration. An omitted section still emits an
@@ -279,6 +303,8 @@ impl ProviderConfig {
 pub struct McpServerConfig {
     pub name: String,
     pub timeout_ms: u64,
+    /// When false, a connection failure is skipped and the run continues.
+    pub required: bool,
     pub transport: McpTransport,
 }
 
@@ -292,6 +318,15 @@ impl McpServerConfig {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    #[must_use]
+    pub const fn default_required() -> bool {
+        true
+    }
+}
+
+fn skip_if_required(required: &bool) -> bool {
+    *required
 }
 
 impl Serialize for McpServerConfig {
@@ -313,6 +348,8 @@ impl Serialize for McpServerConfig {
                     #[serde(skip_serializing_if = "Option::is_none")]
                     cwd: &'a Option<PathBuf>,
                     timeout_ms: u64,
+                    #[serde(skip_serializing_if = "skip_if_required")]
+                    required: bool,
                 }
 
                 Wire {
@@ -323,6 +360,7 @@ impl Serialize for McpServerConfig {
                     env: &stdio.env,
                     cwd: &stdio.cwd,
                     timeout_ms: self.timeout_ms,
+                    required: self.required,
                 }
                 .serialize(serializer)
             }
@@ -337,6 +375,8 @@ impl Serialize for McpServerConfig {
                     #[serde(skip_serializing_if = "Option::is_none")]
                     auth: &'a Option<McpOAuthConfig>,
                     timeout_ms: u64,
+                    #[serde(skip_serializing_if = "skip_if_required")]
+                    required: bool,
                 }
 
                 Wire {
@@ -346,6 +386,7 @@ impl Serialize for McpServerConfig {
                     headers: &http.headers,
                     auth: &http.auth,
                     timeout_ms: self.timeout_ms,
+                    required: self.required,
                 }
                 .serialize(serializer)
             }
@@ -423,12 +464,16 @@ struct McpServerConfigRaw {
     auth: Option<McpOAuthConfig>,
     #[serde(default = "McpServerConfig::default_timeout_ms")]
     timeout_ms: u64,
+    /// `false` means a down server does not stop the run. Omitted means required.
+    #[serde(default = "McpServerConfig::default_required")]
+    required: bool,
 }
 
 impl TryFrom<McpServerConfigRaw> for McpServerConfig {
     type Error = String;
 
     fn try_from(raw: McpServerConfigRaw) -> Result<Self, Self::Error> {
+        let required = raw.required;
         let has_command = raw.command.as_ref().is_some_and(|c| !c.trim().is_empty());
         let has_url = raw.url.as_ref().is_some_and(|u| !u.trim().is_empty());
         let kind = raw
@@ -543,6 +588,7 @@ impl TryFrom<McpServerConfigRaw> for McpServerConfig {
         Ok(Self {
             name: raw.name,
             timeout_ms: raw.timeout_ms,
+            required,
             transport,
         })
     }
@@ -730,6 +776,7 @@ pub fn bootstrap_app_config() -> AppConfig {
         },
         access: Some(AccessPolicyConfig::minimal_profile()),
         context: ContextConfig::default(),
+        done: DoneConfig::default(),
     }
 }
 
@@ -1128,6 +1175,7 @@ mod tests {
             mcp: vec![McpServerConfig {
                 name: "local".to_string(),
                 timeout_ms: 1000,
+                required: true,
                 transport: McpTransport::Stdio(McpStdioConfig {
                     command: "mcp-server".to_string(),
                     args: vec![],
@@ -1153,6 +1201,7 @@ mod tests {
             },
             access: Some(AccessPolicyConfig::default()),
             context: ContextConfig::default(),
+            done: DoneConfig::default(),
         }
     }
 
@@ -1735,6 +1784,63 @@ access:
             }
             McpTransport::Stdio(_) => panic!("expected http"),
         }
+    }
+
+    #[test]
+    fn mcp_accepts_legacy_required_flag_and_does_not_write_it_back() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+mcp:
+  - name: searxng
+    transport: http
+    url: http://127.0.0.1:3000/mcp
+    timeout_ms: 60000
+    required: false
+access:
+  mode: strict
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse legacy required");
+        validate(&cfg).expect("valid");
+        assert!(!cfg.mcp[0].required);
+        let written = serde_yaml::to_string(&cfg).expect("write");
+        assert!(
+            written.contains("required: false"),
+            "optional servers must keep required: false: {written}"
+        );
+    }
+
+    #[test]
+    fn config_round_trips_legacy_done_section() {
+        let yaml = r"
+provider:
+  base_url: https://example.com/v1
+  model: test
+  api_key_env: TEST_KEY
+limits:
+  max_iterations: 1
+  max_tokens: 1
+  max_duration_sec: 1
+done:
+  paths:
+    - out/architecture.md
+  non_empty_dirs:
+    - out/src
+access:
+  mode: strict
+";
+        let cfg = serde_yaml::from_str::<AppConfig>(yaml).expect("parse legacy done");
+        assert_eq!(cfg.done.paths, vec!["out/architecture.md".to_string()]);
+        assert_eq!(cfg.done.non_empty_dirs, vec!["out/src".to_string()]);
+        let written = serde_yaml::to_string(&cfg).expect("write");
+        assert!(written.contains("out/architecture.md"), "{written}");
+        assert!(written.contains("out/src"), "{written}");
     }
 
     #[test]
