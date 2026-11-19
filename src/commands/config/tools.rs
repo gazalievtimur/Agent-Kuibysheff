@@ -85,10 +85,10 @@ pub fn run(args: &ConfigArgs, cmd: &ToolsCmd) -> Result<(), ConfigCmdError> {
                 effective_builtins.push("profile.list_skill".to_string());
                 effective_builtins.push("profile.read_skill".to_string());
             }
-            effective.push("agent.list_tools".to_string());
-            effective.push("agent.describe_tool".to_string());
-            effective_builtins.push("agent.list_tools".to_string());
-            effective_builtins.push("agent.describe_tool".to_string());
+            for name in ["agent.list_tools", "agent.describe_tool", "agent.guide"] {
+                effective.push(name.to_string());
+                effective_builtins.push(name.to_string());
+            }
             effective.sort();
             effective.dedup();
             effective_builtins.sort();

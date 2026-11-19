@@ -279,6 +279,13 @@ impl HomeFs {
                     program: alias.to_string(),
                     reason: "not configured in access policy".to_string(),
                 })?;
+        if executable_is_current_process(program_policy.executable.as_path()) {
+            return Err(HomeFsError::ProgramDenied {
+                program: alias.to_string(),
+                reason: "refusing to run the agent executable that is serving this process"
+                    .to_string(),
+            });
+        }
 
         if args.len() > self.policy.max_args {
             return Err(HomeFsError::InvalidArguments {
@@ -565,6 +572,19 @@ async fn ensure_grant_dirs(root: &Path, policy: &HomeFsPolicy) -> Result<(), Hom
             .map_err(|error| home_io("create_dir_all", &path, error))?;
     }
     Ok(())
+}
+
+fn executable_is_current_process(executable: &Path) -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(current) = std::fs::canonicalize(&current) else {
+        return false;
+    };
+    let Ok(executable) = std::fs::canonicalize(executable) else {
+        return false;
+    };
+    executable == current
 }
 
 fn map_spawn_blocking_join_error(path: &str, error: tokio::task::JoinError) -> HomeFsError {
@@ -942,6 +962,39 @@ mod tests {
             .await
             .expect_err("unknown alias");
         assert!(matches!(error, HomeFsError::ProgramDenied { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_running_the_current_executable() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let current = std::env::current_exe().expect("current exe");
+        let mut policy = HomeFsPolicy::legacy();
+        let executable = CanonicalRoot::canonicalize(&current).expect("canonicalize exe");
+        let mut programs = BTreeMap::new();
+        programs.insert(
+            ProgramAlias::parse("kbshff").unwrap(),
+            ResolvedProgramPolicy {
+                alias: ProgramAlias::parse("kbshff").unwrap(),
+                executable,
+                runtime_read_roots: Vec::new(),
+                inherit_env: Vec::new(),
+                allow_children: false,
+            },
+        );
+        policy.programs = programs;
+        let home = HomeFs::new(dir.path(), policy, mock_sandbox(), RunCancel::new())
+            .await
+            .expect("home");
+        let error = home
+            .call("run", json!({"program": "kbshff", "args": ["config"]}))
+            .await
+            .expect_err("current exe");
+        match error {
+            HomeFsError::ProgramDenied { reason, .. } => {
+                assert!(reason.contains("serving this process"), "{reason}");
+            }
+            other => panic!("expected ProgramDenied, got {other}"),
+        }
     }
 
     #[tokio::test]

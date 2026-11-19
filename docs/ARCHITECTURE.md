@@ -152,6 +152,13 @@ are not implemented.
 - `src/tools/profile_skills.rs` — `profile.list_skill` and `profile.read_skill`
   read that index. Scripts are not executed from the package tree; sandboxed
   `home.run` can read `runtime/skills/` without a `protected/` grant.
+- `src/tools/config_edit.rs` — `config.*` tools edit a saved profile in the
+  same project (skills, MCP, rules, prompt, limits, non-secret provider fields,
+  built-in allowlist, new profile). They are off unless access and a skill
+  allow them. Writes do not reload the running process, do not return secrets,
+  do not change the running agent's provider URL, and do not connect MCP.
+  `agent.guide` is granted on every run and returns a static manual.
+  `home.run` refuses the executable of the current process.
 
 ### MCP and provider
 
