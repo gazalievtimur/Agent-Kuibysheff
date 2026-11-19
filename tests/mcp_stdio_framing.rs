@@ -18,6 +18,7 @@ async fn mcp_stdio_ndjson_connect_lists_tools() {
     let configs = [McpServerConfig {
         name: "fixture".to_string(),
         timeout_ms: 5_000,
+        required: true,
         transport: McpTransport::Stdio(McpStdioConfig {
             command: fixture_bin(),
             args: vec![],
@@ -38,6 +39,7 @@ async fn mcp_stdio_rejects_content_length_framing() {
     let configs = [McpServerConfig {
         name: "legacy".to_string(),
         timeout_ms: 5_000,
+        required: true,
         transport: McpTransport::Stdio(McpStdioConfig {
             command: fixture_bin(),
             args: vec!["content-length".to_string()],
@@ -86,6 +88,7 @@ async fn mcp_stdio_registry_shutdown_terminates_fixture() {
     let configs = [McpServerConfig {
         name: "fixture".to_string(),
         timeout_ms: 5_000,
+        required: true,
         transport: McpTransport::Stdio(McpStdioConfig {
             command: fixture_bin(),
             args: vec![],

@@ -44,6 +44,7 @@ pub struct McpToolDescriptor {
 pub struct McpRegistry {
     pub(super) servers: HashMap<String, ServerHandle>,
     pub(super) logger: Option<SharedEventSink>,
+    skipped: Vec<String>,
 }
 
 pub(super) struct ServerHandle {
@@ -64,6 +65,58 @@ struct ActorRequest {
     method: String,
     params: Value,
     reply: oneshot::Sender<Result<Value, Error>>,
+}
+
+async fn connect_one(
+    cfg: &crate::config::McpServerConfig,
+    logger: &Option<SharedEventSink>,
+    cancel: &CancellationToken,
+    isolation: &McpIsolationContext,
+) -> Result<ServerHandle, Error> {
+    let mut client = match &cfg.transport {
+        McpTransport::Stdio(stdio) => {
+            let mut client =
+                McpStdioClient::connect_isolated(&cfg.name, stdio, cfg.timeout_ms, isolation)
+                    .await?;
+            client.initialize().await?;
+            LiveClient::Stdio(Box::new(client))
+        }
+        McpTransport::Http(http) => {
+            let client = McpHttpClient::connect(&cfg.name, http, cfg.timeout_ms).await?;
+            LiveClient::Http(Box::new(client))
+        }
+    };
+
+    let tools = match &mut client {
+        LiveClient::Stdio(stdio) => stdio.list_tools().await?,
+        LiveClient::Http(http) => http.list_tools().await?,
+    };
+    let tool_set: HashSet<_> = tools.into_iter().collect();
+
+    if let Some(log) = logger {
+        log.write_event(
+            "mcp_server_initialized",
+            json!({
+                "server": cfg.name,
+                "tools": tool_set.iter().cloned().collect::<Vec<_>>(),
+            }),
+        )
+        .await
+        .map_err(|err| Error::Logging {
+            server: cfg.name.clone(),
+            source: err,
+        })?;
+    }
+
+    let shutdown_timeout = match &client {
+        LiveClient::Stdio(stdio) => stdio.timeout,
+        LiveClient::Http(_) => Duration::from_secs(30),
+    };
+    let handle = spawn_actor(cfg.name.clone(), client, shutdown_timeout, cancel.clone());
+    Ok(ServerHandle {
+        tools: tool_set,
+        client: handle,
+    })
 }
 
 enum LiveClient {
@@ -150,63 +203,33 @@ impl McpRegistry {
         }
 
         let mut servers = HashMap::with_capacity(configs.len());
+        let mut skipped = Vec::new();
 
         for cfg in configs {
-            let mut client = match &cfg.transport {
-                McpTransport::Stdio(stdio) => {
-                    let mut client = McpStdioClient::connect_isolated(
-                        &cfg.name,
-                        stdio,
-                        cfg.timeout_ms,
-                        &isolation,
-                    )
-                    .await?;
-                    client.initialize().await?;
-                    LiveClient::Stdio(Box::new(client))
+            match connect_one(cfg, &logger, &cancel, &isolation).await {
+                Ok(handle) => {
+                    servers.insert(cfg.name.clone(), handle);
                 }
-                McpTransport::Http(http) => {
-                    let client = McpHttpClient::connect(&cfg.name, http, cfg.timeout_ms).await?;
-                    LiveClient::Http(Box::new(client))
+                Err(err) if !cfg.required => {
+                    let notice = err.optional_skip_message();
+                    warn!(server = %cfg.name, error = %err, "{notice}");
+                    skipped.push(notice);
                 }
-            };
-
-            let tools = match &mut client {
-                LiveClient::Stdio(c) => c.list_tools().await?,
-                LiveClient::Http(c) => c.list_tools().await?,
-            };
-            let tool_set: HashSet<_> = tools.into_iter().collect();
-
-            if let Some(log) = &logger {
-                log.write_event(
-                    "mcp_server_initialized",
-                    json!({
-                        "server": cfg.name,
-                        "tools": tool_set.iter().cloned().collect::<Vec<_>>(),
-                    }),
-                )
-                .await
-                .map_err(|err| Error::Logging {
-                    server: cfg.name.clone(),
-                    source: err,
-                })?;
+                Err(err) => return Err(err),
             }
-
-            let shutdown_timeout = match &client {
-                LiveClient::Stdio(c) => c.timeout,
-                LiveClient::Http(_) => Duration::from_secs(30),
-            };
-            let handle = spawn_actor(cfg.name.clone(), client, shutdown_timeout, cancel.clone());
-
-            servers.insert(
-                cfg.name.clone(),
-                ServerHandle {
-                    tools: tool_set,
-                    client: handle,
-                },
-            );
         }
 
-        Ok(Self { servers, logger })
+        Ok(Self {
+            servers,
+            logger,
+            skipped,
+        })
+    }
+
+    /// Notices for optional servers that were skipped because they did not connect.
+    #[must_use]
+    pub fn skipped_notices(&self) -> &[String] {
+        &self.skipped
     }
 
     /// Gracefully disconnects all MCP servers and waits for stdio children to exit.
@@ -337,7 +360,11 @@ impl McpRegistry {
                 },
             },
         );
-        Self { servers, logger }
+        Self {
+            servers,
+            logger,
+            skipped: Vec::new(),
+        }
     }
 }
 
@@ -459,5 +486,49 @@ impl Drop for McpClientHandle {
         // Best-effort: closing `tx` wakes the actor so it can shut down the live client.
         // The JoinHandle is detached; prefer [`McpRegistry::shutdown`] to await exit.
         self.tx.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::McpServerConfig;
+
+    fn down_http_server(required: bool) -> McpServerConfig {
+        let flag = if required { "true" } else { "false" };
+        serde_yaml::from_str(&format!(
+            "name: searxng\ntransport: http\nurl: http://127.0.0.1:9/mcp\ntimeout_ms: 1000\nrequired: {flag}\n"
+        ))
+        .expect("server config")
+    }
+
+    #[tokio::test]
+    async fn optional_http_server_is_skipped_when_down() {
+        let registry =
+            McpRegistry::connect_all(&[down_http_server(false)], None, CancellationToken::new())
+                .await
+                .expect("optional server should not fail the connect");
+        let notice = registry.skipped_notices().join(" ");
+        assert!(notice.contains("searxng"), "{notice}");
+        assert!(notice.contains("optional"), "{notice}");
+        registry.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn required_http_server_fails_when_down() {
+        let connected =
+            McpRegistry::connect_all(&[down_http_server(true)], None, CancellationToken::new())
+                .await;
+        let err = match connected {
+            Err(err) => err,
+            Ok(registry) => {
+                registry.shutdown().await;
+                panic!("required server should fail when it is down");
+            }
+        };
+        let message = err.required_failure_message();
+        assert!(message.contains("searxng"), "{message}");
+        assert!(message.contains("required"), "{message}");
+        assert!(!message.contains("os error"), "{message}");
     }
 }

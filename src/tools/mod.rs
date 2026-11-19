@@ -4,6 +4,8 @@
 //! [`registry`] descriptors. Concrete error submodule stays `pub(crate)`.
 
 pub(crate) mod agent_catalog;
+pub(crate) mod agent_guide;
+pub(crate) mod config_edit;
 pub(crate) mod error;
 pub mod fs_home;
 pub mod local_tools;
@@ -24,6 +26,7 @@ use crate::access::EffectiveToolPolicy;
 use crate::tool_api::ToolExecutor;
 
 use self::agent_catalog::AgentCatalog;
+use self::config_edit::ConfigEditor;
 use self::fs_home::HomeFs;
 use self::local_tools::LocalTools;
 use self::profile_skills::SkillLibrary;
@@ -34,6 +37,7 @@ pub struct CompositeToolExecutor {
     local_tools: LocalTools,
     skills: SkillLibrary,
     catalog: AgentCatalog,
+    config: ConfigEditor,
     external: Arc<dyn ToolExecutor>,
 }
 
@@ -45,6 +49,7 @@ impl CompositeToolExecutor {
             local_tools,
             skills: SkillLibrary::default(),
             catalog: AgentCatalog::default(),
+            config: ConfigEditor::new(None, String::new()),
             external,
         }
     }
@@ -60,6 +65,13 @@ impl CompositeToolExecutor {
     #[must_use]
     pub(crate) fn with_catalog(mut self, catalog: AgentCatalog) -> Self {
         self.catalog = catalog;
+        self
+    }
+
+    /// Attaches the saved-profile editor for `config.*`.
+    #[must_use]
+    pub(crate) fn with_config(mut self, config: ConfigEditor) -> Self {
+        self.config = config;
         self
     }
 }
@@ -89,6 +101,7 @@ impl ToolExecutor for CompositeToolExecutor {
                 .await
                 .map_err(ToolError::from),
             Some(BuiltinHandlerId::Agent) => self.catalog.call(tool, arguments),
+            Some(BuiltinHandlerId::Config) => self.config.call(tool, arguments).await,
             None => self.external.call_tool(server, tool, arguments).await,
         }
     }

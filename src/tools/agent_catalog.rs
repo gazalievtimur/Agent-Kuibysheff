@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use crate::access::EffectiveToolPolicy;
 use crate::tool_api::{ExternalToolError, PolicyError, ToolError};
 
+use super::agent_guide::AGENT_GUIDE;
 use super::registry::{self, BUILTINS};
 
 /// One MCP tool passed in from the startup `tools/list` snapshot.
@@ -72,6 +73,7 @@ impl AgentCatalog {
         match tool {
             "list_tools" => Ok(self.list_tools()),
             "describe_tool" => self.describe_tool(arguments),
+            "guide" => Ok(json!({ "guide": AGENT_GUIDE })),
             other => Err(ToolError::External(ExternalToolError::UnknownTool {
                 server: "agent".to_string(),
                 tool: other.to_string(),
@@ -186,6 +188,17 @@ mod tests {
         assert!(!description.contains("medium"));
         assert!(!description.contains("few hundred"));
         assert!(tools.iter().any(|tool| tool["name"] == "list_tools"));
+        let guide = tools
+            .iter()
+            .find(|tool| tool["name"] == "guide")
+            .expect("agent.guide");
+        let guide_text = guide["description"].as_str().unwrap();
+        assert!(!guide_text.contains("SECRET_SCHEMA_MARKER"));
+        let body = catalog().call("guide", json!({})).expect("guide");
+        let body = body["guide"].as_str().expect("guide text");
+        assert!(body.contains("next start"));
+        assert!(!body.contains("SECRET_SCHEMA_MARKER"));
+        assert!(!body.contains("https://"));
         assert!(tools
             .iter()
             .any(|tool| tool["server"] == "docs" && tool["name"] == "search"));

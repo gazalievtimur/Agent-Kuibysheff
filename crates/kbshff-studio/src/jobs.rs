@@ -213,6 +213,15 @@ impl JobManager {
         });
         Ok(())
     }
+
+    /// Whether a studio `kbshff run` is still in progress.
+    pub async fn has_active_run(&self) -> bool {
+        let guard = self.inner.lock().await;
+        match &guard.active {
+            Some(active) => active.handle.is_running().await,
+            None => false,
+        }
+    }
 }
 
 impl JobHandle {
@@ -324,6 +333,65 @@ fn studio_run_log_dir(
         }
     };
     Ok(home_root.join("logs"))
+}
+
+/// Reject agent ids that could escape `homes/<id>/`.
+///
+/// # Errors
+///
+/// Returns an error when `agent_id` is empty or contains a path separator or `..`.
+pub fn validate_studio_agent_id(agent_id: &str) -> Result<(), String> {
+    if agent_id.is_empty() || agent_id.contains(['/', '\\', '\0']) || agent_id.contains("..") {
+        return Err(
+            "invalid agent id: empty, path separators, and `..` are not allowed".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// `{project}/.kuibysheff/homes/<agent>/logs/chat_history.json`.
+///
+/// # Errors
+///
+/// Returns an error when the agent id is unsafe or the home path cannot be built.
+pub fn default_chat_history_path(
+    project_root: &std::path::Path,
+    agent_id: &str,
+) -> Result<PathBuf, String> {
+    validate_studio_agent_id(agent_id)?;
+    Ok(studio_run_log_dir(project_root, agent_id, None)?.join("chat_history.json"))
+}
+
+/// True when `candidate` stays inside the canonical `root`.
+///
+/// Missing files are accepted when an existing ancestor is inside `root` and the
+/// remainder has no `..` components.
+#[must_use]
+pub fn path_under_root(root: &std::path::Path, candidate: &std::path::Path) -> bool {
+    use std::path::Component;
+
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    if let Ok(path) = candidate.canonicalize() {
+        return path.starts_with(&root);
+    }
+    let mut cursor = candidate;
+    while let Some(parent) = cursor.parent() {
+        if let Ok(canon) = parent.canonicalize() {
+            if !canon.starts_with(&root) {
+                return false;
+            }
+            let Ok(rest) = candidate.strip_prefix(parent) else {
+                return false;
+            };
+            return rest
+                .components()
+                .all(|component| !matches!(component, Component::ParentDir));
+        }
+        cursor = parent;
+    }
+    false
 }
 
 fn run_args(
@@ -536,6 +604,38 @@ mod tests {
         let root = PathBuf::from("proj");
         assert!(studio_run_log_dir(&root, "demo", Some(Path::new("protected/x"))).is_err());
         assert!(studio_run_log_dir(&root, "demo", Some(Path::new("/abs"))).is_err());
+    }
+
+    #[test]
+    fn chat_history_path_stays_in_agent_home() {
+        let root = PathBuf::from("proj");
+        let path = default_chat_history_path(&root, "demo").expect("path");
+        assert_eq!(
+            path,
+            root.join(".kuibysheff")
+                .join("homes")
+                .join("demo")
+                .join("logs")
+                .join("chat_history.json")
+        );
+        assert!(default_chat_history_path(&root, "..").is_err());
+        assert!(default_chat_history_path(&root, "a/b").is_err());
+        assert!(default_chat_history_path(&root, r"a\b").is_err());
+        assert!(default_chat_history_path(&root, "").is_err());
+    }
+
+    #[test]
+    fn path_under_root_rejects_paths_outside_the_project() {
+        let unique = format!("kbshff-studio-path-{}", std::process::id());
+        let root = std::env::temp_dir().join(unique);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("inside")).expect("mkdir");
+        let inside = root.join("inside").join("chat_history.json");
+        assert!(path_under_root(&root, &inside));
+        let outside =
+            std::env::temp_dir().join(format!("kbshff-studio-outside-{}", std::process::id()));
+        assert!(!path_under_root(&root, &outside));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

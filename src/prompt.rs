@@ -10,6 +10,13 @@ pub const AGENT_AS_MCP_BLOCK: &str = "\
 Agent As MCP:
 Tool names in this prompt are not a contract. Before the first call to any other tool, call server \"agent\", tool \"list_tools\", arguments {}. The result lists every tool this run may call, with server, name, and description. For one tool's argument schema call server \"agent\", tool \"describe_tool\", arguments {\"server\":\"<server>\",\"tool\":\"<tool>\"}. Both return only allowed tools.";
 
+/// Shown on every run. Points at `agent.guide` without embedding the manual.
+pub const AGENT_CONFIG_BLOCK: &str = "\
+Agent configuration:
+- If the user asks to configure an agent, call server \"agent\", tool \"guide\", arguments {} before changing a profile.
+- Saved profile edits apply on the next start. This process does not reload access, MCP, or the prompt.
+- config.* tools are callable only when list_tools includes them.";
+
 /// Builds the dynamic runtime rules section of the system prompt.
 ///
 /// Only tools that are actually in the effective allowlist are described, so the
@@ -78,6 +85,8 @@ pub fn build_runtime_rules(
     lines.push("- Return strict JSON and never use markdown.".to_string());
     lines.push(String::new());
     lines.push(AGENT_AS_MCP_BLOCK.to_string());
+    lines.push(String::new());
+    lines.push(AGENT_CONFIG_BLOCK.to_string());
 
     lines.join("\n")
 }
@@ -277,6 +286,14 @@ mod tests {
         assert!(
             rules.contains("Agent As MCP"),
             "Agent As MCP is part of every runtime prompt: {rules}"
+        );
+        assert!(
+            rules.contains("tool \"guide\""),
+            "every runtime prompt must point at agent.guide: {rules}"
+        );
+        assert!(
+            rules.contains("next start"),
+            "profile edits must be described as next-start: {rules}"
         );
     }
 

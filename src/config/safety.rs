@@ -93,6 +93,7 @@ mod tests {
             logging: LoggingConfig::default(),
             access: Some(AccessPolicyConfig::default()),
             context: crate::config::ContextConfig::default(),
+            done: crate::config::DoneConfig::default(),
         }
     }
 
@@ -110,6 +111,7 @@ mod tests {
         cfg.mcp.push(McpServerConfig {
             name: "local".to_string(),
             timeout_ms: 1000,
+            required: true,
             transport: McpTransport::Stdio(McpStdioConfig {
                 command: "mcp".to_string(),
                 args: vec![],
@@ -130,6 +132,7 @@ mod tests {
         cfg.mcp.push(McpServerConfig {
             name: "local".to_string(),
             timeout_ms: 1000,
+            required: true,
             transport: McpTransport::Stdio(McpStdioConfig {
                 command: "mcp".to_string(),
                 args: vec![],

@@ -460,12 +460,13 @@ impl EffectiveToolPolicy {
         }
     }
 
-    /// Grants `agent.list_tools` and `agent.describe_tool` for every run.
+    /// Grants `agent.list_tools`, `agent.describe_tool`, and `agent.guide` for every run.
     ///
-    /// The model reads tool descriptions through these calls. They are not part of
-    /// the access ∩ skills intersection, so a skill does not have to allowlist them.
+    /// The model reads tool descriptions and the static configuration guide through
+    /// these calls. They are not part of the access ∩ skills intersection, so a skill
+    /// does not have to allowlist them. `config.*` stays opt-in.
     pub fn grant_agent_catalog(&mut self) {
-        for name in ["agent.list_tools", "agent.describe_tool"] {
+        for name in ["agent.list_tools", "agent.describe_tool", "agent.guide"] {
             if let Ok(tool) = QualifiedTool::parse(name) {
                 self.tools.insert(tool);
             }
@@ -1177,7 +1178,37 @@ mod tests {
             diff,
             vec![
                 "agent.describe_tool",
+                "agent.guide",
                 "agent.list_tools",
+                "config.access_get",
+                "config.builtins_add",
+                "config.builtins_remove",
+                "config.init",
+                "config.limits_get",
+                "config.limits_set",
+                "config.mcp_add",
+                "config.mcp_get",
+                "config.mcp_list",
+                "config.mcp_remove",
+                "config.mcp_set",
+                "config.prompt_get",
+                "config.prompt_set",
+                "config.provider_get",
+                "config.provider_set",
+                "config.rules_get",
+                "config.rules_set",
+                "config.show",
+                "config.skill_add",
+                "config.skill_body_get",
+                "config.skill_body_set",
+                "config.skill_file_get",
+                "config.skill_file_list",
+                "config.skill_file_put",
+                "config.skill_file_remove",
+                "config.skill_get",
+                "config.skill_list",
+                "config.skill_remove",
+                "config.skill_set",
                 "home.run",
                 "profile.list_skill",
                 "profile.read_skill",
@@ -1206,6 +1237,8 @@ mod tests {
         effective.grant_agent_catalog();
         assert!(effective.allows(&QualifiedTool::parse("agent.list_tools").unwrap()));
         assert!(effective.allows(&QualifiedTool::parse("agent.describe_tool").unwrap()));
+        assert!(effective.allows(&QualifiedTool::parse("agent.guide").unwrap()));
+        assert!(!effective.allows(&QualifiedTool::parse("config.show").unwrap()));
         assert!(effective.allows(&QualifiedTool::parse("home.read").unwrap()));
     }
 

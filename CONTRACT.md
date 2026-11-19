@@ -355,12 +355,13 @@ fails config validation. Prior releases treated omission as silent legacy
 Effective tools are computed as follows:
 
 ```text
-KNOWN_BUILTINS = {home.list, home.read, home.write, home.run, local_tools.search_docs, local_tools.read_file, profile.list_skill, profile.read_skill, agent.list_tools, agent.describe_tool}
+KNOWN_BUILTINS = every built-in in the tool registry
+  (home.*, local_tools.*, profile.*, agent.*, config.*)
 
 effective_builtins = KNOWN_BUILTINS ∩ access.tools.builtins ∩ skills.allowed_tools
 effective_mcp      = all_discovered_mcp_tools ∩ skills.allowed_tools
 effective_tools    = effective_builtins ∪ effective_mcp
-                     ∪ {agent.list_tools, agent.describe_tool}  # every run
+                     ∪ {agent.list_tools, agent.describe_tool, agent.guide}  # every run
                      ∪ {profile.list_skill, profile.read_skill}  # only when a skill folder exists
 ```
 
@@ -374,13 +375,26 @@ effective_tools    = effective_builtins ∪ effective_mcp
   it.
 - `rules.md` and the `policy` string inside a `skills.dsl` block are prompt-only
   guidance for the model. They are not enforced by the runtime policy engine.
-- `agent.list_tools` and `agent.describe_tool` are granted on every run. They
-  need no `skills.dsl` entry. `list_tools` returns `server`, `name`, and
-  `description` for tools in `effective_tools`. `describe_tool` returns
-  `description` and `inputSchema` for one of those tools. A name outside that
-  set is denied and its schema is not returned. The system prompt and the
-  initial user message both include the `Agent As MCP` block that names these
-  calls.
+- `agent.list_tools`, `agent.describe_tool`, and `agent.guide` are granted on
+  every run. They need no `skills.dsl` entry. `list_tools` returns `server`,
+  `name`, and `description` for tools in `effective_tools`. `describe_tool`
+  returns `description` and `inputSchema` for one of those tools. A name
+  outside that set is denied and its schema is not returned. `agent.guide`
+  returns a fixed configuration manual with no live profile data. The system
+  prompt and the initial user message both include the `Agent As MCP` block
+  and a short pointer to `agent.guide`.
+- `config.*` tools are not granted automatically and are not part of legacy
+  mode. A profile enables them by listing each name in `access.tools.builtins`
+  and in `skills.allowed_tools` (the `init` template does this in the
+  `configure` skill). They edit the saved profile for an agent id in the same
+  project root. The running process does not reload access, MCP, or the prompt;
+  the edit applies on the next start. They can change rules, the master prompt,
+  skills, MCP command/url/args/cwd/timeout, limits, provider model and related
+  non-secret fields, the built-in allowlist, and can create a new profile.
+  `provider.base_url` is accepted only for a different agent id. They do not
+  read or write `.env`, `api_key`, or `api_key_env`, do not return MCP env,
+  headers, or auth, do not start an MCP server, and do not replace filesystem
+  grants, program aliases, billing, or event-mcp.
 - When a skill package exists for a name in `skills.dsl` (under
   `.kuibysheff/runtime/skills/<id>/<name>/`, or the legacy
   `protected/agents/<id>/skills/<name>/` fallback), the system prompt lists that
@@ -553,7 +567,8 @@ host executable. Arguments are a raw argv vector (no shell, no `PATH`
 lookup). The working directory is the home root. Default timeout is 30
 seconds; the configured maximum is `access.run.max_timeout_ms` (default
 120000). The tool returns `stdout`, `stderr`, truncation flags, `exit_code`,
-and `timed_out`.
+and `timed_out`. The call is denied when that executable is the process
+serving the run, so the model cannot invoke `kbshff config` on itself.
 
 Tool access is also restricted by `skills.dsl` for built-ins. Qualified names
 such as `home.read`, `home.write`, and `home.run` are required.

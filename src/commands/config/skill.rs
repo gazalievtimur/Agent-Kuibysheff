@@ -629,6 +629,13 @@ mod tests {
             },
         )
         .expect("remove");
+        run(
+            &args,
+            &SkillCmd::Remove {
+                name: "configure".to_string(),
+            },
+        )
+        .expect("remove configure");
         assert!(!paths.settings_dir.join("skills").join("workspace").exists());
         assert!(run(
             &args,

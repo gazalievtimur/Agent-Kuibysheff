@@ -16,7 +16,10 @@ use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::jobs::{CancelJobError, JobManager, StartJobError, StartRunRequest};
+use crate::jobs::{
+    default_chat_history_path, path_under_root, CancelJobError, JobManager, StartJobError,
+    StartRunRequest,
+};
 use crate::kbshff::{envelope_data, Kbshff};
 use crate::server::StudioState;
 
@@ -479,6 +482,95 @@ async fn get_out_file(
     }
 }
 
+async fn get_chat(
+    State(state): State<StudioState>,
+    AxumPath(agent_id): AxumPath<String>,
+) -> Response {
+    let path = match chat_history_file(&state, &agent_id) {
+        Ok(path) => path,
+        Err(message) => return err(StatusCode::BAD_REQUEST, message),
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => match parse_chat_history(&bytes) {
+            Ok(value) => Json(value).into_response(),
+            Err(message) => err(StatusCode::BAD_REQUEST, message),
+        },
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            Json(json!({ "messages": [] })).into_response()
+        }
+        Err(source) => err(StatusCode::BAD_REQUEST, source.to_string()),
+    }
+}
+
+async fn delete_chat(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(agent_id): AxumPath<String>,
+) -> Response {
+    if !studio_header_ok(&headers) {
+        return reject_missing_studio_header();
+    }
+    if state.jobs.has_active_run().await {
+        return err(
+            StatusCode::CONFLICT,
+            "another studio run is already in progress",
+        );
+    }
+    let path = match chat_history_file(&state, &agent_id) {
+        Ok(path) => path,
+        Err(message) => return err(StatusCode::BAD_REQUEST, message),
+    };
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(source) => err(StatusCode::BAD_REQUEST, source.to_string()),
+    }
+}
+
+fn chat_history_file(state: &StudioState, agent_id: &str) -> Result<PathBuf, String> {
+    let path = default_chat_history_path(&state.project_root, agent_id)?;
+    if !path_under_root(&state.project_root, &path) {
+        return Err("chat history path is outside the project root".to_string());
+    }
+    Ok(path)
+}
+
+fn parse_chat_history(bytes: &[u8]) -> Result<Value, String> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|source| format!("invalid chat history: {source}"))?;
+    let schema = value.get("schema_version").and_then(Value::as_u64);
+    if schema != Some(2) {
+        return Err("unsupported chat history schema_version (expected 2)".to_string());
+    }
+    let messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "chat history messages must be an array".to_string())?;
+    let mut out = Vec::with_capacity(messages.len());
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "chat message role must be a string".to_string())?;
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "chat message content must be a string".to_string())?;
+        out.push(json!({ "role": role, "content": content }));
+    }
+    let mut body = json!({ "messages": out });
+    for key in ["result", "stop_reason", "usage"] {
+        if let Some(field) = value.get(key) {
+            if !field.is_null() {
+                body[key] = field.clone();
+            }
+        }
+    }
+    Ok(body)
+}
+
 async fn start_run(
     State(state): State<StudioState>,
     headers: HeaderMap,
@@ -676,6 +768,7 @@ pub fn router(state: StudioState) -> axum::Router {
         .route("/api/agents/{id}/mcp/discover", post(mcp_discover))
         .route("/api/agents/{id}/mcp/call", post(mcp_call))
         .route("/api/agents/{id}/runs", post(start_run))
+        .route("/api/agents/{id}/chat", get(get_chat).delete(delete_chat))
         .route("/api/agents/{id}/out", get(list_out))
         .route("/api/agents/{id}/out/{name}", get(get_out_file))
         .route("/api/runs/{id}", get(get_run))

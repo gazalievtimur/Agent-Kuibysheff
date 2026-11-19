@@ -90,6 +90,15 @@ pub async fn discover(
         )
         .await
         {
+            Ok(registry) if !registry.skipped_notices().is_empty() => {
+                let error = Some(registry.skipped_notices().join(" "));
+                registry.shutdown().await;
+                servers.push(McpServerProbe {
+                    name: cfg.name.clone(),
+                    tools: Vec::new(),
+                    error,
+                });
+            }
             Ok(registry) => {
                 let tools = match registry.list_tool_descriptors().await {
                     Ok(t) => t,
@@ -114,7 +123,7 @@ pub async fn discover(
                 servers.push(McpServerProbe {
                     name: cfg.name.clone(),
                     tools: Vec::new(),
-                    error: Some(e.to_string()),
+                    error: Some(e.required_failure_message()),
                 });
             }
         }

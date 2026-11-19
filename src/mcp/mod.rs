@@ -78,6 +78,52 @@ pub enum McpError {
 pub type Error = McpError;
 
 impl McpError {
+    /// Short text for a required server that stopped the run.
+    #[must_use]
+    pub fn required_failure_message(&self) -> String {
+        match self {
+            Self::Http { server, source } if source.is_connect() => format!(
+                "MCP server `{server}` is not running. The run stopped because this server is required."
+            ),
+            Self::Http { server, .. }
+            | Self::Spawn { server, .. }
+            | Self::Timeout { server, .. }
+            | Self::Protocol { server, .. }
+            | Self::OAuth { server, .. }
+            | Self::Unauthorized { server, .. }
+            | Self::IsolationDenied { server, .. }
+            | Self::SandboxUnavailable { server, .. } => format!(
+                "MCP server `{server}` is unavailable. The run stopped because this server is required."
+            ),
+            other => other.to_string(),
+        }
+    }
+
+    /// Short text when an optional server is skipped.
+    #[must_use]
+    pub fn optional_skip_message(&self) -> String {
+        match self {
+            Self::Http { server, source } if source.is_connect() => format!(
+                "MCP server `{server}` is not running. It is optional, so this run continues without it."
+            ),
+            Self::Http { server, .. }
+            | Self::Spawn { server, .. }
+            | Self::Timeout { server, .. }
+            | Self::Protocol { server, .. }
+            | Self::OAuth { server, .. }
+            | Self::Unauthorized { server, .. }
+            | Self::IsolationDenied { server, .. }
+            | Self::SandboxUnavailable { server, .. } => format!(
+                "MCP server `{server}` is unavailable. It is optional, so this run continues without it."
+            ),
+            other => format!(
+                "MCP server is unavailable ({other}). It is optional, so this run continues without it."
+            ),
+        }
+    }
+}
+
+impl McpError {
     /// Wraps a transport-level HTTP failure for `server`.
     #[must_use]
     pub(crate) fn http(server: impl Into<String>, source: reqwest::Error) -> Self {

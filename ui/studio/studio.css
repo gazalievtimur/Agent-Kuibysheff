@@ -455,6 +455,91 @@ textarea {
   margin-bottom: 0.25rem;
 }
 
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  min-height: 16rem;
+  max-height: min(32rem, 60vh);
+  overflow: auto;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 80%, black);
+}
+
+.chat-msg {
+  max-width: min(42rem, 88%);
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 32%, var(--bg-panel));
+}
+
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.chat-msg.system {
+  align-self: stretch;
+  max-width: none;
+  color: var(--muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  font-size: 0.85rem;
+}
+
+.chat-msg.system summary {
+  cursor: pointer;
+}
+
+.chat-reply {
+  white-space: pre-wrap;
+}
+
+.chat-thought-fold {
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.chat-thought-fold summary {
+  cursor: pointer;
+}
+
+.chat-thought-fold p {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+}
+
+.chat-thought,
+.chat-tool {
+  align-self: stretch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-tool.fail {
+  color: var(--fail);
+}
+
+.chat-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
 .file-list {
   list-style: none;
   margin: 0;

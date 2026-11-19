@@ -158,6 +158,9 @@ fn restore_mcp_secrets(
     let Some(obj) = server.as_object_mut() else {
         return Ok(());
     };
+    if !obj.contains_key("required") && !existing.required {
+        obj.insert("required".to_string(), Value::Bool(false));
+    }
     match &existing.transport {
         McpTransport::Stdio(stdio) => {
             if let Some(env_val) = obj.get_mut("env") {
@@ -263,6 +266,7 @@ mod tests {
                 McpServerConfig {
                     name: "stdio".to_string(),
                     timeout_ms: 20_000,
+                    required: true,
                     transport: McpTransport::Stdio(McpStdioConfig {
                         command: "echo".to_string(),
                         args: vec![],
@@ -273,6 +277,7 @@ mod tests {
                 McpServerConfig {
                     name: "http".to_string(),
                     timeout_ms: 20_000,
+                    required: true,
                     transport: McpTransport::Http(McpHttpConfig {
                         url: "https://mcp.example/mcp".to_string(),
                         headers,
@@ -298,6 +303,7 @@ mod tests {
             logging: LoggingConfig::default(),
             access: Some(AccessPolicyConfig::minimal_profile()),
             context: crate::config::ContextConfig::default(),
+            done: crate::config::DoneConfig::default(),
         }
     }
 

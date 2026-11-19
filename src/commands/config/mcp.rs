@@ -235,6 +235,7 @@ fn build_server(
         Ok(McpServerConfig {
             name,
             timeout_ms,
+            required: true,
             transport: McpTransport::Stdio(McpStdioConfig {
                 command: command.to_string(),
                 args: args.to_vec(),
@@ -257,6 +258,7 @@ fn build_server(
         Ok(McpServerConfig {
             name,
             timeout_ms,
+            required: true,
             transport: McpTransport::Http(McpHttpConfig {
                 url: url.to_string(),
                 headers: headers_map,

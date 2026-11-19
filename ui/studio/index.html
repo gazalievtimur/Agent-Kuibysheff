@@ -32,6 +32,7 @@
             <button type="button" class="tab" data-tab="mcp">MCP</button>
             <button type="button" class="tab" data-tab="check">Check</button>
             <button type="button" class="tab" data-tab="run">Test run</button>
+            <button type="button" class="tab" data-tab="chat">Chat</button>
           </nav>
         </header>
 
@@ -258,6 +259,25 @@
               <h2>Home out/</h2>
               <ul id="out-list" class="file-list"></ul>
               <pre id="out-preview" class="log-view"></pre>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-chat" class="tab-panel hidden">
+          <div class="grid">
+            <article class="panel wide">
+              <h2>Chat</h2>
+              <p class="hint">Uses the <strong>saved</strong> agent profile and home <code>homes/&lt;agent&gt;</code>. Save Configure first if you changed the provider, prompt, or tools.</p>
+              <div id="chat-thread" class="chat-thread"></div>
+              <label>Message
+                <textarea id="chat-input" rows="4" placeholder="Message for the agent"></textarea>
+              </label>
+              <div class="footer-actions">
+                <button type="button" id="btn-chat-send" class="btn primary">Send</button>
+                <button type="button" id="btn-chat-new" class="btn ghost">New chat</button>
+                <button type="button" id="btn-chat-cancel" class="btn ghost" disabled>Cancel</button>
+                <span id="chat-status" class="status"></span>
+              </div>
             </article>
           </div>
         </section>

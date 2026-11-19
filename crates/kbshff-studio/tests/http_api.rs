@@ -578,6 +578,112 @@ async fn post_json(
         .unwrap()
 }
 
+#[tokio::test]
+async fn chat_history_reads_schema_and_delete_requires_studio_header() {
+    let unique = format!(
+        "kbshff-studio-chat-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    );
+    let root = std::env::temp_dir().join(unique);
+    std::fs::create_dir_all(&root).expect("temp project");
+    let app = app_at(root.clone());
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/chat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::OK);
+    let missing_json = body_json(missing).await;
+    assert_eq!(missing_json["messages"], serde_json::json!([]));
+
+    let bad_id = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/a..b/chat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_id.status(), StatusCode::BAD_REQUEST);
+
+    let chat = root
+        .join(".kuibysheff")
+        .join("homes")
+        .join("demo")
+        .join("logs")
+        .join("chat_history.json");
+    std::fs::create_dir_all(chat.parent().expect("logs parent")).expect("logs");
+    std::fs::write(
+        &chat,
+        r#"{"schema_version":2,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}],"result":"hi","stop_reason":"goal_reached"}"#,
+    )
+    .expect("write history");
+
+    let loaded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/demo/chat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(loaded.status(), StatusCode::OK);
+    let loaded_json = body_json(loaded).await;
+    assert_eq!(loaded_json["messages"][0]["content"], "hello");
+    assert_eq!(loaded_json["messages"][1]["role"], "assistant");
+    assert_eq!(loaded_json["result"], "hi");
+    assert_eq!(loaded_json["stop_reason"], "goal_reached");
+
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/agents/demo/chat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    assert!(chat.is_file());
+
+    let deleted = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/agents/demo/chat")
+                .header("x-kbshff-studio", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert!(!chat.exists());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn app_at(root: PathBuf) -> axum::Router {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_kbshff_stub"));
+    kbshff_studio::api_test_router(root, bin)
+}
+
 async fn post_text(
     app: axum::Router,
     method: &str,
